@@ -31,7 +31,7 @@ import numpy as np
 from spectral_connectivity import (
     Connectivity,
     Multitaper,
-    PowerSidednessWarning,
+    SidednessWarning,
     multitaper_connectivity,
 )
 from spectral_connectivity.simulate import (
@@ -39,10 +39,11 @@ from spectral_connectivity.simulate import (
     simulate_shared_oscillation,
 )
 
-# Connectivity.power() is one-sided (as this tutorial expects); the reminder
-# meant for code written for 2.x, which returned the two-sided density, does
-# not apply here.
-warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+# Connectivity.power() is one-sided and Connectivity.global_coherence() covers
+# the non-negative frequencies (as this tutorial expects); the reminders meant
+# for code written for 2.x, which returned the two-sided density and every FFT
+# bin, do not apply here.
+warnings.filterwarnings("ignore", category=SidednessWarning)
 
 # %% [markdown]
 # ### Power Spectrum
@@ -2742,10 +2743,6 @@ connectivity = Connectivity.from_transform(multitaper)
 global_coherence, unnormalized_global_coherence = connectivity.global_coherence()
 print(global_coherence.shape)  # n_time, n_frequencies, n_components
 
-# Extract non-negative frequencies (first N//2+1 frequencies)
-n_nonneg_freqs = len(connectivity.frequencies)
-global_coherence_nonneg = global_coherence[:, :n_nonneg_freqs, 0].T  # (freqs, time)
-
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(
@@ -2756,7 +2753,7 @@ plt.figure()
 plt.pcolormesh(
     time_grid,
     freq_grid,
-    global_coherence_nonneg,
+    global_coherence[:, :, 0].T,  # (n_frequencies, n_time)
     shading="flat",
 )
 plt.title("Global Coherence (1st component)")
@@ -2770,8 +2767,7 @@ frequencies = connectivity.frequencies
 peak = np.argmin(np.abs(frequencies - frequency_of_interest))
 off_peak = np.abs(frequencies - frequency_of_interest) > multitaper.frequency_resolution
 assert np.all(global_coherence[:, peak, 0] > 0.95)
-# global_coherence spans all FFT frequencies; the first frequencies.size are >= 0.
-assert np.median(global_coherence[:, : frequencies.size][:, off_peak, 0]) < 2 / n_signals
+assert np.median(global_coherence[:, off_peak, 0]) < 2 / n_signals
 
 # %% [markdown] pycharm={"is_executing": true, "name": "#%% md\n"}
 # ## Xarray interface

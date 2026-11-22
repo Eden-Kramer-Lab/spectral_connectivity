@@ -18,6 +18,7 @@ from spectral_connectivity.connectivity import (
     PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS,
     Connectivity,
     DirectedOrientationWarning,
+    SidednessWarning,
     _bandpass,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
@@ -4699,8 +4700,11 @@ def test_global_coherence_vectors_are_orthonormal_eigenvectors():
     # Every component is an eigenvector of the per-bin cross-spectral matrix
     # A A^H with eigenvalue global_coherence * ||A||_F**2 (the fraction of total
     # power), computed here directly from the coefficients.
-    observations = fc.transpose(0, 3, 4, 1, 2).reshape(
-        n_time, n_fft, n_signals, n_trials * n_tapers
+    n_frequencies = n_fft // 2 + 1  # the non-negative bins
+    observations = (
+        fc[..., :n_frequencies, :]
+        .transpose(0, 3, 4, 1, 2)
+        .reshape(n_time, n_frequencies, n_signals, n_trials * n_tapers)
     )
     cross_spectral = observations @ np.conj(observations).swapaxes(-1, -2)
     total_power = np.sum(np.abs(observations) ** 2, axis=(-2, -1))
@@ -5017,14 +5021,15 @@ def test_multiple_observations_group_measure_does_not_warn(measure):
     connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
+        # global_coherence's 3.0 frequency-axis notice is not about the data.
+        warnings.filterwarnings("ignore", category=SidednessWarning)
         _rank_one_measure_magnitudes(connectivity, measure)
 
 
 def test_single_observation_warning_counts_what_each_measure_averages():
-    """A measure of the averaged cross-spectrum warns when its expectation
-    averages one observation, and global coherence, which decomposes trials x
-    tapers in every window, when there is one trial and one taper. Each
-    message names the count that is 1 and offers only what would raise it."""
+    """A measure warns when its expectation averages one observation; global
+    coherence counts the observations it pools the same way. Each message
+    names the count that is 1 and offers only what would raise it."""
     rng = np.random.default_rng(712)
 
     def coefficients(shape):
@@ -5056,21 +5061,23 @@ def test_single_observation_warning_counts_what_each_measure_averages():
     assert "more trials" in message
     assert "averages more axes than 'trials'" in message
     assert "time_halfbandwidth_product" not in message
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        global_coherence, _ = over_trials.global_coherence()
-    assert np.all(global_coherence < 1.0 - 1e-6)
 
-    # Five windows of one trial and one taper, averaged over time: five
-    # observations, but global coherence still has one trial x taper per window.
-    over_time = Connectivity(coefficients((5, 1, 1, 16, 4)), expectation_type="time")
-    message = single_observation_message(over_time.global_coherence)
-    assert "(n_trials * n_tapers == 1)" in message
+    # Five windows of one trial and one taper: global coherence of each window
+    # pools one observation, and of all of them, five.
+    five_windows = coefficients((5, 1, 1, 16, 4))
+    per_window = Connectivity(five_windows, expectation_type="tapers")
+    message = single_observation_message(per_window.global_coherence)
+    assert "(n_observations == 1)" in message
     assert "time_halfbandwidth_product" in message
-    assert "expectation_type" not in message
+    assert "averages more axes than 'tapers'" in message
+    assert "more trials" not in message
+    pooled = Connectivity(five_windows, expectation_type="time_tapers")
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
-        over_time.imaginary_coherence()
+        warnings.filterwarnings("ignore", category=SidednessWarning)
+        global_coherence, _ = pooled.global_coherence()
+        Connectivity(five_windows, expectation_type="time").imaginary_coherence()
+    assert np.all(global_coherence < 1.0 - 1e-6)
 
 
 def test_granger_nan_warning_names_too_few_observations_as_a_cause():

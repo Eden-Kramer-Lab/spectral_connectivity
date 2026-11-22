@@ -335,6 +335,46 @@ max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * (b^H S_tt b)),
 
 ```
 
+## Global coherence pooled over time windows
+
+`method="global_coherence"` decomposes each time window's trials and tapers
+separately. To decompose one cross-spectral matrix per frequency, pooled over
+every taper, trial, and window (the estimand of Chronux `CrossSpecMatc`'s
+`Ctot`), build a `Connectivity` with `expectation_type="time_trials_tapers"`
+from a transform whose windows do not overlap. Here eight channels of a
+one-minute recording share a 10 Hz oscillation, and each 2 s window adds 3
+tapers:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> t = np.arange(60 * 200) / 200  # 60 s at 200 Hz
+>>> shared = np.sin(2 * np.pi * 10 * t)[:, np.newaxis] * np.linspace(0.5, 1.5, 8)
+>>> recording = (shared + rng.standard_normal((t.size, 8)))[:, np.newaxis, :]
+>>> multitaper = Multitaper(
+...     recording,
+...     sampling_frequency=200,
+...     time_window_duration=2,  # the step defaults to the duration
+...     time_halfbandwidth_product=2,
+...     n_tapers=3,
+... )
+>>> pooled = Connectivity.from_transform(multitaper, expectation_type="time_trials_tapers")
+>>> pooled.n_observations, pooled.n_signals
+(90, 8)
+>>> fractions, vectors = pooled.global_coherence()
+>>> fractions.shape, vectors.shape  # one value per frequency, no time axis
+((201, 1), (201, 8, 1))
+>>> bool(fractions[20, 0] > 0.9)  # 10 Hz
+True
+
+```
+
+`n_observations` should exceed `n_signals`, ideally by a wide margin: the value
+is at least `1 / min(n_observations, n_signals)` and, without coupling, biased
+above `1 / n_signals`, so compare values only at matched counts. This is not
+the estimator of Purdon et al. (2013): it takes the mean over windows, not the
+median; it decomposes the raw cross-spectrum, with no Laplacian unless you
+re-reference the signals first; and it returns no significance test.
+
 ## Collapse into frequency bands
 
 Pass `frequency_bands` to average (or integrate) each measure within named

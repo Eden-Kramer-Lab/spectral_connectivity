@@ -989,6 +989,143 @@ def test_global_coherence_raises_before_numpy_warns_on_nonfinite_coefficients():
     assert record == []
 
 
+_GLOBAL_COHERENCE_EXPECTATIONS = [
+    "trials_tapers",
+    "time_trials_tapers",
+    "time_tapers",
+    "tapers",
+]
+
+
+@pytest.mark.parametrize("expectation_type", _GLOBAL_COHERENCE_EXPECTATIONS)
+def test_global_coherence_names_nonfinite_coefficients_for_every_expectation(
+    expectation_type,
+):
+    """Whichever observations it pools, global_coherence raises the same
+    ValueError on NaN or Inf coefficients, not LAPACK's error."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(
+            _coefficients_with_nan(), expectation_type=expectation_type
+        )
+    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed") as excinfo:
+        connectivity.global_coherence()
+    assert isinstance(excinfo.value.__cause__, np.linalg.LinAlgError)
+
+
+@pytest.mark.cpu_only(reason="ARPACK and LAPACK's messages are those of the NumPy backend")
+@pytest.mark.parametrize("max_rank", [2, 6], ids=["svds", "svd"])
+def test_global_coherence_per_bin_path_names_nonfinite_coefficients(
+    max_rank, monkeypatch, capfd
+):
+    """The per-bin path (a large decomposition dimension, forced here) raised
+    ARPACK's error from svds, and LAPACK printed "ZLASCL ... illegal value"
+    to stderr from svd, on NaN or Inf coefficients. It gives the same
+    ValueError as the batched path, without decomposing them."""
+    import spectral_connectivity._multivariate as multivariate_module
+
+    monkeypatch.setattr(multivariate_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0)
+    rng = np.random.default_rng(38)
+    coefficients = rng.standard_normal((1, 6, 3, 8, 6)) + 1j * rng.standard_normal(
+        (1, 6, 3, 8, 6)
+    )
+    coefficients[0, 1, 0, 2, 0] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(coefficients)
+    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+        connectivity.global_coherence(max_rank=max_rank)
+    captured = capfd.readouterr()
+    assert "ZLASCL" not in captured.out + captured.err
+
+
+def test_global_coherence_ignores_nonfinite_negative_frequency_bins():
+    """Only the non-negative bins are decomposed, so NaN confined to a
+    negative frequency does not reach the decomposition: the result is
+    finite rather than an error."""
+    coefficients = Multitaper(np.random.default_rng(7).standard_normal((400, 3, 3)), 500).fft()
+    coefficients[0, 1, 0, -5, 0] = np.nan  # a negative frequency
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(coefficients)
+    fractions, vectors = connectivity.global_coherence()
+    assert np.all(np.isfinite(fractions))
+    assert np.all(np.isfinite(vectors))
+
+
+@pytest.mark.parametrize("expectation_type", ["tapers", "trials_tapers"])
+def test_global_coherence_of_a_bin_whose_weights_omit_its_nan_is_nan_not_an_error(
+    expectation_type,
+):
+    """NaN coefficients whose observation weights are all zero are omitted, so
+    a bin left with no weighted observation has zero power: NaN with the
+    zero-power warning, as for finite coefficients, not the NaN-or-Inf error.
+    The other bins are unaffected."""
+    rng = np.random.default_rng(39)
+    shape = (1, 2, 3, 8, 3)  # (time, trials, tapers, frequency, signals)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = np.ones((*shape[:-1], 1))
+    coefficients[0, 1, :, 2, 0] = np.nan  # every taper of trial 1 at bin 2
+    weights[0, 1, :, 2] = 0
+    if expectation_type == "trials_tapers":
+        coefficients[0, 0, :, 2, 0] = np.nan  # and trial 0, so the bin is empty
+        weights[0, 0, :, 2] = 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(
+            coefficients, expectation_type=expectation_type, observation_weights=weights
+        )
+    with pytest.warns(UserWarning, match="zero total power"):
+        fractions, _ = connectivity.global_coherence()
+    empty = (0, 1, 2) if expectation_type == "tapers" else (0, 2)  # (time, [trial,] bin)
+    assert np.all(np.isnan(fractions[empty]))
+    assert np.isfinite(fractions).sum() == fractions.size - fractions[empty].size
+
+
+def test_global_coherence_of_weighted_nan_still_raises():
+    """A NaN coefficient with a nonzero weight still raises."""
+    rng = np.random.default_rng(40)
+    shape = (1, 2, 3, 8, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = np.ones((*shape[:-1], 1))
+    coefficients[0, 1, :, 2, 0] = np.nan
+    weights[0, 1, 1:, 2] = 0  # one of its tapers keeps its weight
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        connectivity = Connectivity(
+            coefficients, expectation_type="tapers", observation_weights=weights
+        )
+    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+        connectivity.global_coherence()
+
+
+@pytest.mark.parametrize("route", ["multitaper_connectivity", "connectivity_to_xarray"])
+def test_wrapper_flags_are_restored_after_a_measure_raises(route):
+    """The wrappers clear the migration-notice flag and set the fixed-expectation
+    flag while a measure runs; a measure that raises must leave both as they
+    were, or later direct calls would lose their notices and advice."""
+    from spectral_connectivity.connectivity import (
+        _emit_migration_notices,
+        _expectation_fixed_by_wrapper,
+    )
+
+    series = _series_with_nan()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the NaN warnings
+        if route == "multitaper_connectivity":
+            compute = functools.partial(
+                multitaper_connectivity, series, 500, method="global_coherence"
+            )
+        else:
+            compute = functools.partial(
+                connectivity_to_xarray, Multitaper(series, 500), "global_coherence"
+            )
+        with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+            compute()
+    assert _emit_migration_notices.get() is True
+    assert _expectation_fixed_by_wrapper.get() is False
+
+
 def _nan_instead_of_raising(kernel):
     """``kernel`` as a backend that returns NaN rather than raising on NaN or
     Inf input (CuPy's decompositions): run on finite stand-ins, then NaN."""
@@ -1003,6 +1140,29 @@ def _nan_instead_of_raising(kernel):
         return result * np.nan
 
     return returns_nan
+
+
+@pytest.mark.cpu_only(reason="simulates CuPy's NaN on the NumPy backend")
+@pytest.mark.parametrize("expectation_type", _GLOBAL_COHERENCE_EXPECTATIONS)
+def test_global_coherence_that_returns_nan_names_nonfinite_coefficients_for_every_expectation(
+    expectation_type, monkeypatch
+):
+    """A backend returning NaN rather than raising (CuPy) gives the same
+    ValueError for every expectation_type global_coherence supports."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    monkeypatch.setattr(
+        connectivity_module,
+        "_global_coherence",
+        _nan_instead_of_raising(connectivity_module._global_coherence),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(
+            _coefficients_with_nan(), expectation_type=expectation_type
+        )
+    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+        connectivity.global_coherence()
 
 
 @pytest.mark.cpu_only(reason="simulates CuPy's NaN on the NumPy backend")

@@ -24,7 +24,7 @@ pairwise and subset spectral Granger prediction, once per session for each
 measure; silence it with `warnings.filterwarnings("ignore",
 category=spectral_connectivity.DirectedOrientationWarning)`.
 `Connectivity.power()` is one-sided: its bins between 0 Hz and Nyquist are twice
-the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` (once per session)
+the 2.x values. Until 3.2 it emits a `SidednessWarning` (once per session)
 when called without `one_sided` on two-sided coefficients; the wrappers' power
 results changed the same way without a warning (see the
 [migration guide](https://spectral-connectivity.readthedocs.io/en/latest/migration.html)).
@@ -38,7 +38,7 @@ directly with results from 2.x.
 The migration guide for code written against 2.x is
 [its own page in the documentation](https://spectral-connectivity.readthedocs.io/en/latest/migration.html)
 (`docs/migration.md` in the repository). The `DirectedOrientationWarning` and
-`PowerSidednessWarning` messages link to that page.
+`SidednessWarning` messages link to that page.
 
 ### Added
 
@@ -65,14 +65,16 @@ The migration guide for code written against 2.x is
   made while it is ignored does not count as shown, so removing the filter
   shows it once; a call turned into an error counts, since the exception
   carried the message.
-- `PowerSidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
+- `SidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
   emitted by `Connectivity.power()` called without `one_sided` on two-sided
   coefficients, and once by `jackknife("power")` for its full estimate: since
-  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. It appears
-  once per Python session, like `DirectedOrientationWarning`. Pass
-  `one_sided=True` (or `False` for the 2.x values) or silence it with
-  `warnings.filterwarnings("ignore",
-  category=spectral_connectivity.PowerSidednessWarning)`. The wrappers' power
+  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. It is also
+  emitted by `Connectivity.global_coherence()` on two-sided coefficients,
+  which since 3.0 returns only the non-negative frequencies. Each notice
+  appears once per Python session, like `DirectedOrientationWarning`. Pass
+  `one_sided=True` to `power` (or `False` for the 2.x values) or silence
+  both with `warnings.filterwarnings("ignore",
+  category=spectral_connectivity.SidednessWarning)`. The wrappers'
   results do not emit it. Both warnings' messages say that they are shown
   once per session and give the `simplefilter("always", ...)` call that shows
   them at every call.
@@ -438,6 +440,47 @@ The migration guide for code written against 2.x is
 
 ### Changed
 
+- `Connectivity.global_coherence` returns only the non-negative frequencies,
+  labelled by `Connectivity.frequencies`, like every other measure; 2.x
+  returned every bin of the two-sided transform, labelled by
+  `all_frequencies`. For a real signal the negative bins repeat the
+  non-negative ones (the same fractions, conjugated vectors), and the
+  non-negative bins are unchanged, so code that sliced
+  `[..., :len(conn.frequencies), :]` gets the same values. Until 3.2 a call on
+  two-sided coefficients emits a `SidednessWarning` once per session.
+  The results of `multitaper_connectivity` and `connectivity_to_xarray` were
+  already trimmed so; they are unchanged and do not warn. Since the negative
+  bins are no longer decomposed, NaN or Inf coefficients confined to them no
+  longer raise the `ValueError` described under Fixed.
+- `Connectivity.global_coherence` follows `expectation_type` for the settings
+  that average the tapers: it decomposes the cross-spectral matrix averaged
+  over the same axes as the other measures, with the kept axes leading the
+  result in the same order. The default, `"trials_tapers"`, gives the same
+  values as before (each window's trials and tapers); `"time_trials_tapers"`
+  pools every window, trial, and taper into one value per frequency, the
+  estimand of Chronux `CrossSpecMatc`'s `Ctot` on non-overlapping windows;
+  `"time_tapers"` gives one value per trial; and `"tapers"` one per window and
+  trial. Observation weights weight the pooled columns as before. `"time"`,
+  `"trials"`, and `"time_trials"`, which keep the tapers as an output axis,
+  raise `ValueError` naming the supported settings. 2.x ignored
+  `expectation_type` and pooled each window's trials and tapers for every
+  setting. The wrappers keep `"trials_tapers"`; the `global_coherence`
+  docstring and the cookbook show how to pool time windows with
+  `Connectivity.from_transform(transform,
+  expectation_type="time_trials_tapers")`, and how that differs from the
+  median-over-windows estimator of Purdon et al. (2013).
+- `Connectivity.global_coherence` warns when it pools fewer observations than
+  signals (`n_observations < n_signals`), not only for a single observation:
+  the pooled matrix then has rank at most `n_observations`, so the value is at
+  least `1 / n_observations` whatever the data and cannot reach the
+  `1 / n_signals` of independent signals. The message keeps the
+  single-observation case (forced to 1), says to compare values only at
+  matched numbers of observations and signals, and offers only what raises
+  the count. When it pools time windows the transform reports as correlated
+  (`time_bins_are_independent=False`, such as `Multitaper` windows
+  overlapping by more than half), it warns, as the other measures that count
+  observations do, that they add fewer effective observations than their
+  count.
 - `minimum_phase_decomposition`'s `max_iterations` defaults to 500; 2.0.1
   defaulted to 60. Near-singular cross-spectra (highly correlated channels)
   can need several hundred Wilson iterations, and the loop still stops as soon
@@ -631,11 +674,12 @@ The migration guide for code written against 2.x is
   to unpack it: `(values, labels)` from `canonical_coherence` and the other
   scalar group measures, a `MultivariateConnectivityResult` from
   `canonical_coherency` and `maximized_imaginary_coherency_components`, and
-  two arrays from `global_coherence`, whose frequency axis (unlike the other
-  measures') holds every FFT bin: `[..., :len(conn.frequencies), :]` keeps the
-  non-negative ones. `global_coherence` documents that it ignores
-  `expectation_type` (every trial and taper of a window is decomposed) and
-  names its second return value `vectors`.
+  two arrays from `global_coherence`. `global_coherence` names its second
+  return value `vectors`, and its Notes say how to read the value: the floor
+  and bias set by the numbers of observations and signals, effective
+  observations, pooling time, channel scale and reference, the mean rather
+  than Purdon et al.'s median over windows, 0 Hz and Nyquist, and the absence
+  of a significance test.
 - `Multitaper.frequencies` (and `ShortTimeFourierTransform`'s and `Welch`'s)
   says that it labels the two-sided FFT bins of `fft()` and that
   `Connectivity.frequencies`, the non-negative bins, labels results; the
@@ -1395,7 +1439,14 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `maximized_imaginary_coherency` (and its components), and
   `multivariate_interaction_measure` already returned NaN there, and still
   do. `global_coherence` no longer emits NumPy's "invalid value encountered
-  in divide" `RuntimeWarning` before that error.
+  in divide" `RuntimeWarning` before that error. Its per-bin path (used when
+  both the number of signals and of observations exceed 64) raised ARPACK's
+  `ArpackError` there instead, with LAPACK printing "ZLASCL ... illegal
+  value" to stderr; it skips such bins and raises the same `ValueError`.
+  NaN or Inf coefficients that zero weights omit do not raise: a bin of
+  `canonical_coherence` or `global_coherence` left with no weighted
+  observation is NaN, as for finite coefficients (with `global_coherence`'s
+  zero-power warning).
 - `Connectivity.group_delay` and `Connectivity.delay` raise a `ValueError`
   naming `significance_threshold` when it is not a number strictly between 0
   and 1 (e.g. 0.05), before any computation. 2.0.1 accepted any value: 1.0

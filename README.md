@@ -37,8 +37,11 @@
 >   2.x values between 0 Hz and Nyquist; `power(one_sided=False)` returns the
 >   2.x values.
 >
+> `Connectivity.global_coherence` also returns the non-negative frequencies
+> only, and emits the same `SidednessWarning` notice.
+>
 > Until 3.2 some of these calls emit a `DirectedOrientationWarning` or a
-> `PowerSidednessWarning` as a reminder, once per Python session (for each
+> `SidednessWarning` as a reminder, once per Python session (for each
 > measure); `warnings.simplefilter("always", ...)` with the warning's class
 > shows it at every call. Several other values also changed
 > without an error. The [migration guide](docs/migration.md) lists which calls
@@ -415,8 +418,9 @@ diagonal, and interpretation, is generated from the code into
   form, pairwise phase consistency, and the phase lag index with its weighted
   and debiased forms.
 + **Between groups of signals**: canonical coherence and coherency, maximized
-  imaginary coherency, the multivariate interaction measure, and global
-  coherence.
+  imaginary coherency, and the multivariate interaction measure.
++ **Across all signals at once**: global coherence, the share of the total
+  power in the strongest coherent component.
 + **Directed influence**: spectral Granger prediction (pairwise, subset,
   conditional, blockwise, time-reversed) and the transfer-function family
   (directed transfer function, directed coherence, partial directed coherence

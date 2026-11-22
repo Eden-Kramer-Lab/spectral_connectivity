@@ -38,7 +38,7 @@ from spectral_connectivity import (
     Connectivity,
     DirectedOrientationWarning,
     Multitaper,
-    PowerSidednessWarning,
+    SidednessWarning,
 )
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.transforms import prepare_time_series
@@ -47,7 +47,7 @@ from spectral_connectivity.transforms import prepare_time_series
 # and plots the one-sided power, so the reminders meant for code written for
 # 2.x do not apply here.
 warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
-warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+warnings.filterwarnings("ignore", category=SidednessWarning)
 
 
 def plot_directional(time_series, sampling_frequency, time_halfbandwidth_product=2):

@@ -1,9 +1,12 @@
 """Tests for advanced connectivity measures: canonical_coherence, global_coherence, group_delay."""
 
+import re
+import warnings
+
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, Multitaper
+from spectral_connectivity import Connectivity, Multitaper, SidednessWarning
 from spectral_connectivity.simulate import (
     simulate_lagged_broadband,
     simulate_shared_oscillation,
@@ -59,6 +62,11 @@ def _observations(fourier_coefficients):
     n_time, n_trials, n_tapers, n_freq, n_signals = fourier_coefficients.shape
     stacked = fourier_coefficients.reshape(n_time, n_trials * n_tapers, n_freq, n_signals)
     return np.moveaxis(stacked, 1, -1)
+
+
+def _nonnegative_bins(fourier_coefficients):
+    """The non-negative frequency bins of two-sided coefficients in FFT order."""
+    return fourier_coefficients[..., : fourier_coefficients.shape[-2] // 2 + 1, :]
 
 
 def _cross_spectral_matrix(fourier_coefficients):
@@ -448,21 +456,85 @@ class TestGlobalCoherence:
         conn = Connectivity.from_transform(m)
         global_coh, global_coh_vectors = conn.global_coherence(max_rank=1)
 
-        assert global_coh.shape == (m.time.size, m.frequencies.size, 1)
-        assert global_coh_vectors.shape == (m.time.size, m.frequencies.size, n_signals, 1)
+        assert global_coh.shape == (m.time.size, m.frequencies.size // 2 + 1, 1)
+        assert global_coh_vectors.shape == (
+            m.time.size,
+            m.frequencies.size // 2 + 1,
+            n_signals,
+            1,
+        )
         np.testing.assert_allclose(
             global_coh,
-            _global_coherence_oracle(to_host(m.fft()))[..., :1],
+            _global_coherence_oracle(_nonnegative_bins(to_host(m.fft())))[..., :1],
             rtol=1e-10,
             atol=1e-12,
         )
 
-        frequencies = np.abs(to_host(m.frequencies))
+        frequencies = conn.frequencies
         at_target = global_coh[0, np.argmin(np.abs(frequencies - 30)), 0]
         # Beyond the peak's multitaper bandwidth (W = NW / T = 5 Hz).
         off_peak = global_coh[0, np.abs(frequencies - 30) > 10, 0]
         assert at_target > 0.95
         assert off_peak.max() < 0.6
+
+    @pytest.mark.parametrize("n_time_samples", [100, 101], ids=["even_fft", "odd_fft"])
+    def test_global_coherence_nonnegative_bins_lose_nothing(self, n_time_samples):
+        """Only the non-negative bins are returned, and they hold everything.
+
+        For a real signal S(-f) = conj(S(f)), so the negative bins of the
+        two-sided decomposition (all that 2.x returned) have the same fractions
+        as their positive partners and conjugated vectors. The non-negative
+        bins themselves are bit-for-bit those of the two-sided decomposition.
+        """
+        from spectral_connectivity._multivariate import (
+            GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
+            _global_coherence,
+        )
+
+        n_signals = 4
+        m = Multitaper(
+            time_series=self.rng.standard_normal((n_time_samples, 6, n_signals)),
+            sampling_frequency=200,
+            time_halfbandwidth_product=2,
+        )
+        conn = Connectivity.from_transform(m)
+        fractions, vectors = conn.global_coherence(max_rank=n_signals)
+        full_fractions, full_vectors = (
+            to_host(values)
+            for values in _global_coherence(
+                m.fft(), None, n_signals, GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS
+            )
+        )
+
+        n_frequencies = conn.frequencies.size
+        n_fft_samples = full_fractions.shape[1]
+        assert fractions.shape == (conn.time.size, n_frequencies, n_signals)
+        assert vectors.shape == (conn.time.size, n_frequencies, n_signals, n_signals)
+        np.testing.assert_array_equal(fractions, full_fractions[:, :n_frequencies])
+        np.testing.assert_array_equal(vectors, full_vectors[:, :n_frequencies])
+
+        # Bin k (0 < k < n_fft_samples - k) pairs with bin n_fft_samples - k.
+        positive = np.arange(1, n_fft_samples - n_frequencies + 1)
+        negative = n_fft_samples - positive
+        np.testing.assert_allclose(
+            full_fractions[:, negative], fractions[:, positive], rtol=1e-10, atol=1e-14
+        )
+        # conj(v) up to a phase: |<conj(v(f)), v(-f)>| = 1 for unit vectors.
+        overlap = np.abs(np.sum(vectors[:, positive] * full_vectors[:, negative], axis=-2))
+        np.testing.assert_allclose(overlap, 1.0, rtol=1e-8)
+
+    def test_global_coherence_of_one_sided_coefficients_keeps_every_bin(self):
+        """One-sided coefficients hold only non-negative bins: all are returned."""
+        coefficients = self.rng.standard_normal(
+            (1, 6, 2, 5, 3)
+        ) + 1j * self.rng.standard_normal((1, 6, 2, 5, 3))
+        conn = Connectivity(coefficients, is_one_sided=True)
+        fractions, vectors = conn.global_coherence(max_rank=2)
+        assert fractions.shape == (1, 5, 2)
+        assert vectors.shape == (1, 5, 3, 2)
+        np.testing.assert_allclose(
+            fractions, _global_coherence_oracle(coefficients)[..., :2], rtol=1e-10, atol=1e-12
+        )
 
     def test_global_coherence_multiple_components(self):
         """max_rank > 1 returns the leading eigenvalue fractions, strongest first."""
@@ -478,16 +550,16 @@ class TestGlobalCoherence:
         max_rank = 3
         global_coh, global_coh_vectors = conn.global_coherence(max_rank=max_rank)
 
-        assert global_coh.shape == (m.time.size, m.frequencies.size, max_rank)
+        assert global_coh.shape == (m.time.size, m.frequencies.size // 2 + 1, max_rank)
         assert global_coh_vectors.shape == (
             m.time.size,
-            m.frequencies.size,
+            m.frequencies.size // 2 + 1,
             n_signals,
             max_rank,
         )
         np.testing.assert_allclose(
             global_coh,
-            _global_coherence_oracle(to_host(m.fft()))[..., :max_rank],
+            _global_coherence_oracle(_nonnegative_bins(to_host(m.fft())))[..., :max_rank],
             rtol=1e-10,
             atol=1e-12,
         )
@@ -548,7 +620,10 @@ class TestGlobalCoherence:
             max_rank=n_signals
         )
         np.testing.assert_allclose(
-            gc, _global_coherence_oracle(to_host(m.fft())), rtol=1e-10, atol=1e-12
+            gc,
+            _global_coherence_oracle(_nonnegative_bins(to_host(m.fft()))),
+            rtol=1e-10,
+            atol=1e-12,
         )
         # The fractions of every component sum to the whole (trace) power.
         np.testing.assert_allclose(gc.sum(axis=-1), 1.0, rtol=1e-12)
@@ -577,7 +652,10 @@ class TestGlobalCoherence:
         )
         gc, _ = Connectivity.from_transform(m).global_coherence(max_rank=3)
         np.testing.assert_allclose(
-            gc, _global_coherence_oracle(to_host(m.fft()))[..., :3], rtol=1e-8, atol=1e-12
+            gc,
+            _global_coherence_oracle(_nonnegative_bins(to_host(m.fft())))[..., :3],
+            rtol=1e-8,
+            atol=1e-12,
         )
         assert np.all(gc >= 0)
         assert np.all(gc <= 1.0 + 1e-12)
@@ -594,11 +672,11 @@ class TestGlobalCoherence:
             time_halfbandwidth_product=1,
         )
         conn = Connectivity.from_transform(m)
-        expected = _global_coherence_oracle(to_host(m.fft()))
+        expected = _global_coherence_oracle(_nonnegative_bins(to_host(m.fft())))
 
         for max_rank in (n_signals, n_signals - 1):
             global_coh, _ = conn.global_coherence(max_rank=max_rank)
-            assert global_coh.shape == (m.time.size, m.frequencies.size, max_rank)
+            assert global_coh.shape == (m.time.size, m.frequencies.size // 2 + 1, max_rank)
             np.testing.assert_allclose(
                 global_coh, expected[..., :max_rank], rtol=1e-10, atol=1e-12
             )
@@ -618,13 +696,13 @@ class TestGlobalCoherence:
         )
         global_coh, _ = Connectivity.from_transform(m).global_coherence(max_rank=1)
 
-        x = _observations(to_host(m.fft()))
+        x = _observations(_nonnegative_bins(to_host(m.fft())))
         a = np.sum(np.abs(x[..., 0, :]) ** 2, axis=-1)
         b = np.sum(np.abs(x[..., 1, :]) ** 2, axis=-1)
         c = np.sum(x[..., 0, :] * x[..., 1, :].conj(), axis=-1)
         largest = (a + b) / 2 + np.sqrt(((a - b) / 2) ** 2 + np.abs(c) ** 2)
 
-        assert global_coh.shape == (m.time.size, m.frequencies.size, 1)
+        assert global_coh.shape == (m.time.size, m.frequencies.size // 2 + 1, 1)
         np.testing.assert_allclose(global_coh[..., 0], largest / (a + b), rtol=1e-10)
 
     def test_global_coherence_values_are_squared_singular_values(self):
@@ -644,7 +722,9 @@ class TestGlobalCoherence:
             max_rank=2
         )
 
-        singular_values = np.linalg.svd(_observations(to_host(m.fft())), compute_uv=False)
+        singular_values = np.linalg.svd(
+            _observations(_nonnegative_bins(to_host(m.fft()))), compute_uv=False
+        )
         power = singular_values**2
         expected = power / power.sum(axis=-1, keepdims=True)
         np.testing.assert_allclose(global_coh, expected[..., :2], rtol=1e-10, atol=1e-12)
@@ -660,8 +740,8 @@ class TestGlobalCoherence:
         conn = Connectivity(fourier_coefficients=fc)
         with pytest.warns(UserWarning, match="zero total power"):
             gc, _ = conn.global_coherence(max_rank=1)
-        assert np.all(np.isnan(gc[:, 2, :]))
-        assert np.all(np.isfinite(gc[:, [0, 1, 3], :]))
+        assert np.all(np.isnan(gc[:, 2, :]))  # bin 2 of 4 is Nyquist
+        assert np.all(np.isfinite(gc[:, [0, 1], :]))
 
     @pytest.mark.parametrize("path", ["batched", "per_bin"])
     def test_global_coherence_single_estimate_is_rank_one(self, path, monkeypatch):
@@ -683,7 +763,7 @@ class TestGlobalCoherence:
         fc = rng.standard_normal((1, 1, 1, 4, 3)) + 1j * rng.standard_normal((1, 1, 1, 4, 3))
         with pytest.warns(UserWarning, match="global_coherence is computed from a single"):
             gc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=1)
-        assert gc.shape == (1, 4, 1)
+        assert gc.shape == (1, 3, 1)  # the non-negative bins of 4
         np.testing.assert_allclose(gc, 1.0, rtol=1e-12)
 
     def test_global_coherence_over_requested_rank_is_clamped(self):
@@ -707,6 +787,295 @@ class TestGlobalCoherence:
             gc, _ = Connectivity(fourier_coefficients=fc * scale).global_coherence(max_rank=1)
             assert np.all(np.isfinite(gc))
             np.testing.assert_allclose(gc, base, rtol=1e-6)
+
+
+# The expectation_type settings global coherence supports (they average the
+# tapers), with the observation axes each keeps ahead of the frequency axis.
+_GLOBAL_COHERENCE_KEPT_AXES = {
+    "trials_tapers": "t",
+    "time_trials_tapers": "",
+    "time_tapers": "r",
+    "tapers": "tr",
+}
+
+
+def _pooled_cross_spectral_matrix(fourier_coefficients, kept_axes, weights=None):
+    """Mean of x x^H over the observation axes not in ``kept_axes``, by einsum.
+
+    ``fourier_coefficients`` has shape (n_time, n_trials, n_tapers, n_freq,
+    n_signals), lettered ``t``, ``r``, ``k``; ``weights``, shape
+    (n_time, n_trials, n_tapers, n_freq, 1), weight the mean. Returns shape
+    (*kept axes, n_freq, n_signals, n_signals).
+    """
+    weights = np.ones(fourier_coefficients.shape[:-1]) if weights is None else weights[..., 0]
+    total = np.einsum(
+        f"trkf,trkfa,trkfb->{kept_axes}fab",
+        weights,
+        fourier_coefficients,
+        fourier_coefficients.conj(),
+    )
+    return total / np.einsum(f"trkf->{kept_axes}f", weights)[..., np.newaxis, np.newaxis]
+
+
+@pytest.mark.parametrize("weighted", [False, True], ids=["unweighted", "weighted"])
+@pytest.mark.parametrize("path", ["batched", "per_bin"])
+@pytest.mark.parametrize("expectation_type", sorted(_GLOBAL_COHERENCE_KEPT_AXES))
+def test_global_coherence_decomposes_the_matrix_its_expectation_averages(
+    expectation_type, path, weighted, monkeypatch
+):
+    """For each supported expectation_type, the fractions and vectors are the
+    eigendecomposition of the cross-spectral matrix averaged over the same
+    axes (with the same observation weights), and the kept axes lead the
+    result in the order the other measures keep them."""
+    import spectral_connectivity._multivariate as multivariate_module
+
+    if path == "per_bin":
+        monkeypatch.setattr(multivariate_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0)
+    rng = np.random.default_rng(31)
+    shape = (3, 4, 6, 6, 6)  # (time, trials, tapers, two-sided frequency, signals)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.2, 1.0, (*shape[:-1], 1)) if weighted else None
+    conn = Connectivity(
+        coefficients, expectation_type=expectation_type, observation_weights=weights
+    )
+    # Two of six components: the per-bin path takes its truncated svds branch.
+    fractions, vectors = conn.global_coherence(max_rank=2)
+
+    kept_axes = _GLOBAL_COHERENCE_KEPT_AXES[expectation_type]
+    kept_shape = tuple(shape["trk".index(axis)] for axis in kept_axes)
+    n_frequencies = conn.frequencies.size
+    assert fractions.shape == (*kept_shape, n_frequencies, 2)
+    assert vectors.shape == (*kept_shape, n_frequencies, shape[-1], 2)
+    assert fractions.shape[:-1] == conn.magnitude_squared_coherence().shape[:-2]
+
+    expected = _pooled_cross_spectral_matrix(
+        _nonnegative_bins(coefficients),
+        kept_axes,
+        None if weights is None else _nonnegative_bins(weights),
+    )
+    eigenvalues, eigenvectors = np.linalg.eigh(expected)
+    trace = np.trace(expected, axis1=-2, axis2=-1).real[..., np.newaxis]
+    np.testing.assert_allclose(
+        fractions, eigenvalues[..., ::-1][..., :2] / trace, rtol=1e-10, atol=1e-12
+    )
+    # The same vectors up to a phase: |<u, v>| = 1 for unit vectors.
+    leading = eigenvectors[..., ::-1][..., :2]
+    overlap = np.abs(np.sum(leading.conj() * vectors, axis=-2))
+    np.testing.assert_allclose(overlap, 1.0, rtol=1e-8)
+
+
+def test_time_trials_tapers_global_coherence_matches_chronux_crossspecmatc_formula():
+    """On non-overlapping windows, "time_trials_tapers" matches the formula of
+    Chronux ``CrossSpecMatc``'s ``Ctot``, reimplemented here from its source
+    (this is not recorded Chronux output): the cross-spectral matrix ``Sc``
+    averaged with equal weight over every taper, trial and window (Chronux
+    adds the taper mean of ``conj(J_k) J_l`` for each window and trial and
+    divides by ``Nwins * Ntr``), then ``s(1) / sum(s)`` from its singular
+    values. ``Sc`` is the conjugate of the matrix decomposed here, so the
+    values are the same: the two estimate the same quantity."""
+    time_series = np.random.default_rng(32).standard_normal((1000, 3, 5))
+    m = Multitaper(
+        time_series,
+        sampling_frequency=500,
+        time_halfbandwidth_product=3,
+        time_window_duration=0.4,
+        time_window_step=0.4,
+    )
+    conn = Connectivity.from_transform(m, expectation_type="time_trials_tapers")
+    assert conn.time_bins_are_independent  # the windows do not overlap
+    fractions, _ = conn.global_coherence()
+
+    coefficients = _nonnegative_bins(to_host(m.fft()))  # (window, trial, taper, f, signal)
+    n_windows, n_trials = coefficients.shape[:2]
+    assert n_windows == 5
+    summed = np.zeros((*coefficients.shape[3:], coefficients.shape[-1]), dtype=complex)
+    for window in range(n_windows):
+        for trial in range(n_trials):
+            tapered = coefficients[window, trial]  # (taper, frequency, signal)
+            summed += np.mean(
+                tapered.conj()[..., :, np.newaxis] * tapered[..., np.newaxis, :], 0
+            )
+    singular_values = np.linalg.svd(summed / (n_windows * n_trials), compute_uv=False)
+    np.testing.assert_allclose(
+        fractions[..., 0], singular_values[..., 0] / singular_values.sum(axis=-1), rtol=1e-10
+    )
+
+
+@pytest.mark.parametrize("expectation_type", ["time", "trials", "time_trials"])
+def test_global_coherence_rejects_an_expectation_that_keeps_the_tapers(expectation_type):
+    """A per-taper global coherence has no established meaning, so the
+    settings that keep tapers as an output axis raise, naming the supported
+    ones and how to rebuild; the rebuilt instance computes it."""
+    rng = np.random.default_rng(33)
+    coefficients = rng.standard_normal((2, 4, 3, 8, 3)) + 1j * rng.standard_normal(
+        (2, 4, 3, 8, 3)
+    )
+    conn = Connectivity(coefficients, expectation_type=expectation_type)
+    with pytest.raises(
+        ValueError, match=r"^global_coherence needs the tapers averaged"
+    ) as info:
+        conn.global_coherence()
+    message = str(info.value)
+    assert f"expectation_type={expectation_type!r} keeps them as an output axis" in message
+    assert (
+        "Use one of 'trials_tapers' (the default), 'tapers', 'time_tapers', "
+        "'time_trials_tapers'"
+    ) in message
+    assert (
+        "Connectivity.from_transform(transform, expectation_type='trials_tapers')" in message
+    )
+    conn.expectation_type = "trials_tapers"
+    fractions, _ = conn.global_coherence()
+    assert fractions.shape == (2, 5, 1)
+
+
+@pytest.mark.parametrize(
+    ("expectation_type", "shape", "pooled"),
+    [
+        ("trials_tapers", (2, 3, 2, 8, 8), "trials x tapers"),
+        ("tapers", (2, 3, 5, 8, 8), "tapers"),
+        ("time_tapers", (1, 3, 5, 8, 8), "time x tapers"),
+    ],
+)
+def test_global_coherence_warns_when_fewer_observations_than_signals(
+    expectation_type, shape, pooled
+):
+    """With n pooled observations for p > n signals the matrix has rank at
+    most n, so global coherence is at least 1/n whatever the data and cannot
+    reach the 1/p of independent signals. That warns, naming n, p and the
+    floor, and offers only what raises n."""
+    rng = np.random.default_rng(34)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients, expectation_type=expectation_type)
+    n_observations, n_signals = conn.n_observations, conn.n_signals
+    assert 1 < n_observations < n_signals
+    with pytest.warns(UserWarning, match="fewer observations than signals") as record:
+        fractions, _ = conn.global_coherence(max_rank=1)
+    (message,) = [
+        str(warning.message)
+        for warning in record
+        if "fewer observations than signals" in str(warning.message)
+    ]
+    assert (
+        f"pools n_observations == {n_observations} observations (the averaged {pooled}) "
+        f"for {n_signals} signals"
+    ) in message
+    assert f"at least 1/{n_observations} = {1 / n_observations:.3g}" in message
+    assert f"1/n_signals = {1 / n_signals:.3g}" in message
+    assert "Compare values only at matched numbers of observations and signals." in message
+    assert "fewer signals" in message
+    # Short sentences: none of the statements runs past 30 words (the last,
+    # the list of remedies, is exempt).
+    *statements, _ = re.split(r"(?<=[a-z0-9)])\. (?=[A-Z])", message)
+    assert len(statements) >= 4
+    assert max(len(statement.split()) for statement in statements) <= 30
+    assert ("more trials" in message) == ("trials" in expectation_type)
+    assert ("more time windows" in message) == ("time" in expectation_type)
+    # The floor the message states holds for independent noise.
+    assert np.all(fractions >= 1 / n_observations - 1e-12)
+
+
+def test_labelled_global_coherence_with_few_observations_names_the_pooling_route():
+    """The wrappers fix expectation_type to "trials_tapers", so their small-n
+    warning names the route that pools time windows instead of an
+    expectation_type the caller cannot pass, and only when there are windows
+    to pool."""
+    from spectral_connectivity import multitaper_connectivity
+
+    time_series = np.random.default_rng(37).standard_normal((1000, 1, 8))
+
+    def labelled_message(**window):
+        with pytest.warns(UserWarning, match="fewer observations than signals") as record:
+            multitaper_connectivity(
+                time_series,
+                sampling_frequency=500,
+                method="global_coherence",
+                time_halfbandwidth_product=2,
+                **window,
+            )
+        return next(str(w.message) for w in record if "fewer observations" in str(w.message))
+
+    route = (
+        "Connectivity.from_transform(transform, "
+        "expectation_type='time_trials_tapers').global_coherence() to pool the "
+        "time windows"
+    )
+    message = labelled_message(time_window_duration=0.4, time_window_step=0.4)
+    assert route in message
+    assert "an expectation_type that averages more axes" not in message
+    assert "more trials" in message
+    assert route not in labelled_message()  # one window: nothing to pool
+
+    # The route the message names works and pools the five windows.
+    multitaper = Multitaper(
+        time_series,
+        sampling_frequency=500,
+        time_halfbandwidth_product=2,
+        time_window_duration=0.4,
+        time_window_step=0.4,
+    )
+    pooled = Connectivity.from_transform(multitaper, expectation_type="time_trials_tapers")
+    assert pooled.n_observations == 5 * multitaper.n_tapers
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        warnings.filterwarnings("ignore", category=SidednessWarning)
+        fractions, _ = pooled.global_coherence()
+    assert fractions.shape == (pooled.frequencies.size, 1)
+
+
+def test_global_coherence_with_as_many_observations_as_signals_does_not_warn():
+    """n = p no longer bounds the value away from 1/p, and the default use,
+    many trials of few signals, stays silent."""
+    rng = np.random.default_rng(35)
+    for shape in [(1, 4, 2, 8, 8), (1, 50, 3, 8, 4)]:
+        coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            warnings.filterwarnings("ignore", category=SidednessWarning)
+            Connectivity(coefficients).global_coherence()
+
+
+@pytest.mark.parametrize("expectation_type", ["time_trials_tapers", "time_tapers"])
+def test_global_coherence_warns_when_it_pools_overlapping_windows(expectation_type):
+    """Windows overlapping by more than half share data, so pooling them adds
+    fewer effective observations than their count; that warns as the other
+    measures that count observations do. Keeping the windows, or pooling
+    windows that do not overlap, is silent."""
+    time_series = np.random.default_rng(36).standard_normal((1000, 3, 3))
+
+    def connectivity(time_window_step, expectation):
+        multitaper = Multitaper(
+            time_series,
+            sampling_frequency=500,
+            time_halfbandwidth_product=3,
+            time_window_duration=0.4,
+            time_window_step=time_window_step,
+        )
+        return Connectivity.from_transform(multitaper, expectation_type=expectation)
+
+    overlapping = connectivity(0.1, expectation_type)
+    assert not overlapping.time_bins_are_independent
+    with pytest.warns(UserWarning, match="global_coherence assumes independent") as record:
+        overlapping.global_coherence()
+    (message,) = [
+        str(warning.message)
+        for warning in record
+        if "assumes independent" in str(warning.message)
+    ]
+    assert f"expectation_type={expectation_type!r} averages over time bins" in message
+    assert "time_bins_are_independent is False" in message
+    assert f"n_observations == {overlapping.n_observations} overstates" in message
+    # Overlap up to half does not trigger it, but it is not free either, so
+    # the remedy is non-overlapping windows, not a step of half the window.
+    assert "use non-overlapping windows (time_window_step >= time_window_duration" in message
+    assert "even 50% overlap leaves about half the nominal count" in message
+    assert "time_window_duration / 2" not in message
+
+    for silent in (connectivity(0.1, "trials_tapers"), connectivity(0.4, expectation_type)):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            warnings.filterwarnings("ignore", category=SidednessWarning)
+            silent.global_coherence()
 
 
 class TestGroupDelay:
@@ -1196,22 +1565,24 @@ class TestAdvancedConnectivityIntegration:
 
         # Global coherence
         global_coh, global_coh_vectors = conn.global_coherence(max_rank=2)
-        assert global_coh.shape == (m.time.size, m.frequencies.size, 2)
+        assert global_coh.shape == (m.time.size, n_non_negative_freqs, 2)
         assert global_coh_vectors.shape == (
             m.time.size,
-            m.frequencies.size,
+            n_non_negative_freqs,
             n_signals,
             2,
         )
         np.testing.assert_allclose(
             global_coh,
-            _global_coherence_oracle(fourier_coefficients)[..., :2],
+            _global_coherence_oracle(fourier_coefficients[..., :n_non_negative_freqs, :])[
+                ..., :2
+            ],
             rtol=1e-10,
             atol=1e-12,
         )
         # One shared source: the leading component dominates at low frequencies,
         # where the lags barely rotate the phases.
-        low = np.abs(to_host(m.frequencies)) <= 50
+        low = conn.frequencies <= 50
         assert np.all(global_coh[:, low, 0] > 0.8)
 
         # Group delay recovers the signed lags: [i, j] = (lags[j] - lags[i]) / fs.
@@ -1347,9 +1718,10 @@ def test_global_coherence_thin_rank_deficient_bin_has_zero_power_component():
     shape = (1, 3, 1, 6, 8)  # 3 estimates for 8 signals
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     coefficients = np.concatenate([coefficients, coefficients[:, :1]], axis=1)  # 4 estimates
-    fractions, vectors = Connectivity(coefficients).global_coherence(max_rank=4)
+    with pytest.warns(UserWarning, match="fewer observations than signals"):
+        fractions, vectors = Connectivity(coefficients).global_coherence(max_rank=4)
 
-    observations = _observations(coefficients)
+    observations = _observations(_nonnegative_bins(coefficients))
     singular_values = np.linalg.svd(observations, compute_uv=False)
     expected = singular_values**2 / np.sum(singular_values**2, axis=-1, keepdims=True)
     np.testing.assert_allclose(fractions, expected, rtol=1e-10, atol=1e-12)

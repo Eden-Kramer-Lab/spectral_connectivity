@@ -430,29 +430,36 @@ class DirectedOrientationWarning(UserWarning):
     """
 
 
-class PowerSidednessWarning(UserWarning):
-    """``Connectivity.power()`` is one-sided, unlike in spectral_connectivity 2.x.
+class SidednessWarning(UserWarning):
+    """A result is one-sided now, unlike in spectral_connectivity 2.x.
 
     Emitted by :meth:`Connectivity.power` when it is called without
     ``one_sided`` on two-sided coefficients. Since 3.0 it returns the one-sided
     density, with the interior frequency bins doubled, where 2.x returned the
     two-sided density, so code written for 2.x keeps running and gets values
-    twice as large away from 0 Hz and Nyquist. This warning is temporary. It
-    appears once per Python session;
-    ``warnings.simplefilter("always", PowerSidednessWarning)`` shows it at every
-    call, and a call made while it is ignored does not count as shown. Pass
-    ``one_sided=True`` or ``one_sided=False`` to the call, or silence it with
-    ``warnings.filterwarnings("ignore", category=PowerSidednessWarning)``.
+    twice as large away from 0 Hz and Nyquist. Pass ``one_sided=True`` or
+    ``one_sided=False`` to the call to silence it.
+
+    Also emitted by :meth:`Connectivity.global_coherence` on two-sided
+    coefficients: since 3.0 it returns only the non-negative frequencies,
+    labelled by :attr:`Connectivity.frequencies`, where 2.x returned every bin
+    of the two-sided transform, labelled by :attr:`Connectivity.all_frequencies`.
+
+    This warning is temporary. Each of the two notices appears once per Python
+    session; ``warnings.simplefilter("always", SidednessWarning)`` shows
+    them at every call, and a call made while it is ignored does not count as
+    shown. Silence them with
+    ``warnings.filterwarnings("ignore", category=SidednessWarning)``.
 
     By design, a bare ``warnings.catch_warnings(record=True)`` with no filter
     records nothing once the notice has been shown; add
-    ``warnings.simplefilter("always", PowerSidednessWarning)`` inside it
+    ``warnings.simplefilter("always", SidednessWarning)`` inside it
     (``pytest.warns`` does the equivalent).
     """
 
 
 _MIGRATION_GUIDE_URL = "https://spectral-connectivity.readthedocs.io/en/latest/migration.html"
-# Every DirectedOrientationWarning and PowerSidednessWarning message starts with
+# Every DirectedOrientationWarning and SidednessWarning message starts with
 # this, so pyproject.toml can filter them by message: a category filter would
 # import the package while pytest reads its configuration, before coverage starts.
 _ORIENTATION_WARNING_PREFIX = "Since spectral_connectivity 3.0, "
@@ -484,12 +491,18 @@ _ORIENTATION_CHANGED_MEASURES = frozenset(
     }
 )
 
-# False while the labeled wrapper or a jackknife replicate runs a measure: the
-# wrapper warns about its source/target labels instead (and a labeled power
-# result states its sidedness), and a jackknife warns once, for its full
-# estimate.
-_warn_orientation_change: ContextVar[bool] = ContextVar(
-    "_warn_orientation_change", default=True
+# Whether a measure emits its per-call 3.x migration notices
+# (DirectedOrientationWarning, SidednessWarning). False while the labeled
+# wrapper or a jackknife replicate runs a measure: the wrapper warns about its
+# source/target labels instead (and its labeled results state their
+# sidedness), and a jackknife warns once, for its full estimate.
+_emit_migration_notices: ContextVar[bool] = ContextVar("_emit_migration_notices", default=True)
+
+# True while a labeled wrapper runs a measure on the Connectivity it built,
+# whose expectation_type the caller could not choose ("trials_tapers"), so
+# advice to change expectation_type is replaced by the call that does.
+_expectation_fixed_by_wrapper: ContextVar[bool] = ContextVar(
+    "_expectation_fixed_by_wrapper", default=False
 )
 
 
@@ -503,7 +516,7 @@ def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P,
     @wraps(connectivity_measure)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         result = connectivity_measure(*args, **kwargs)
-        if _warn_orientation_change.get():
+        if _emit_migration_notices.get():
             warn_migration(
                 f"{_ORIENTATION_WARNING_PREFIX}{connectivity_measure.__name__} "
                 "returns [..., source, target]: [..., i, j] is i -> j. 2.x "
@@ -1022,9 +1035,10 @@ class Connectivity:
       (``result.scores``, ``result.connections``, ``result.filters``, ...)
       rather than unpacking it.
     - ``global_coherence`` (which takes no groups) returns two arrays,
-      ``fractions, vectors = conn.global_coherence()``. Unlike every other
-      measure, its frequency axis holds all ``n_fft_samples`` FFT bins; see
-      its Notes for how to line it up with :attr:`frequencies`.
+      ``fractions, vectors = conn.global_coherence()``, whose frequency axis,
+      like every other measure's, holds the non-negative frequencies (2.x
+      returned every FFT bin). It needs an ``expectation_type`` that averages
+      the tapers (see its Raises).
 
     ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
     :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
@@ -1043,11 +1057,8 @@ class Connectivity:
     >>> result.scores.shape  # (n_time_windows, n_frequencies, n_connections, n_components)
     (1, 33, 1, 1)
     >>> fractions, vectors = conn.global_coherence()
-    >>> fractions.shape, vectors.shape  # 64 FFT bins: all of them, not 33
-    ((1, 64, 1), (1, 64, 4, 1))
-    >>> n_frequencies = len(conn.frequencies)
-    >>> fractions[..., :n_frequencies, :].shape  # aligned with conn.frequencies
-    (1, 33, 1)
+    >>> fractions.shape, vectors.shape  # (n_time_windows, n_frequencies, ...)
+    ((1, 33, 1), (1, 33, 4, 1))
 
     **Coefficients of a complex signal**: the transforms take only real time
     series, whose negative frequencies mirror the positive ones. Two-sided
@@ -1640,13 +1651,30 @@ class Connectivity:
                 raise
             raise ValueError(_nonfinite_decomposition_message(measure, error)) from error
 
+    @cached_property
+    def _nonfinite_coefficients_are_weighted(self) -> bool:
+        """Whether some NaN or Inf coefficient has a nonzero observation weight.
+
+        Coefficients that are not finite only where zero weights omit them
+        never reach a weighted decomposition.
+        """
+        if self._coefficients_are_finite:
+            return False
+        if self._observation_weights is None:
+            return True
+        omitted = xp.broadcast_to(
+            self._observation_weights == 0, self._fourier_coefficients.shape
+        )
+        return not bool(xp.all(xp.isfinite(self._fourier_coefficients) | omitted))
+
     def _require_finite_decomposition(self, measure: str, values: BackendArray) -> None:
         """Raise, as :meth:`_decomposition_of_nonfinite_coefficients` does,
         when NaN or Inf coefficients left ``values`` (a decomposition's output,
         before any deliberate NaN) not finite: the backend returned NaN rather
         than raising. Coefficients that are not finite only where zero weights
-        omit them give finite values and pass."""
-        if not self._coefficients_are_finite and not bool(xp.all(xp.isfinite(values))):
+        omit them pass: a bin left with no weighted observation is NaN from
+        zero power, as for finite coefficients."""
+        if self._nonfinite_coefficients_are_weighted and not bool(xp.all(xp.isfinite(values))):
             raise ValueError(_nonfinite_decomposition_message(measure))
 
     def _validate_multiple_signals(self) -> None:
@@ -1736,7 +1764,15 @@ class Connectivity:
             "independent sample",
         )
 
-    def _warn_correlated_observations(self, measure: str, assumption: str) -> None:
+    def _warn_correlated_observations(
+        self,
+        measure: str,
+        assumption: str,
+        time_bin_remedy: str = (
+            "use time_window_step >= time_window_duration / 2, more MorletWavelet "
+            "decimation, or an expectation_type that does not average over time"
+        ),
+    ) -> None:
         """Warn once that ``measure`` counts correlated observations as independent.
 
         ``n_observations`` is a raw count of the averaged observations. When
@@ -1748,7 +1784,8 @@ class Connectivity:
         windows or closely spaced Morlet samples), that count overstates the
         effective sample size, biasing every consumer that uses it as a
         degrees-of-freedom or bias-correction factor. ``assumption`` states
-        what ``measure`` uses the count for so the message is actionable.
+        what ``measure`` uses the count for so the message is actionable, and
+        ``time_bin_remedy`` what to do about correlated time bins.
         """
         averages_correlated_time_bins = (
             not self._time_bins_are_independent and 0 in self._expectation_axes
@@ -1770,9 +1807,7 @@ class Connectivity:
                 "bins that are correlated (time_bins_are_independent is False: "
                 "Multitaper or ShortTimeFourierTransform windows overlapping by "
                 "more than half, or MorletWavelet samples closer than 4 wavelet "
-                "standard deviations; use time_window_step >= time_window_duration "
-                "/ 2, more MorletWavelet decimation, or an expectation_type that "
-                "does not average over time)"
+                f"standard deviations; {time_bin_remedy})"
             )
         warnings.warn(
             f"{measure} assumes independent observations, but "
@@ -1783,6 +1818,17 @@ class Connectivity:
             stacklevel=stacklevel_outside_package(),
         )
 
+    def _more_observations_remedies(self, *, other_expectations: bool = True) -> list[str]:
+        """What raises :attr:`n_observations`: more of each averaged axis, and
+        (if ``other_expectations``) an expectation_type that averages more."""
+        averaged = self.expectation_type.split("_")
+        remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
+        if other_expectations and len(averaged) < len(_MORE_OBSERVATIONS):
+            remedies.append(
+                f"an expectation_type that averages more axes than {self.expectation_type!r}"
+            )
+        return remedies
+
     def _warn_single_observation_degenerate(
         self,
         measure: str,
@@ -1790,8 +1836,6 @@ class Connectivity:
             "every magnitude-normalized value is mathematically forced to 1 "
             "(apparent perfect connectivity)"
         ),
-        *,
-        n_trials_by_tapers: int | None = None,
     ) -> None:
         """Warn that a normalized measure is degenerate for one observation.
 
@@ -1807,32 +1851,71 @@ class Connectivity:
         ``measure``), so the measure reports perfect connectivity or a
         perfectly consistent lag between unrelated signals and carries no
         information. This is a silent-failure trap rather than an error, so it
-        warns instead of raising. ``n_trials_by_tapers`` is the count for a
-        measure that decomposes trials x tapers whatever the expectation type,
-        in place of :attr:`n_observations`.
+        warns instead of raising.
         """
-        if n_trials_by_tapers is None:
-            count, counted = self.n_observations, "n_observations"
-            averaged = self.expectation_type.split("_")
-        else:
-            count, counted = n_trials_by_tapers, "n_trials * n_tapers"
-            averaged = ["trials", "tapers"]
-        if count < 2:
-            # Offer only what raises this count: the axes it is taken over.
-            remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
-            if n_trials_by_tapers is None and len(averaged) < len(_MORE_OBSERVATIONS):
-                remedies.append(
-                    "an expectation_type that averages more axes than "
-                    f"{self.expectation_type!r}"
-                )
+        if self.n_observations < 2:
+            remedies = self._more_observations_remedies()
             warnings.warn(
                 f"{measure} is computed from a single observation "
-                f"({counted} == 1), so {consequence} "
+                f"(n_observations == 1), so {consequence} "
                 "regardless of the data, and the result carries no information. "
                 f"Use {', or '.join(remedies)}.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
+
+    def _warn_few_global_coherence_observations(self) -> None:
+        """Warn when global coherence pools fewer observations than signals.
+
+        With ``n = n_observations`` pooled observations and ``p`` signals the
+        value is at least ``1 / min(n, p)`` whatever the data, so for ``n < p``
+        it cannot reach the ``1 / p`` of independent signals. For ``n >= p`` it
+        is still biased above ``1 / p`` but no longer bounded away from it, so
+        ``n < p`` is where the warning starts. The floor, the bias, and the raw
+        count ``n`` (zero-weight observations included) are described in the
+        Notes of :meth:`global_coherence`.
+        """
+        n_observations, n_signals = self.n_observations, self.n_signals
+        if n_observations >= n_signals:
+            return
+        averaged = self.expectation_type.split("_")
+        # A labelled wrapper fixed expectation_type at "trials_tapers": name the
+        # call that pools the windows instead, when there are any.
+        fixed_expectation = _expectation_fixed_by_wrapper.get()
+        remedies = self._more_observations_remedies(other_expectations=not fixed_expectation)
+        if fixed_expectation and self._fourier_coefficients.shape[0] > 1:
+            remedies.append(
+                "Connectivity.from_transform(transform, "
+                "expectation_type='time_trials_tapers').global_coherence() to "
+                "pool the time windows (Connectivity(fourier_coefficients, "
+                "expectation_type='time_trials_tapers') for coefficients)"
+            )
+        remedies.append("fewer signals")
+        if n_observations == 1:
+            floor = (
+                "is computed from a single observation (n_observations == 1). The "
+                "cross-spectral matrix then has rank one, so its first component "
+                "holds all of the power. Global coherence is forced to 1 whatever "
+                "the data, and the result carries no information"
+            )
+        else:
+            floor = (
+                f"pools n_observations == {n_observations} observations (the "
+                f"averaged {' x '.join(averaged)}) for {n_signals} signals. The "
+                f"cross-spectral matrix then has rank at most {n_observations}, so "
+                f"global coherence is at least 1/{n_observations} = "
+                f"{1 / n_observations:.3g} whatever the data"
+            )
+        warnings.warn(
+            f"global_coherence {floor}. Independent signals of equal power have "
+            f"1/n_signals = {1 / n_signals:.3g}, which fewer observations than "
+            "signals cannot give. Even with more observations, the estimate stays "
+            "above that unless they far outnumber the signals. Compare values only "
+            "at matched numbers of observations and signals. "
+            f"Use {', or '.join(remedies)}.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
 
     def _require_multiple_frequencies(self, measure: str) -> None:
         """Raise if fewer than two frequency bins are available.
@@ -2077,7 +2160,7 @@ class Connectivity:
         frequency_axis = 3
         # Frequency and any extra batch axes (axes 3 to signal_axis - 1) stay.
         batch_axes = list(range(frequency_axis, signal_axis))
-        kept_axes = [axis for axis in range(frequency_axis) if axis not in average_axes]
+        kept_axes = self._kept_observation_axes
         # Reorder to (kept leading axes..., frequency, batch..., averaged axes...,
         # signals) so the averaged axes collapse into a single observation axis
         # adjacent to signals, ready for a batched matmul.
@@ -2254,7 +2337,7 @@ class Connectivity:
         if self._observation_weights is None:
             return True
         weights = self._observation_weights[..., 0]
-        kept_axes = [axis for axis in range(3) if axis not in self._expectation_axes]
+        kept_axes = self._kept_observation_axes
         order = [*kept_axes, 3, *self._expectation_axes]
         reordered = xp.transpose(weights, order)
         flattened = reordered.reshape((*reordered.shape[: len(kept_axes) + 1], -1))
@@ -2266,6 +2349,14 @@ class Connectivity:
     def _expectation_axes(self) -> tuple[int, ...]:
         """Observation axes reduced by the configured expectation."""
         return EXPECTATION_AXES[self.expectation_type]
+
+    @property
+    def _kept_observation_axes(self) -> tuple[int, ...]:
+        """Observation axes the expectation keeps, in (time, trials, tapers) order.
+
+        They lead every measure's result in this order.
+        """
+        return tuple(axis for axis in range(3) if axis not in self._expectation_axes)
 
     @property
     def n_observations(self) -> int:
@@ -2574,11 +2665,11 @@ class Connectivity:
                 observations_are_independent=self._observations_are_independent,
                 _adopt_fourier_coefficients=True,
             )
-            token = _warn_orientation_change.set(False)
+            token = _emit_migration_notices.set(False)
             try:
                 replicate = getattr(replicate_connectivity, method)(**method_kwargs)
             finally:
-                _warn_orientation_change.reset(token)
+                _emit_migration_notices.reset(token)
             if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
                 msg = f"jackknife requires a real array result from {method!r}."
                 raise TypeError(msg)
@@ -2654,7 +2745,7 @@ class Connectivity:
             also what an omitted ``one_sided`` gives. Called without it on
             two-sided coefficients, ``power`` warns that 2.x returned the
             two-sided density
-            (:class:`~spectral_connectivity.PowerSidednessWarning`, once per
+            (:class:`~spectral_connectivity.SidednessWarning`, once per
             session, until 3.2); pass ``True`` to confirm and silence it.
             ``False`` returns the two-sided density instead, still at the
             non-negative frequencies only: no bin is doubled, as for a
@@ -2710,7 +2801,7 @@ class Connectivity:
         True
         """
         if one_sided is None:
-            if not self._is_one_sided and _warn_orientation_change.get():
+            if not self._is_one_sided and _emit_migration_notices.get():
                 # Remove in 3.2, with DirectedOrientationWarning (issue #98).
                 warn_migration(
                     f"{_ORIENTATION_WARNING_PREFIX}Connectivity.power returns the "
@@ -2720,8 +2811,8 @@ class Connectivity:
                     "two-sided density, half of that. Pass one_sided=True to "
                     "confirm and silence this warning, or one_sided=False for the "
                     f"2.x values. See the migration guide: {_MIGRATION_GUIDE_URL}. "
-                    + _silence_hint(PowerSidednessWarning),
-                    PowerSidednessWarning,
+                    + _silence_hint(SidednessWarning),
+                    SidednessWarning,
                 )
             one_sided = True
         if _validated_flag("one_sided", one_sided):
@@ -4050,17 +4141,20 @@ class Connectivity:
         """Find linear combinations that capture the most coherent power.
 
         The linear combinations of signals that capture the most coherent
-        power at each frequency and time window.
+        power at each frequency, from the cross-spectral matrix averaged over
+        the observations ``expectation_type`` averages.
 
         This is a frequency domain analog of PCA over signals at a given
-        frequency/time window.
+        frequency (and time window, for the default expectation). Global
+        coherence [1]_ is the leading component's fraction: the largest
+        eigenvalue of the cross-spectral matrix divided by its trace.
 
         Parameters
         ----------
         max_rank : int, default=1
             The number of components returned, strongest first (like the
             number of PC dimensions kept); more than
-            ``min(n_signals, n_trials * n_tapers)`` is clamped with a warning.
+            ``min(n_signals, n_observations)`` is clamped with a warning.
             It limits the output only: the decomposition uses the whole
             cross-spectral matrix, each value is a fraction of the total power
             of all components, and a returned component does not depend on
@@ -4086,30 +4180,75 @@ class Connectivity:
         Returns
         -------
         global_coherence : ndarray
-            Shape (n_time_windows, n_fft_samples, n_components).
+            Shape (..., n_frequencies, n_components), the leading axes those
+            ``expectation_type`` keeps (``n_time_windows`` for the default).
             The fraction of total coherent power captured by each component
             (eigenvalue of the cross-spectral matrix divided by the sum of all
             eigenvalues), ordered strongest component first.
         vectors : ndarray
-            Shape (n_time_windows, n_fft_samples, n_signals, n_components).
+            Shape (..., n_frequencies, n_signals, n_components).
             Each component's unit-norm weights over the signals (the left
             singular vectors of the coefficient matrix), in the same order;
             the wrappers call them ``global_coherence_vectors``.
 
+        Raises
+        ------
+        ValueError
+            If ``expectation_type`` keeps the tapers as an output axis
+            (``"time"``, ``"trials"``, ``"time_trials"``), if
+            ``max_workspace_elements`` is not a positive integer, or if the
+            Fourier coefficients contain NaN or Inf (where weights do not omit
+            them).
+
+        Warns
+        -----
+        UserWarning
+            If ``max_rank`` exceeds ``min(n_signals, n_observations)``, the
+            number of components there are; it is clamped to that.
+        UserWarning
+            If some bins have (near-)zero total power, such as a flat channel,
+            all-zero input, or a bin whose observation weights are all zero:
+            those bins are NaN.
+        UserWarning
+            If the pooled observations are fewer than the signals
+            (``n_observations < n_signals``): the value is then at least
+            ``1 / n_observations`` whatever the data (1 for a single
+            observation), above the ``1 / n_signals`` of independent signals.
+            The count is :attr:`n_observations`, which includes observations
+            that zero ``observation_weights`` omit. Also if the expectation
+            pools time windows the transform reports as correlated
+            (``time_bins_are_independent`` is ``False``, e.g. windows
+            overlapping by more than half), which add fewer effective
+            observations than their count.
+
         Notes
         -----
-        **Frequency axis**: unlike every other public measure, which returns
-        only the non-negative frequencies, this method returns all
-        ``n_fft_samples`` bins of the (two-sided) transform in FFT order,
-        labelled by :attr:`all_frequencies`. The first ``len(frequencies)``
-        of them are the non-negative bins, so
-        ``global_coherence[..., :len(conn.frequencies), :]`` and
-        ``vectors[..., :len(conn.frequencies), :, :]`` line up with
-        :attr:`frequencies`; the wrappers return them trimmed so.
+        **Frequency axis**: the non-negative frequencies, labelled by
+        :attr:`frequencies`, as for every other measure.
 
-        **Observations**: it does not follow ``expectation_type``. Each time
-        window is decomposed from all of its trials and tapers, so the
-        leading axis is always ``n_time_windows``.
+        .. versionchanged:: 3.0
+           2.x returned every bin of the two-sided transform, labelled by
+           :attr:`all_frequencies`. For a real signal the negative bins repeat
+           the non-negative ones (the same fractions, conjugated vectors).
+           Until 3.2, a call on two-sided coefficients emits a
+           :class:`~spectral_connectivity.SidednessWarning` once per
+           Python session as a reminder.
+
+        **Observations**: the matrix decomposed at each frequency is the
+        cross-spectral matrix averaged over the axes ``expectation_type``
+        averages, which must include the tapers: ``"trials_tapers"`` (the
+        default) pools each time window's trials and tapers,
+        ``"time_trials_tapers"`` every window, trial and taper (one value per
+        frequency), ``"time_tapers"`` each trial's windows and tapers, and
+        ``"tapers"`` the tapers of each window and trial. The kept axes lead
+        the result in the order of the "Result shape by expectation_type"
+        table of :class:`Connectivity`. Observation weights give the weighted
+        average: each pooled coefficient is scaled by the square root of its
+        weight.
+
+        .. versionchanged:: 3.0
+           It follows ``expectation_type``; 2.x pooled each window's trials
+           and tapers whatever the setting, as ``"trials_tapers"`` does.
 
         **Range**: [0, 1]. Each value is the fraction of total coherent power
         in that component, so the components sum to at most 1 and rescaling
@@ -4118,8 +4257,60 @@ class Connectivity:
         signals as given, so put them on a common scale first if their units
         differ.
 
-        **Algorithm**: when the number of estimates (``n_trials * n_tapers``)
-        is at least ``n_signals`` and ``n_signals`` is small
+        **Interpreting the value**:
+
+        - *Floor*: with ``n`` pooled observations (:attr:`n_observations`:
+          trials x tapers by default, times the windows when time is pooled)
+          and ``p`` signals, the leading value is at least ``1 / min(n, p)``
+          whatever the data, and 1 for one observation; it warns when
+          ``n < p``. ``n`` is the raw count: observations that zero
+          ``observation_weights`` omit (the masked edges of a Morlet
+          transform, say) still count, so the floor can be higher than
+          ``1 / min(n, p)`` there, and the warning does not see it.
+        - *Bias without coupling*: independent signals of equal power have the
+          value ``1 / p``, but the estimate is well above it unless
+          ``n >> p``. As ``n`` and ``p`` grow with ``p / n`` fixed, the largest
+          eigenvalue of their cross-spectral matrix tends to
+          ``(1 + sqrt(p / n))**2`` times the common power [4]_, [5]_ and the
+          trace to ``p`` times it, so the estimate tends to
+          ``(1 + sqrt(p / n))**2 / p``: 4 times the true value at ``n = p``
+          and about 1.5 times at ``n = 20 p``. At finite sizes it is
+          somewhat lower (approximately, by a fixed-seed Monte Carlo of
+          complex Gaussian coefficients: 2.95 times at ``p = n = 8``, 3.57
+          times at ``p = n = 32``, and 1.37 to 1.45 times at ``n = 20 p``).
+          Compare values only at matched ``n`` and ``p``
+          (trial counts, rejected epochs, and removed channels all change
+          them), or against a null simulated at the same ``n`` and ``p``.
+        - *Effective observations*: correlated observations (overlapping
+          windows; overlapping Welch segments or Morlet smoothing,
+          ``observations_are_independent=False``) count fewer than ``n``, so
+          the bias is larger than ``n`` suggests. Pool non-overlapping windows:
+          with a full taper set, 50% overlap, which does not yet set
+          ``time_bins_are_independent=False`` or warn, still leaves about half
+          the nominal count (by Monte Carlo, 7 tapers: about 39 effective of
+          70), and halving the step over the same span adds almost nothing.
+        - *Pooling time*: pooling windows whose coherent pattern changes
+          lowers the value, so a smaller value after longer pooling is not by
+          itself evidence of weaker coherence.
+        - *Raw cross-spectrum*: the matrix is not normalized to coherency, so
+          high-power channels weigh more, and per-channel gain, a common
+          reference, and volume conduction raise the value without coupling.
+          Published analyses re-reference to a surface Laplacian first [2]_,
+          [3]_.
+        - *Mean, not median*: pooling over time is an equal-weight mean, as in
+          Chronux ``CrossSpecMatc`` (whose ``Ctot`` is ``"time_trials_tapers"``
+          on non-overlapping windows), not the median over windows of the
+          taper-averaged matrices that Purdon et al. [2]_ and Weiner et al.
+          [3]_ decompose, which is not provided.
+        - *0 Hz and Nyquist*: the coefficients of a real signal are real
+          there (:attr:`real_valued_frequencies`), so the matrix is real and
+          its bias without coupling slightly larger than at the other
+          frequencies.
+        - No significance test or interval is returned.
+
+        **Algorithm**: when the number of estimates (the pooled
+        observations, :attr:`n_observations`) is at least ``n_signals`` and
+        ``n_signals`` is small
         (``<= 64``), the components are obtained from an eigendecomposition of
         the ``(n_signals, n_signals)`` cross-spectral matrix ``A @ Aᴴ`` rather
         than a singular value decomposition of ``A``. This is substantially
@@ -4139,7 +4330,28 @@ class Connectivity:
                Salazar-Gomez, A.F., Harrell, P.G., Tavares-Stoeckel, C.,
                Habeeb, K., and Brown, E.N. (2011). Tracking brain states under
                general anesthesia by using global coherence analysis.
-               Proceedings of the National Academy of Sciences 108, 8832-8837.
+               Proceedings of the National Academy of Sciences 108(21),
+               8832-8837. https://doi.org/10.1073/pnas.1017041108
+        .. [2] Purdon, P.L., Pierce, E.T., Mukamel, E.A., Prerau, M.J., Walsh,
+               J.L., Wong, K.F.K., Salazar-Gomez, A.F., Harrell, P.G., Sampson,
+               A.L., Cimenser, A., et al. (2013). Electroencephalogram
+               signatures of loss and recovery of consciousness from propofol.
+               Proceedings of the National Academy of Sciences 110(12),
+               E1142. https://doi.org/10.1073/pnas.1221180110
+        .. [3] Weiner, V.S., Zhou, D.W., Kahali, P., Stephen, E.P.,
+               Peterfreund, R.A., Aglio, L.S., Szabo, M.D., Eskandar, E.N.,
+               Salazar-Gomez, A.F., Sampson, A.L., Cash, S.S., Brown, E.N., and
+               Purdon, P.L. (2023). Propofol disrupts alpha dynamics in
+               functionally distinct thalamocortical networks during loss of
+               consciousness. Proceedings of the National Academy of Sciences
+               120(11), e2207831120. https://doi.org/10.1073/pnas.2207831120
+        .. [4] Marčenko, V.A., and Pastur, L.A. (1967). Distribution of
+               eigenvalues for some sets of random matrices. Mathematics of the
+               USSR-Sbornik 1(4), 457-483.
+               https://doi.org/10.1070/SM1967v001n04ABEH001994
+        .. [5] Johansson, K. (2000). Shape fluctuations and random matrices.
+               Communications in Mathematical Physics 209(2), 437-476.
+               https://doi.org/10.1007/s002200050027
 
         Examples
         --------
@@ -4153,35 +4365,94 @@ class Connectivity:
         >>> multitaper = Multitaper(signals, sampling_frequency=500)
         >>> connectivity = Connectivity.from_transform(multitaper)
         >>> global_coherence, vectors = connectivity.global_coherence(max_rank=1)
-        >>> # Unlike the pairwise measures, the frequency axis spans all FFT bins.
-        >>> global_coherence.shape  # (n_time_windows, n_fft_samples, n_components)
-        (1, 1000, 1)
-        >>> vectors.shape  # (n_time_windows, n_fft_samples, n_signals, n_components)
-        (1, 1000, 2, 1)
+        >>> global_coherence.shape  # (n_time_windows, n_frequencies, n_components)
+        (1, 501, 1)
+        >>> vectors.shape  # (n_time_windows, n_frequencies, n_signals, n_components)
+        (1, 501, 2, 1)
+        >>> float(connectivity.frequencies[20])
+        10.0
         >>> # One component captures most of the power of the coupled pair (10 Hz = bin 20).
         >>> bool(global_coherence[0, 20, 0] > 0.8)
         True
+
+        Pool time windows for one value per frequency, as Chronux
+        ``CrossSpecMatc`` does: eight channels of one minute-long recording
+        share a 10 Hz oscillation, and every non-overlapping 2 s window
+        (``time_window_step`` defaults to the duration) adds its 3 tapers.
+        ``n_observations`` should exceed ``n_signals``, ideally by a wide
+        margin. Unlike Purdon et al. [2]_, this is the mean over windows, not
+        the median; it decomposes the raw cross-spectrum, with no Laplacian
+        unless you apply one; and it returns no significance test.
+
+        >>> t = np.arange(60 * 200) / 200  # 60 s at 200 Hz
+        >>> shared = np.sin(2 * np.pi * 10 * t)[:, np.newaxis] * np.linspace(0.5, 1.5, 8)
+        >>> recording = (shared + rng.standard_normal((t.size, 8)))[:, np.newaxis, :]
+        >>> multitaper = Multitaper(
+        ...     recording,
+        ...     sampling_frequency=200,
+        ...     time_window_duration=2,
+        ...     time_halfbandwidth_product=2,
+        ...     n_tapers=3,
+        ... )
+        >>> pooled = Connectivity.from_transform(multitaper, expectation_type="time_trials_tapers")
+        >>> pooled.n_observations, pooled.n_signals  # 30 windows x 3 tapers, 8 signals
+        (90, 8)
+        >>> fractions, _ = pooled.global_coherence()
+        >>> fractions.shape  # (n_frequencies, n_components): no time axis
+        (201, 1)
+        >>> bool(fractions[20, 0] > 0.9)  # 10 Hz
+        True
         """
         self._validate_multiple_signals()
-        _, n_trials, n_tapers, _, n_signals = self._fourier_coefficients.shape
-        self._warn_single_observation_degenerate(
-            "global_coherence",
-            "the cross-spectral matrix has rank one: its first component holds "
-            "all of the power, and global coherence is forced to 1",
-            n_trials_by_tapers=n_trials * n_tapers,
-        )
+        pooled_axes = self._expectation_axes
+        if 2 not in pooled_axes:
+            others = [
+                repr(name)
+                for name, axes in EXPECTATION_AXES.items()
+                if 2 in axes and name != "trials_tapers"
+            ]
+            supported = ", ".join(["'trials_tapers' (the default)", *others])
+            msg = (
+                f"global_coherence needs the tapers averaged, but "
+                f"expectation_type={self.expectation_type!r} keeps them as an "
+                "output axis. Global coherence decomposes one cross-spectral "
+                "matrix pooled over the tapers (and whatever else is averaged); "
+                "a value for each taper has no established meaning. Use one of "
+                f"{supported}, e.g. Connectivity.from_transform(transform, "
+                "expectation_type='trials_tapers'), or set "
+                "conn.expectation_type = 'trials_tapers' on this instance."
+            )
+            raise ValueError(msg)
+        self._warn_few_global_coherence_observations()
+        if 0 in pooled_axes:
+            # Overlapping windows share data, so pooling them adds fewer
+            # effective observations than their count. Only when time is
+            # pooled: correlated trial/taper observations alone (Morlet
+            # smoothing, overlapping Welch segments) are left to the Notes, so
+            # the default use of those transforms does not start warning.
+            self._warn_correlated_observations(
+                "global_coherence",
+                "Its bias above the 1/n_signals of independent signals, and its "
+                "floor of 1/min(n_observations, n_signals), are set by the number "
+                "of independent observations pooled",
+                time_bin_remedy="use non-overlapping windows (time_window_step >= "
+                "time_window_duration; with a full taper set even 50% overlap leaves "
+                "about half the nominal count of effective observations), more "
+                "MorletWavelet decimation, or an expectation_type that does not "
+                "average over time",
+            )
 
-        # A rank-r decomposition of the (n_signals, n_trials * n_tapers)
-        # coefficient matrix has at most min(n_signals, n_trials * n_tapers)
-        # non-trivial components. Requesting more than that would crash svds or
-        # (in the dense branch) broadcast a single component into duplicates, so
-        # clamp the requested rank to what is realizable.
-        max_available_rank = min(n_signals, n_trials * n_tapers)
+        # A rank-r decomposition of the (n_signals, n_observations) coefficient
+        # matrix has at most min(n_signals, n_observations) non-trivial
+        # components. Requesting more than that would crash svds or (in the
+        # dense branch) broadcast a single component into duplicates, so clamp
+        # the requested rank to what is realizable.
+        max_available_rank = min(self.n_signals, self.n_observations)
         if max_rank > max_available_rank:
             warnings.warn(
                 f"max_rank={max_rank} exceeds the number of available "
                 f"global-coherence components "
-                f"(min(n_signals, n_trials * n_tapers) = {max_available_rank}); "
+                f"(min(n_signals, n_observations) = {max_available_rank}); "
                 f"clamping to {max_available_rank}.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
@@ -4200,6 +4471,33 @@ class Connectivity:
                 f"decomposition; lower it to reduce peak memory."
             )
             raise ValueError(msg)
+
+        # The kernel decomposes, for each index of its first axis, the columns
+        # spanned by its second and third axes. Put the kept observation axes
+        # (in time, trials, tapers order, as the other measures keep them)
+        # together on the first axis and the pooled ones on the next two. For
+        # every supported expectation_type these are views; for the default,
+        # "trials_tapers", the layout is the coefficients' own. Only the
+        # non-negative frequencies are reported, so only those are decomposed:
+        # for a real signal S(-f) = conj(S(f)), and the negative bins have the
+        # same fractions and conjugated vectors.
+        coefficient_shape = self._fourier_coefficients.shape
+        kept_axes = self._kept_observation_axes
+        kept_shape = tuple(coefficient_shape[axis] for axis in kept_axes)
+        n_nonnegative = self._nonnegative_frequency_count(coefficient_shape[3])
+        pooled_layout = (
+            int(np.prod(kept_shape)),
+            int(np.prod([coefficient_shape[axis] for axis in pooled_axes[:-1]])),
+            coefficient_shape[pooled_axes[-1]],
+        )
+
+        def pooled(values: BackendArray) -> BackendArray:
+            arranged = xp.transpose(
+                values[..., :n_nonnegative, :], (*kept_axes, *pooled_axes, 3, 4)
+            )
+            return arranged.reshape((*pooled_layout, *arranged.shape[3:]))
+
+        weights = self._observation_weights
         # NaN or Inf coefficients (unless zero weights omit them) make the
         # decomposition fail, which is reported in the user's terms; NumPy's
         # "invalid value" RuntimeWarning from the scaling before it would only
@@ -4211,11 +4509,15 @@ class Connectivity:
             else np.errstate(invalid="ignore", divide="ignore"),
         ):
             global_coherence, unnormalized_global_coherence = _global_coherence(
-                self._fourier_coefficients,
-                self._observation_weights,
+                pooled(self._fourier_coefficients),
+                None if weights is None else pooled(weights),
                 max_rank,
                 max_workspace_elements,
             )
+        global_coherence = global_coherence.reshape((*kept_shape, *global_coherence.shape[1:]))
+        unnormalized_global_coherence = unnormalized_global_coherence.reshape(
+            (*kept_shape, *unnormalized_global_coherence.shape[1:])
+        )
         self._require_finite_decomposition("global_coherence", global_coherence)
 
         if xp.any(xp.isnan(global_coherence)):
@@ -4227,6 +4529,20 @@ class Connectivity:
                 stacklevel=stacklevel_outside_package(),
             )
 
+        if not self._is_one_sided and _emit_migration_notices.get():
+            # Remove in 3.2, with DirectedOrientationWarning (issue #98).
+            warn_migration(
+                f"{_ORIENTATION_WARNING_PREFIX}Connectivity.global_coherence returns "
+                "only the non-negative frequencies, labelled by "
+                "Connectivity.frequencies (2.x returned every bin of the two-sided "
+                "transform, labelled by all_frequencies; for a real signal the "
+                "negative bins only repeated the positive ones). Label the frequency axis with "
+                "frequencies and drop indexing from the end of the axis. It also "
+                "honours expectation_type; the default is unchanged. This notice "
+                f"will be removed in 3.2; see the migration guide: {_MIGRATION_GUIDE_URL}. "
+                + _silence_hint(SidednessWarning),
+                SidednessWarning,
+            )
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
     def _phase_locking_value(

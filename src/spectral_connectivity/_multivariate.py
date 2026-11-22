@@ -665,10 +665,14 @@ def _estimate_global_coherence(
     # extreme-magnitude coefficients would underflow (e.g. ~1e-200 -> 0, a false
     # zero-power bin) or overflow (~1e200 -> inf) and return NaN.
     max_magnitude = float(xp.max(xp.abs(fourier_coefficients)))
-    if max_magnitude == 0:
-        # Genuinely zero-power bin (e.g. a dead/flat channel): global coherence
-        # is 0/0 and undefined. Return NaN rather than silently substituting 0,
-        # mirroring coherency() / imaginary_coherence(); the caller warns once.
+    if max_magnitude == 0 or not np.isfinite(max_magnitude):
+        # A genuinely zero-power bin (e.g. a dead/flat channel) has global
+        # coherence 0/0, undefined: return NaN rather than silently
+        # substituting 0, mirroring coherency() / imaginary_coherence(); the
+        # caller warns once. NaN or Inf coefficients are not decomposed either
+        # (svds would raise ARPACK's error, and LAPACK print to stderr): NaN
+        # is returned and Connectivity.global_coherence reports it in the
+        # user's terms (see its _require_finite_decomposition).
         return (
             xp.full(max_rank, xp.nan),
             xp.full((n_signals, max_rank), xp.nan, dtype=xp.complex128),
@@ -713,6 +717,12 @@ def _global_coherence(
 ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
     """Strongest global-coherence components of every time-frequency bin.
 
+    Each bin's ``(n_signals, n_estimates)`` coefficient matrix is formed from
+    the second and third axes (trials and tapers in the coefficients' own
+    layout; ``Connectivity.global_coherence`` arranges whichever observation
+    axes it pools there), one matrix per index of the first axis and per
+    frequency.
+
     Uses one batched decomposition over all bins when the decomposition
     dimension ``min(n_signals, n_estimates)`` is at most
     ``GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS``, and a per-bin decomposition
@@ -720,17 +730,18 @@ def _global_coherence(
 
     Parameters
     ----------
-    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
-    observation_weights : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, 1), or None
+    fourier_coefficients : array, shape (n_kept, n_pooled, n_pooled_last, n_frequencies, n_signals)
+        ``n_estimates = n_pooled * n_pooled_last``.
+    observation_weights : array, shape (n_kept, n_pooled, n_pooled_last, n_frequencies, 1), or None
     max_rank : int
-        Number of components, at most ``min(n_signals, n_trials * n_tapers)``.
+        Number of components, at most ``min(n_signals, n_estimates)``.
     max_workspace_elements : int
         Element budget for the batched decomposition's chunks.
 
     Returns
     -------
-    global_coherence : array, shape (n_time_windows, n_fft_samples, max_rank)
-    unnormalized_global_coherence : array, shape (n_time_windows, n_fft_samples, n_signals, max_rank)
+    global_coherence : array, shape (n_kept, n_frequencies, max_rank)
+    unnormalized_global_coherence : array, shape (n_kept, n_frequencies, n_signals, max_rank)
     """
     n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals = fourier_coefficients.shape
     # The batched decomposition works on min(n_signals, n_estimates)-square

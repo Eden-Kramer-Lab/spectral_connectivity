@@ -1250,6 +1250,11 @@ def multitaper_connectivity(
         ``delay``, ``canonical_coherence``, and blockwise spectral Granger, are
         available by name and return labeled DataArrays or Datasets with their
         component, group, candidate-delay, or frequency-reduced dimensions.
+        ``"global_coherence"`` here pools each time window's trials and tapers;
+        to pool the windows too, use
+        ``Connectivity.from_transform(transform,
+        expectation_type="time_trials_tapers").global_coherence()`` (see
+        :meth:`Connectivity.global_coherence`).
         Examples:
         "magnitude_squared_coherence", "imaginary_coherence", "phase_locking_value".
         The 2.x name ``"coherence_magnitude"`` still works through 3.x with a

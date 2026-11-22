@@ -26,7 +26,7 @@ from spectral_connectivity import (
     Connectivity,
     DirectedOrientationWarning,
     Multitaper,
-    PowerSidednessWarning,
+    SidednessWarning,
     multitaper_connectivity,
 )
 
