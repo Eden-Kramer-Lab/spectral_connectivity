@@ -4305,6 +4305,34 @@ class Connectivity:
         >>> # One component captures most of the power of the coupled pair (10 Hz = bin 20).
         >>> bool(global_coherence[0, 20, 0] > 0.8)
         True
+
+        Pool time windows for one value per frequency, as Chronux
+        ``CrossSpecMatc`` does: eight channels of one minute-long recording
+        share a 10 Hz oscillation, and every non-overlapping 2 s window
+        (``time_window_step`` defaults to the duration) adds its 3 tapers.
+        ``n_observations`` should exceed ``n_signals``, ideally by a wide
+        margin. Unlike Purdon et al. [2]_, this is the mean over windows, not
+        the median; it decomposes the raw cross-spectrum, with no Laplacian
+        unless you apply one; and it returns no significance test.
+
+        >>> t = np.arange(60 * 200) / 200  # 60 s at 200 Hz
+        >>> shared = np.sin(2 * np.pi * 10 * t)[:, np.newaxis] * np.linspace(0.5, 1.5, 8)
+        >>> recording = (shared + rng.standard_normal((t.size, 8)))[:, np.newaxis, :]
+        >>> multitaper = Multitaper(
+        ...     recording,
+        ...     sampling_frequency=200,
+        ...     time_window_duration=2,
+        ...     time_halfbandwidth_product=2,
+        ...     n_tapers=3,
+        ... )
+        >>> pooled = Connectivity.from_transform(multitaper, expectation_type="time_trials_tapers")
+        >>> pooled.n_observations, pooled.n_signals  # 30 windows x 3 tapers, 8 signals
+        (90, 8)
+        >>> fractions, _ = pooled.global_coherence()
+        >>> fractions.shape  # (n_frequencies, n_components): no time axis
+        (201, 1)
+        >>> bool(fractions[20, 0] > 0.9)  # 10 Hz
+        True
         """
         self._validate_multiple_signals()
         pooled_axes = list(self._expectation_axes)

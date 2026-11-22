@@ -462,7 +462,11 @@ The migration guide for code written against 2.x is
   `"trials"`, and `"time_trials"`, which keep the tapers as an output axis,
   raise `ValueError` naming the supported settings. 2.x ignored
   `expectation_type` and pooled each window's trials and tapers for every
-  setting.
+  setting. The wrappers keep `"trials_tapers"`; the `global_coherence`
+  docstring and the cookbook show how to pool time windows with
+  `Connectivity.from_transform(transform,
+  expectation_type="time_trials_tapers")`, and how that differs from the
+  median-over-windows estimator of Purdon et al. (2013).
 - `Connectivity.global_coherence` warns when it pools fewer observations than
   signals (`n_observations < n_signals`), not only for a single observation:
   the pooled matrix then has rank at most `n_observations`, so the value is at
