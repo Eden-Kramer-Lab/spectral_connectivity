@@ -1013,6 +1013,32 @@ def test_global_coherence_names_nonfinite_coefficients_for_every_expectation(
     assert isinstance(excinfo.value.__cause__, np.linalg.LinAlgError)
 
 
+@pytest.mark.cpu_only(reason="ARPACK and LAPACK's messages are those of the NumPy backend")
+@pytest.mark.parametrize("max_rank", [2, 6], ids=["svds", "svd"])
+def test_global_coherence_per_bin_path_names_nonfinite_coefficients(
+    max_rank, monkeypatch, capfd
+):
+    """The per-bin path (a large decomposition dimension, forced here) raised
+    ARPACK's error from svds, and LAPACK printed "ZLASCL ... illegal value"
+    to stderr from svd, on NaN or Inf coefficients. It gives the same
+    ValueError as the batched path, without decomposing them."""
+    import spectral_connectivity._multivariate as multivariate_module
+
+    monkeypatch.setattr(multivariate_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0)
+    rng = np.random.default_rng(38)
+    coefficients = rng.standard_normal((1, 6, 3, 8, 6)) + 1j * rng.standard_normal(
+        (1, 6, 3, 8, 6)
+    )
+    coefficients[0, 1, 0, 2, 0] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(coefficients)
+    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+        connectivity.global_coherence(max_rank=max_rank)
+    captured = capfd.readouterr()
+    assert "ZLASCL" not in captured.out + captured.err
+
+
 def _nan_instead_of_raising(kernel):
     """``kernel`` as a backend that returns NaN rather than raising on NaN or
     Inf input (CuPy's decompositions): run on finite stand-ins, then NaN."""
