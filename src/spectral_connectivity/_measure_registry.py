@@ -621,7 +621,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         units="1",
         value_range=(0.0, 1.0),
         interpretation="Fraction of the total cross-spectral power in each component; a large "
-        "leading component indicates one dominant coherent network.",
+        "leading component indicates one dominant coherent network. The leading value is at "
+        "least 1/min(n_observations, n_signals) for any data and biased above 1/n_signals "
+        "unless observations far outnumber signals, so compare values only at matched "
+        "numbers of observations and signals.",
         diagonal_policy="not_applicable",
     ),
     "group_delay": _MeasureSpec(
