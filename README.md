@@ -37,6 +37,9 @@
 >   2.x values between 0 Hz and Nyquist; `power(one_sided=False)` returns the
 >   2.x values.
 >
+> `Connectivity.global_coherence` also returns the non-negative frequencies
+> only, and emits the same `SidednessWarning` notice.
+>
 > Until 3.2 some of these calls emit a `DirectedOrientationWarning` or a
 > `SidednessWarning` as a reminder, once per Python session (for each
 > measure); `warnings.simplefilter("always", ...)` with the warning's class
