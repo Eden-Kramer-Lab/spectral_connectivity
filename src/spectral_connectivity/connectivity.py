@@ -1842,8 +1842,9 @@ class Connectivity:
         least their mean, so global coherence is at least ``1 / min(n, p)``
         whatever the data (exactly 1 for one observation). Independent signals
         of equal power have the value ``1 / p``, which ``n < p`` cannot give.
-        With ``n >= p`` the estimate is still biased above ``1 / p`` (by about
-        3x at ``n = p``, under the Marchenko-Pastur law) but no longer bounded
+        With ``n >= p`` the estimate is still biased above ``1 / p`` (it tends
+        to ``(1 + sqrt(p / n))**2 / p``, 4x at ``n = p``; see the Notes of
+        :meth:`global_coherence`) but no longer bounded
         away from it, so ``n < p`` is where the value stops depending on the
         data alone and the warning starts.
         """
@@ -4225,8 +4226,16 @@ class Connectivity:
           ``n < p``.
         - *Bias without coupling*: independent signals of equal power have the
           value ``1 / p``, but the estimate is well above it unless
-          ``n >> p`` (about 3 times at ``n = p`` and 1.4 times at ``n = 20 p``,
-          by Monte Carlo). Compare values only at matched ``n`` and ``p``
+          ``n >> p``. As ``n`` and ``p`` grow with ``p / n`` fixed, the largest
+          eigenvalue of their cross-spectral matrix tends to
+          ``(1 + sqrt(p / n))**2`` times the common power [4]_, [5]_ and the
+          trace to ``p`` times it, so the estimate tends to
+          ``(1 + sqrt(p / n))**2 / p``: 4 times the true value at ``n = p``
+          and about 1.5 times at ``n = 20 p``. At finite sizes it is
+          somewhat lower (approximately, by a fixed-seed Monte Carlo of
+          complex Gaussian coefficients: 2.95 times at ``p = n = 8``, 3.57
+          times at ``p = n = 32``, and 1.37 to 1.45 times at ``n = 20 p``).
+          Compare values only at matched ``n`` and ``p``
           (trial counts, rejected epochs, and removed channels all change
           them), or against a null simulated at the same ``n`` and ``p``.
         - *Effective observations*: correlated observations (overlapping
@@ -4252,8 +4261,8 @@ class Connectivity:
           [3]_ decompose, which is not provided.
         - *0 Hz and Nyquist*: the coefficients of a real signal are real
           there (:attr:`real_valued_frequencies`), so the matrix is real and
-          its bias without coupling slightly larger (a few percent, by Monte
-          Carlo) than at the other frequencies.
+          its bias without coupling slightly larger than at the other
+          frequencies.
         - No significance test or interval is returned.
 
         **Algorithm**: when the number of estimates (the pooled
@@ -4293,6 +4302,13 @@ class Connectivity:
                functionally distinct thalamocortical networks during loss of
                consciousness. Proceedings of the National Academy of Sciences
                120(11), e2207831120. https://doi.org/10.1073/pnas.2207831120
+        .. [4] Marčenko, V.A., and Pastur, L.A. (1967). Distribution of
+               eigenvalues for some sets of random matrices. Mathematics of the
+               USSR-Sbornik 1(4), 457-483.
+               https://doi.org/10.1070/SM1967v001n04ABEH001994
+        .. [5] Johansson, K. (2000). Shape fluctuations and random matrices.
+               Communications in Mathematical Physics 209(2), 437-476.
+               https://doi.org/10.1007/s002200050027
 
         Examples
         --------
