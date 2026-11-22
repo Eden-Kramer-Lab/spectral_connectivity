@@ -16,7 +16,7 @@ measure's range, units, diagonal, and interpretation.
 | Is the coupling direct, or relayed through other recorded signals? | **`partial_coherence`**; for directed influence, `conditional_spectral_granger_prediction` | They remove only what passes through the signals you recorded. |
 | Which signal leads? | From the phase: **`phase_slope_index`**, `directed_phase_lag_index`, `group_delay`, `delay`. Directed influence: `pairwise_spectral_granger_prediction`, `conditional_spectral_granger_prediction`, `directed_transfer_function`, `partial_directed_coherence`, and the rest of their families | The Granger and transfer-function measures need long windows and a two-sided transform (not Morlet wavelets). Check them against `time_reversed_spectral_granger_prediction`: a direction that does not reverse under time reversal suggests instantaneous mixing. `phase_slope_index` is unnormalized, so judge it against a null distribution, and check `group_delay` against its `group_delay_r_value`. |
 | How are two groups of signals (two brain areas) coupled? | **`canonical_coherence`** and `canonical_coherency` (include zero-lag coupling), `maximized_imaginary_coherency` and `multivariate_interaction_measure` (these two ignore zero-lag coupling), `blockwise_spectral_granger_prediction` (directed) | Pass `group_labels`, one label per signal. A group pair with more signals than observations has a canonical coherence of 1 for any data (it warns). |
-| Is one coherent network shared by all the signals? | **`global_coherence`** | Rescaling one signal changes the result: put the signals on a common scale first. |
+| Is one coherent network shared by all the signals? | **`global_coherence`** | Rescaling one signal changes the result: put the signals on a common scale first. Values are at least `1 / min(n_observations, n_signals)` and biased above `1 / n_signals` unless observations far outnumber signals (it warns when there are fewer); compare only at matched numbers of observations and signals. |
 
 For how to read direction and sign, see the
 [direction convention](CONNECTIVITY_METRIC_RANGES.md#direction-convention).
@@ -75,6 +75,12 @@ True
 
 ```
 
+- **Global coherence depends on the counts.** With `n` observations
+  (trials x tapers) and `p` signals, `global_coherence` is at least
+  `1 / min(n, p)` for any data, and unrelated signals of equal power give
+  about `(1 + sqrt(p / n))**2 / p` rather than `1 / p` when both are large.
+  Two conditions with different trial counts or channel sets are not
+  comparable directly.
 - **Coherence is squared.** `magnitude_squared_coherence` is `|coherency|^2`;
   take `abs(coherency)` for the unsquared magnitude. A measure variable's
   `quantity` and `formula` attrs say which form a coherency-family value has.
