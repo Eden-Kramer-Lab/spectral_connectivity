@@ -275,10 +275,25 @@ def test_scalar_blockwise_and_conditional_granger_match_pairwise(var_oracle):
         pairwise = connectivity.pairwise_spectral_granger_prediction()
         blockwise, labels = connectivity.blockwise_spectral_granger_prediction([0, 1])
         conditional = connectivity.conditional_spectral_granger_prediction()
+        reversed_pairwise = connectivity.time_reversed_spectral_granger_prediction()
+        reversed_blockwise, _ = (
+            connectivity.time_reversed_blockwise_spectral_granger_prediction([0, 1])
+        )
+        reversed_conditional = (
+            connectivity.time_reversed_conditional_spectral_granger_prediction()
+        )
 
     np.testing.assert_array_equal(labels, [0, 1])
     np.testing.assert_allclose(blockwise, pairwise, atol=1e-6, equal_nan=True)
     np.testing.assert_allclose(conditional, pairwise, atol=1e-6, equal_nan=True)
+    # So do their time-reversed counterparts, which differ from the forward ones.
+    assert np.nanmax(np.abs(reversed_pairwise - pairwise)) > 0.1
+    np.testing.assert_allclose(
+        reversed_blockwise, reversed_pairwise, atol=1e-6, equal_nan=True
+    )
+    np.testing.assert_allclose(
+        reversed_conditional, reversed_pairwise, atol=1e-6, equal_nan=True
+    )
 
 
 # Two-channel blocks {0, 1} -> {2, 3}: block {2, 3} never feeds back into
@@ -849,6 +864,68 @@ def test_time_reversed_granger_matches_the_reversed_var(
     assert np.abs(oracle - exchanged)[:, off_diagonal].max() > 0.05
     np.testing.assert_allclose(
         time_reversed[:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
+
+
+@_CHAIN_AND_DENSE_MODELS
+@_BOTH_FACTORIZATION_PATHS
+def test_time_reversed_conditional_and_blockwise_granger_match_the_reversed_var(
+    coefficients, noise_covariance, conjugate_symmetric
+):
+    """Time-reversed conditional and blockwise Granger of the forward spectrum
+    equal the state-space conditional and block Granger of the VAR read
+    backwards in time, not the forward results with the directions exchanged."""
+    n_fft = 1024
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    reversed_coefficients, reversed_noise = _time_reversed_var(coefficients, noise_covariance)
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
+    group_labels = [0, 1, 1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        conditional = connectivity.time_reversed_conditional_spectral_granger_prediction()[0]
+        blockwise, labels = connectivity.time_reversed_blockwise_spectral_granger_prediction(
+            group_labels
+        )
+    off_diagonal = ~np.eye(3, dtype=bool)
+    assert np.isfinite(conditional[:, off_diagonal]).all()
+    n_pairs_with_influence = 0
+    for target in range(3):
+        for source in range(3):
+            if target == source:
+                continue
+            oracle = _state_space_conditional_granger(
+                reversed_coefficients, reversed_noise, n_fft, target, source
+            )
+            forward = _state_space_conditional_granger(
+                coefficients, noise_covariance, n_fft, source, target
+            )
+            np.testing.assert_allclose(
+                conditional[:, source, target], oracle, atol=1e-9, rtol=0
+            )
+            # Premise, where the pair carries influence either way: reversal
+            # does more than exchange the directions.
+            if max(oracle.max(), forward.max()) > 0.05:
+                n_pairs_with_influence += 1
+                assert np.abs(oracle - forward).max() > 1e-3
+    assert n_pairs_with_influence >= 2
+
+    blocks = _blocks(group_labels, labels)
+    block_oracle = _block_granger_from_state_space(
+        reversed_coefficients, reversed_noise, n_fft, blocks
+    )
+    block_forward = _block_granger_from_state_space(
+        coefficients, noise_covariance, n_fft, blocks
+    )
+    block_off_diagonal = ~np.eye(2, dtype=bool)
+    assert (
+        np.abs(block_oracle - block_forward.swapaxes(-1, -2))[:, block_off_diagonal].max()
+        > 0.05
+    )
+    np.testing.assert_allclose(
+        blockwise[0][:, block_off_diagonal],
+        block_oracle[:, block_off_diagonal],
+        atol=1e-9,
+        rtol=0,
     )
 
 

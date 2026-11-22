@@ -38,6 +38,7 @@ from spectral_connectivity._granger import (
     _estimate_subset_spectral_granger_prediction,
     _factorize_spectrum,
     _var_model_from_factor,
+    _var_model_from_spectrum,
     _warn_nan_granger_pairs,
 )
 from spectral_connectivity._multivariate import (
@@ -5674,8 +5675,22 @@ class Connectivity:
         >>> bool(conditional[0, 20, 1, 2] > 0.5)
         True
         """
-        self._require_two_sided_spectrum("conditional_spectral_granger_prediction")
+        return self._conditional_spectral_granger(
+            "conditional_spectral_granger_prediction", time_reversed=False
+        )
+
+    def _conditional_spectral_granger(
+        self, measure: str, *, time_reversed: bool
+    ) -> NDArray[np.floating]:
+        """Conditional spectral Granger, optionally of the time-reversed process.
+
+        Time reversal of a real stationary process transposes its
+        cross-spectral matrix.
+        """
+        self._require_two_sided_spectrum(measure)
         spectrum = self._expectation_cross_spectral_matrix()
+        if time_reversed:
+            spectrum = xp.swapaxes(spectrum, -1, -2)
         tolerance = self._minimum_phase_tolerance
         max_iterations = self._minimum_phase_max_iterations
         if self.n_signals == 2:
@@ -5687,18 +5702,102 @@ class Connectivity:
                 minimum_phase_max_iterations=max_iterations,
             )
         else:
-            # The full model is the instance's cached factorization (the same
-            # CSM, tolerance and iteration cap), shared with the other directed
-            # measures.
+            # The forward full model is the instance's cached factorization
+            # (the same CSM, tolerance and iteration cap), shared with the
+            # other directed measures, whose failure warning it keeps. The
+            # reversed one is factored here for this measure alone, so its
+            # failures are reported only by the warning naming the NaN pairs.
+            transfer_function, noise_covariance = (
+                _var_model_from_spectrum(
+                    spectrum,
+                    minimum_phase_tolerance=tolerance,
+                    minimum_phase_max_iterations=max_iterations,
+                )
+                if time_reversed
+                else (self._transfer_function, self._noise_covariance)
+            )
             result = _estimate_all_conditional_spectral_granger(
                 spectrum,
-                self._transfer_function,
-                self._noise_covariance,
+                transfer_function,
+                noise_covariance,
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
-        _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
+        _warn_nan_granger_pairs(result, measure)
         return result
+
+    @_source_first
+    @_asnumpy
+    @_factorization_explained_by_nonfinite_input
+    def time_reversed_conditional_spectral_granger_prediction(self) -> NDArray[np.floating]:
+        """Return conditional spectral Granger after time reversal.
+
+        :meth:`conditional_spectral_granger_prediction` of the time-reversed
+        data. For a real stationary process, time reversal transposes the
+        cross-spectral matrix at every frequency. Genuine directed influence
+        reverses under time reversal; contrasting this result with
+        :meth:`conditional_spectral_granger_prediction` helps identify
+        apparent directionality caused by instantaneous mixing, as
+        :meth:`time_reversed_spectral_granger_prediction` does for pairwise
+        Granger.
+
+        Returns
+        -------
+        time_reversed_conditional_granger : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Output ``[..., i, j]`` is the influence of signal ``i`` on signal
+            ``j`` (``i -> j``) in the time-reversed data, conditional on every
+            signal other than ``i`` and ``j``. The diagonal is NaN.
+
+        Notes
+        -----
+        **Non-negativity and range**: as for
+        :meth:`conditional_spectral_granger_prediction`, ``[0, ∞)``; roundoff
+        negatives are clipped to ``0`` and materially negative bins are NaN.
+
+        **Cost**: ``n_signals + 1`` minimum-phase factorizations, as for the
+        forward measure, except that the full-system one is not cached or
+        shared with the other directed measures: every call factors the
+        reversed full system again.
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
+        References
+        ----------
+        .. [1] Winkler, I., Panknin, D., Bartz, D., Müller, K.-R., and Haufe,
+               S. (2016). Validity of time reversal for testing Granger
+               causality. IEEE Transactions on Signal Processing 64, 2746-2760.
+        .. [2] Chen, Y., Bressler, S.L., and Ding, M. (2006). Frequency
+               decomposition of conditional Granger causality and application
+               to multivariate neural field potential data. Journal of
+               Neuroscience Methods 150, 228-237.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> # Chain 0 -> 1 -> 2: each signal is the previous one delayed 3 samples, plus noise.
+        >>> source = rng.standard_normal((1006, 20))
+        >>> middle = source[:-3] + 0.5 * rng.standard_normal((1003, 20))
+        >>> target = middle[:-3] + 0.5 * rng.standard_normal((1000, 20))
+        >>> signals = np.stack([source[6:], middle[3:], target], axis=-1)  # (time, trials, 3)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> reversed_granger = connectivity.time_reversed_conditional_spectral_granger_prediction()
+        >>> reversed_granger.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 3, 3)
+        >>> # The direct link 1 -> 2 flips under time reversal: 2 -> 1 ([..., 2, 1]) dominates.
+        >>> bool(reversed_granger[0, 20, 2, 1] > 10 * reversed_granger[0, 20, 1, 2])
+        True
+        """
+        return self._conditional_spectral_granger(
+            "time_reversed_conditional_spectral_granger_prediction", time_reversed=True
+        )
 
     @_factorization_explained_by_nonfinite_input
     def blockwise_spectral_granger_prediction(
@@ -5752,22 +5851,103 @@ class Connectivity:
         >>> bool(granger[0, 20, 0, 1] > 10 * granger[0, 20, 1, 0])
         True
         """
-        self._require_two_sided_spectrum("blockwise_spectral_granger_prediction")
-        labels, indices, _ = self._validated_group_indices(group_labels)
+        return self._blockwise_spectral_granger(
+            "blockwise_spectral_granger_prediction", group_labels, time_reversed=False
+        )
 
+    def _blockwise_spectral_granger(
+        self, measure: str, group_labels: NDArray[np.integer], *, time_reversed: bool
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Blockwise spectral Granger, optionally of the time-reversed process.
+
+        Time reversal of a real stationary process transposes its
+        cross-spectral matrix.
+        """
+        self._require_two_sided_spectrum(measure)
+        labels, indices, _ = self._validated_group_indices(group_labels)
+        spectrum = self._expectation_cross_spectral_matrix()
+        if time_reversed:
+            spectrum = xp.swapaxes(spectrum, -1, -2)
         result = _estimate_blockwise_spectral_granger(
-            self._expectation_cross_spectral_matrix(),
+            spectrum,
             indices,
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
-        _warn_nan_granger_pairs(
-            result,
-            "blockwise_spectral_granger_prediction",
-            names=to_numpy(labels),
-        )
+        _warn_nan_granger_pairs(result, measure, names=to_numpy(labels))
         # Swap on the host, like _source_first: [..., target, source] -> source first.
         return np.swapaxes(to_numpy(result), -1, -2), to_numpy(labels)
+
+    @_factorization_explained_by_nonfinite_input
+    def time_reversed_blockwise_spectral_granger_prediction(
+        self, group_labels: NDArray[np.integer]
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Return blockwise spectral Granger after time reversal.
+
+        :meth:`blockwise_spectral_granger_prediction` of the time-reversed
+        data. For a real stationary process, time reversal transposes the
+        cross-spectral matrix at every frequency. Genuine directed influence
+        between groups reverses under time reversal; contrasting this result
+        with :meth:`blockwise_spectral_granger_prediction` helps identify
+        apparent directionality caused by instantaneous mixing, as
+        :meth:`time_reversed_spectral_granger_prediction` does for single
+        signals.
+
+        Parameters
+        ----------
+        group_labels : array-like, shape (n_signals,)
+            Label assigning each signal to one non-overlapping group.
+
+        Returns
+        -------
+        time_reversed_blockwise_granger : array
+            Shape ``(..., n_nonnegative_frequencies, n_groups, n_groups)``.
+            Output ``[..., i, j]`` is the influence of group ``i`` on group ``j``
+            (``i -> j``) in the time-reversed data, with groups ordered as in
+            ``labels``. The diagonal is NaN.
+        labels : array, shape (n_groups,)
+            Sorted unique group labels.
+
+        Notes
+        -----
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
+        References
+        ----------
+        .. [1] Winkler, I., Panknin, D., Bartz, D., Müller, K.-R., and Haufe,
+               S. (2016). Validity of time reversal for testing Granger
+               causality. IEEE Transactions on Signal Processing 64, 2746-2760.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Group "a": two noisy copies of signal 0; "b": two of its 6 ms-delayed copy.
+        >>> pair = np.stack([leader[3:], leader[:-3]], axis=-1)
+        >>> signals = np.repeat(pair, 2, axis=-1)  # (time, trials, 4 signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> reversed_granger, labels = (
+        ...     connectivity.time_reversed_blockwise_spectral_granger_prediction(["a", "a", "b", "b"])
+        ... )
+        >>> reversed_granger.shape  # (n_time_windows, n_frequencies, n_groups, n_groups)
+        (1, 501, 2, 2)
+        >>> # The lead a -> b flips under time reversal: b -> a ([..., 1, 0]) dominates.
+        >>> bool(reversed_granger[0, 20, 1, 0] > 10 * reversed_granger[0, 20, 0, 1])
+        True
+        """
+        return self._blockwise_spectral_granger(
+            "time_reversed_blockwise_spectral_granger_prediction",
+            group_labels,
+            time_reversed=True,
+        )
 
     @_orientation_changed
     @_ignore_nan_propagation_warnings

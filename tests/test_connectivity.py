@@ -2821,6 +2821,12 @@ _GRANGER_MEASURES = {
     "blockwise_spectral_granger_prediction": (
         lambda c: c.blockwise_spectral_granger_prediction(["a", "b", "c"])[0]
     ),
+    "time_reversed_conditional_spectral_granger_prediction": (
+        lambda c: c.time_reversed_conditional_spectral_granger_prediction()
+    ),
+    "time_reversed_blockwise_spectral_granger_prediction": (
+        lambda c: c.time_reversed_blockwise_spectral_granger_prediction(["a", "b", "c"])[0]
+    ),
 }
 
 
@@ -2833,6 +2839,9 @@ _GPU_DEAD_CHANNEL_NAMED_PAIRS = {
     "time_reversed_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
     "subset_pairwise_spectral_granger_prediction": "0 -> 2, 2 -> 0",
     "blockwise_spectral_granger_prediction": "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'",
+    "time_reversed_blockwise_spectral_granger_prediction": (
+        "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'"
+    ),
 }
 
 
@@ -2849,12 +2858,27 @@ _GPU_DEAD_CHANNEL_NAMED_PAIRS = {
             "duplicated",
             "0 -> 1, 0 -> 2, 1 -> 0, 1 -> 2, 2 -> 0, 2 -> 1",
         ),
+        (
+            "time_reversed_conditional_spectral_granger_prediction",
+            "duplicated",
+            "0 -> 1, 0 -> 2, 1 -> 0, 1 -> 2, 2 -> 0, 2 -> 1",
+        ),
         ("blockwise_spectral_granger_prediction", "duplicated", "'a' -> 'c', 'c' -> 'a'"),
+        (
+            "time_reversed_blockwise_spectral_granger_prediction",
+            "duplicated",
+            "'a' -> 'c', 'c' -> 'a'",
+        ),
         # A dead channel has no power to explain, so influences on it are NaN.
         ("pairwise_spectral_granger_prediction", "dead", "0 -> 2, 1 -> 2"),
         ("time_reversed_spectral_granger_prediction", "dead", "0 -> 2, 1 -> 2"),
         ("subset_pairwise_spectral_granger_prediction", "dead", "0 -> 2"),
         ("blockwise_spectral_granger_prediction", "dead", "'a' -> 'c', 'b' -> 'c'"),
+        (
+            "time_reversed_blockwise_spectral_granger_prediction",
+            "dead",
+            "'a' -> 'c', 'b' -> 'c'",
+        ),
     ],
 )
 def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
@@ -2885,7 +2909,8 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     # measure's own factorizations, and no other warning reports the same NaN
     # bins. Only conditional Granger's full model is the factorization cached
     # and shared with DTF, PDC and the other directed measures; its warning is
-    # kept because it is the only one those measures get.
+    # kept because it is the only one those measures get. The time-reversed
+    # full model is used by its measure alone.
     n_generic = sum("Wilson minimum-phase" in message for message in messages)
     shares_full_model = measure == "conditional_spectral_granger_prediction"
     assert n_generic == int(shares_full_model), messages
