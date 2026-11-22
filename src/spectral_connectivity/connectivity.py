@@ -498,6 +498,13 @@ _ORIENTATION_CHANGED_MEASURES = frozenset(
 # sidedness), and a jackknife warns once, for its full estimate.
 _emit_migration_notices: ContextVar[bool] = ContextVar("_emit_migration_notices", default=True)
 
+# True while a labeled wrapper runs a measure on the Connectivity it built,
+# whose expectation_type the caller could not choose ("trials_tapers"), so
+# advice to change expectation_type is replaced by the call that does.
+_expectation_fixed_by_wrapper: ContextVar[bool] = ContextVar(
+    "_expectation_fixed_by_wrapper", default=False
+)
+
 
 def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
     """Warn that a measure's array is source first, unlike in 2.x.
@@ -1854,10 +1861,9 @@ class Connectivity:
         averaged = self.expectation_type.split("_")
         # Offer only what raises the count: the axes it is taken over.
         remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
-        # False while a labelled wrapper runs the measure (global_coherence has
-        # no jackknife): its expectation_type is fixed at "trials_tapers", so
-        # name the call that pools the windows instead, when there are any.
-        if not _emit_migration_notices.get():
+        # A labelled wrapper fixed expectation_type at "trials_tapers": name the
+        # call that pools the windows instead, when there are any.
+        if _expectation_fixed_by_wrapper.get():
             if self._fourier_coefficients.shape[0] > 1:
                 remedies.append(
                     "Connectivity.from_transform(transform, "

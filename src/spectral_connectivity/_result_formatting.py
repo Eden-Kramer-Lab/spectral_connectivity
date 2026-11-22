@@ -19,6 +19,7 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     MultivariateConnectivityResult,
     _emit_migration_notices,
+    _expectation_fixed_by_wrapper,
     _FrequencySelection,
 )
 from spectral_connectivity.utils import (
@@ -171,9 +172,11 @@ def _connectivity_result_to_xarray(
     # The labeled result's source/target coordinates state its orientation, so
     # the wrapper warns about those labels instead of the array (see wrapper.py).
     token = _emit_migration_notices.set(False)
+    fixed_token = _expectation_fixed_by_wrapper.set(True)
     try:
         numerical_result = measure(**kwargs)
     finally:
+        _expectation_fixed_by_wrapper.reset(fixed_token)
         _emit_migration_notices.reset(token)
 
     pairwise_shape = (
