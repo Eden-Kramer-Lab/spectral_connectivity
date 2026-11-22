@@ -75,12 +75,13 @@ True
 
 ```
 
-- **Global coherence depends on the counts.** With `n` observations
-  (trials x tapers) and `p` signals, `global_coherence` is at least
-  `1 / min(n, p)` for any data, and unrelated signals of equal power give
-  about `(1 + sqrt(p / n))**2 / p` rather than `1 / p` when both are large.
-  Two conditions with different trial counts or channel sets are not
-  comparable directly.
+- **Global coherence depends on the counts.** With `n` pooled observations
+  (`n_observations`: trials x tapers by default) and `p` signals, unrelated
+  signals of equal power give about `(1 + sqrt(p / n))**2 / p` rather than
+  `1 / p` when both are large, on top of the `1 / min(n, p)` floor in the
+  table above. Two conditions with different trial counts or channel sets are
+  not comparable directly; the `global_coherence` docstring's Notes give the
+  rest.
 - **Coherence is squared.** `magnitude_squared_coherence` is `|coherency|^2`;
   take `abs(coherency)` for the unsquared magnitude. A measure variable's
   `quantity` and `formula` attrs say which form a coherency-family value has.

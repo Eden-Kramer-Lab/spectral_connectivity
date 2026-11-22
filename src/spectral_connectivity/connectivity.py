@@ -1038,8 +1038,7 @@ class Connectivity:
       ``fractions, vectors = conn.global_coherence()``, whose frequency axis,
       like every other measure's, holds the non-negative frequencies (2.x
       returned every FFT bin). It needs an ``expectation_type`` that averages
-      the tapers and raises for ``"time"``, ``"trials"``, and
-      ``"time_trials"``.
+      the tapers (see its Raises).
 
     ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
     :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
@@ -1847,17 +1846,13 @@ class Connectivity:
     def _warn_few_global_coherence_observations(self) -> None:
         """Warn when global coherence pools fewer observations than signals.
 
-        The pooled cross-spectral matrix has rank at most ``n = n_observations``,
-        and the largest of its at most ``min(n, p)`` nonzero eigenvalues is at
-        least their mean, so global coherence is at least ``1 / min(n, p)``
-        whatever the data (exactly 1 for one observation). Independent signals
-        of equal power have the value ``1 / p``, which ``n < p`` cannot give.
-        With ``n >= p`` the estimate is still biased above ``1 / p`` (it tends
-        to ``(1 + sqrt(p / n))**2 / p``, 4x at ``n = p``; see the Notes of
-        :meth:`global_coherence`) but no longer bounded
-        away from it, so ``n < p`` is where the value stops depending on the
-        data alone and the warning starts. ``n`` is the raw count: it does not
-        discount observations that zero ``observation_weights`` omit.
+        With ``n = n_observations`` pooled observations and ``p`` signals the
+        value is at least ``1 / min(n, p)`` whatever the data, so for ``n < p``
+        it cannot reach the ``1 / p`` of independent signals. For ``n >= p`` it
+        is still biased above ``1 / p`` but no longer bounded away from it, so
+        ``n < p`` is where the warning starts. The floor, the bias, and the raw
+        count ``n`` (zero-weight observations included) are described in the
+        Notes of :meth:`global_coherence`.
         """
         n_observations, n_signals = self.n_observations, self.n_signals
         if n_observations >= n_signals:
@@ -4190,9 +4185,10 @@ class Connectivity:
             ``1 / n_observations`` whatever the data (1 for a single
             observation), above the ``1 / n_signals`` of independent signals.
             The count is :attr:`n_observations`, which includes observations
-            that zero ``observation_weights`` omit. Also if the expectation pools time windows the transform reports
-            as correlated (``time_bins_are_independent`` is ``False``, e.g.
-            windows overlapping by more than half), which add fewer effective
+            that zero ``observation_weights`` omit. Also if the expectation
+            pools time windows the transform reports as correlated
+            (``time_bins_are_independent`` is ``False``, e.g. windows
+            overlapping by more than half), which add fewer effective
             observations than their count.
 
         Notes
