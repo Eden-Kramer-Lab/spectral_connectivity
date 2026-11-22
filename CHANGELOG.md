@@ -68,7 +68,9 @@ The migration guide for code written against 2.x is
   `HarmonicFTestResult` with the F statistic, its p-value under
   F(2, 2K - 2), and the fitted line's amplitude and phase (at each window's
   center). Frequencies within the tapers' half-bandwidth of 0 Hz and Nyquist,
-  where the test does not hold, are NaN.
+  where the test does not hold, are NaN. By default each window is zero-padded
+  to four times its length, so a line between the window's frequency bins is
+  still found; `n_fft_samples=` sets another grid.
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided

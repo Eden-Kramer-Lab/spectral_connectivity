@@ -598,11 +598,18 @@ not.
 ... )
 >>> lines = multitaper.harmonic_f_test()
 >>> lines.p_value.shape  # (n_time_windows, n_trials, n_frequencies, n_signals)
-(4, 1, 501, 2)
+(4, 1, 2001, 2)
 >>> detected = lines.p_value < 1 / multitaper.n_time_samples_per_window
 >>> # The fraction of windows (and trials) in which each frequency is detected
 >>> fraction = detected.mean(axis=(0, 1))  # (n_frequencies, n_signals)
 >>> [lines.frequencies[fraction[:, signal] > 0.5].tolist() for signal in range(2)]
+[[59.75, 60.0, 60.25, 119.75, 120.0, 120.25], []]
+>>> # The bins next to a line, within the half-bandwidth, are significant too:
+>>> # take each line at the local maximum of its typical F statistic
+>>> typical_f = np.median(lines.f_statistic, axis=(0, 1))
+>>> is_peak = np.zeros(typical_f.shape, dtype=bool)
+>>> is_peak[1:-1] = (typical_f[1:-1] > typical_f[:-2]) & (typical_f[1:-1] >= typical_f[2:])
+>>> [lines.frequencies[(fraction[:, s] > 0.5) & is_peak[:, s]].tolist() for s in range(2)]
 [[60.0, 120.0], []]
 >>> at_lines = np.isin(lines.frequencies, [60.0, 120.0])
 >>> np.round(np.median(lines.amplitude[:, 0, at_lines, 0], axis=0), 1).tolist()
@@ -610,14 +617,13 @@ not.
 
 ```
 
-These lines lie on the FFT grid. A line between bins puts part of its power in
-the odd tapers, which the test counts as noise: half a bin off, it can be
-missed and its amplitude read a third too low. Zero-pad
-(`n_fft_samples=4 * n_time_samples_per_window` in the `Multitaper`) and take
-each line at the local maximum of the F statistic, since the bins around it
-within the half-bandwidth (`lines.half_bandwidth`) are significant too.
-Frequencies within that half-bandwidth of 0 Hz and Nyquist are NaN: there a
-line overlaps its mirror image. A narrow rhythm in the background (narrower
+The test pads each window to four times its length (`lines.frequencies` is
+spaced 0.25 Hz here, against the window's 1 Hz bins): a line between the
+window's bins puts part of its power in the odd tapers, which the test counts
+as noise, and half a bin off it would be missed with its amplitude read a third
+too low. `harmonic_f_test(n_fft_samples=...)` sets another grid.
+Frequencies within the half-bandwidth (`lines.half_bandwidth`) of 0 Hz and
+Nyquist are NaN: there a line overlaps its mirror image. A narrow rhythm in the background (narrower
 than about twice the half-bandwidth) also tests as line-like, more so the
 larger `time_halfbandwidth_product`. For a false discovery rate over the
 frequencies of each window, trial, and signal, pass the p-values to

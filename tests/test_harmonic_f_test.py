@@ -5,6 +5,7 @@ import dataclasses
 import numpy as np
 import pytest
 import scipy.stats
+from scipy.fft import next_fast_len
 
 from spectral_connectivity import HarmonicFTestResult, Multitaper
 from tests._backend_helpers import to_host
@@ -90,7 +91,7 @@ def test_matches_a_least_squares_fit_of_the_taper_sums():
         time_window_duration=0.3,
         time_halfbandwidth_product=3,
     )
-    result = multitaper.harmonic_f_test()
+    result = multitaper.harmonic_f_test(n_fft_samples=multitaper.n_fft_samples)
     coefficients = to_host(multitaper.fft())
     taper_sums = to_host(multitaper.tapers).sum(axis=0) / _SAMPLING_FREQUENCY
     n_tapers = taper_sums.size
@@ -140,12 +141,12 @@ def test_result_describes_its_axes_and_null_distribution():
     )
     result = multitaper.harmonic_f_test()
     assert isinstance(result, HarmonicFTestResult)
-    assert result.f_statistic.shape == (2, 2, multitaper.n_fft_samples // 2 + 1, 3)
+    n_fft = next_fast_len(4 * multitaper.n_time_samples_per_window)
+    assert result.f_statistic.shape == (2, 2, n_fft // 2 + 1, 3)
     assert result.degrees_of_freedom == (2, 2 * multitaper.n_tapers - 2)
     np.testing.assert_array_equal(result.time, to_host(multitaper.time))
     np.testing.assert_array_equal(
-        result.frequencies,
-        np.fft.rfftfreq(multitaper.n_fft_samples, 1 / _SAMPLING_FREQUENCY),
+        result.frequencies, np.fft.rfftfreq(n_fft, 1 / _SAMPLING_FREQUENCY)
     )
     np.testing.assert_array_equal(
         result.p_value, scipy.stats.f.sf(result.f_statistic, *result.degrees_of_freedom)
@@ -182,10 +183,10 @@ def test_degrees_of_freedom_follow_the_tapers_used(settings, n_tapers):
     assert abs(fraction - 0.05) < 5 * np.sqrt(0.05 * 0.95 / p_values.size), fraction
 
 
-def test_zero_padding_recovers_a_line_between_bins():
-    """A line half a bin off the default grid loses part of its fit to the odd
-    tapers (amplitude about a third low); on a grid four times finer the
-    nearest bin recovers it."""
+def test_default_padding_recovers_a_line_between_the_windows_bins():
+    """A line half a bin off the window's own grid loses part of its fit to
+    the odd tapers (amplitude about a third low); the default grid, four times
+    finer, recovers it at the nearest bin."""
     n_time, n_trials, amplitude, frequency = 1000, 50, 1.0, 60.5
     time = np.arange(n_time) / _SAMPLING_FREQUENCY
     rng = np.random.default_rng(307)
@@ -193,16 +194,14 @@ def test_zero_padding_recovers_a_line_between_bins():
     signals += amplitude * np.cos(2 * np.pi * frequency * time)[:, np.newaxis, np.newaxis]
 
     def amplitude_at_nearest_bin(**settings):
-        multitaper = Multitaper(
-            signals, _SAMPLING_FREQUENCY, time_halfbandwidth_product=4, **settings
-        )
-        result = multitaper.harmonic_f_test()
+        multitaper = Multitaper(signals, _SAMPLING_FREQUENCY, time_halfbandwidth_product=4)
+        result = multitaper.harmonic_f_test(**settings)
         nearest = np.argmin(np.abs(result.frequencies - frequency))
         return result.amplitude[0, :, nearest, 0]
 
-    on_default_grid = amplitude_at_nearest_bin()
-    padded = amplitude_at_nearest_bin(n_fft_samples=4 * n_time)
-    assert np.median(on_default_grid) < 0.8 * amplitude
+    unpadded = amplitude_at_nearest_bin(n_fft_samples=n_time)
+    padded = amplitude_at_nearest_bin()
+    assert np.median(unpadded) < 0.8 * amplitude
     standard_error = padded.std(ddof=1) / np.sqrt(n_trials)
     assert abs(padded.mean() - amplitude) < 5 * standard_error
 
@@ -261,3 +260,30 @@ def test_rejects_a_single_taper():
     multitaper = Multitaper(np.zeros((100, 1, 1)), _SAMPLING_FREQUENCY, n_tapers=1)
     with pytest.raises(ValueError, match="needs at least 2 tapers, got 1"):
         multitaper.harmonic_f_test()
+
+
+def test_default_grid_is_four_times_the_window_unless_the_transform_is_finer():
+    """The default pads to a fast length of four windows; a Multitaper padded
+    further keeps its own grid; an explicit length is used as given."""
+    signals = np.random.default_rng(309).standard_normal((300, 1, 1))
+    plain = Multitaper(signals, _SAMPLING_FREQUENCY, time_halfbandwidth_product=3)
+    four_windows = next_fast_len(4 * 300)
+    padded = Multitaper(
+        signals, _SAMPLING_FREQUENCY, time_halfbandwidth_product=3, n_fft_samples=four_windows
+    )
+    np.testing.assert_array_equal(
+        plain.harmonic_f_test().f_statistic,
+        padded.harmonic_f_test(n_fft_samples=four_windows).f_statistic,
+    )
+    finer = Multitaper(
+        signals, _SAMPLING_FREQUENCY, time_halfbandwidth_product=3, n_fft_samples=6000
+    )
+    assert finer.harmonic_f_test().frequencies.size == 3001
+    assert plain.harmonic_f_test(n_fft_samples=300).frequencies.size == 151
+
+
+@pytest.mark.parametrize("n_fft_samples", [299, 0, 300.5, True])
+def test_rejects_an_fft_shorter_than_the_window(n_fft_samples):
+    multitaper = Multitaper(np.zeros((300, 1, 1)), _SAMPLING_FREQUENCY)
+    with pytest.raises(ValueError, match="at least the window's 300 samples"):
+        multitaper.harmonic_f_test(n_fft_samples=n_fft_samples)
