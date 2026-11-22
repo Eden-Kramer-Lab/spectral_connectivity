@@ -1765,7 +1765,13 @@ class Connectivity:
         )
 
     def _warn_correlated_observations(
-        self, measure: str, assumption: str, advice: str = ""
+        self,
+        measure: str,
+        assumption: str,
+        time_bin_remedy: str = (
+            "use time_window_step >= time_window_duration / 2, more MorletWavelet "
+            "decimation, or an expectation_type that does not average over time"
+        ),
     ) -> None:
         """Warn once that ``measure`` counts correlated observations as independent.
 
@@ -1778,8 +1784,8 @@ class Connectivity:
         windows or closely spaced Morlet samples), that count overstates the
         effective sample size, biasing every consumer that uses it as a
         degrees-of-freedom or bias-correction factor. ``assumption`` states
-        what ``measure`` uses the count for so the message is actionable;
-        ``advice``, when given, is appended as a last sentence.
+        what ``measure`` uses the count for so the message is actionable, and
+        ``time_bin_remedy`` what to do about correlated time bins.
         """
         averages_correlated_time_bins = (
             not self._time_bins_are_independent and 0 in self._expectation_axes
@@ -1801,15 +1807,13 @@ class Connectivity:
                 "bins that are correlated (time_bins_are_independent is False: "
                 "Multitaper or ShortTimeFourierTransform windows overlapping by "
                 "more than half, or MorletWavelet samples closer than 4 wavelet "
-                "standard deviations; use time_window_step >= time_window_duration "
-                "/ 2, more MorletWavelet decimation, or an expectation_type that "
-                "does not average over time)"
+                f"standard deviations; {time_bin_remedy})"
             )
         warnings.warn(
             f"{measure} assumes independent observations, but "
             f"{' and '.join(reasons)}. {assumption}, so n_observations == "
             f"{self.n_observations} overstates the effective sample size and the "
-            f"result is biased.{' ' + advice if advice else ''}",
+            f"result is biased.",
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
@@ -4422,9 +4426,11 @@ class Connectivity:
                 "Its bias above the 1/n_signals of independent signals, and its "
                 "floor of 1/min(n_observations, n_signals), are set by the number "
                 "of independent observations pooled",
-                "Non-overlapping windows are the clean case: with a full taper set, "
-                "even 50% overlap leaves about half the nominal count of effective "
-                "observations.",
+                time_bin_remedy="use non-overlapping windows (time_window_step >= "
+                "time_window_duration; with a full taper set even 50% overlap leaves "
+                "about half the nominal count of effective observations), more "
+                "MorletWavelet decimation, or an expectation_type that does not "
+                "average over time",
             )
 
         # A rank-r decomposition of the (n_signals, n_observations) coefficient
