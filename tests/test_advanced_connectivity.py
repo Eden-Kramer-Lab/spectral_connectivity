@@ -864,14 +864,15 @@ def test_global_coherence_decomposes_the_matrix_its_expectation_averages(
     np.testing.assert_allclose(overlap, 1.0, rtol=1e-8)
 
 
-def test_time_trials_tapers_global_coherence_is_the_chronux_estimand():
-    """On non-overlapping windows, "time_trials_tapers" estimates what Chronux
-    ``CrossSpecMatc`` returns as ``Ctot``: the cross-spectral matrix ``Sc``
+def test_time_trials_tapers_global_coherence_matches_chronux_crossspecmatc_formula():
+    """On non-overlapping windows, "time_trials_tapers" matches the formula of
+    Chronux ``CrossSpecMatc``'s ``Ctot``, reimplemented here from its source
+    (this is not recorded Chronux output): the cross-spectral matrix ``Sc``
     averaged with equal weight over every taper, trial and window (Chronux
     adds the taper mean of ``conj(J_k) J_l`` for each window and trial and
     divides by ``Nwins * Ntr``), then ``s(1) / sum(s)`` from its singular
     values. ``Sc`` is the conjugate of the matrix decomposed here, so the
-    values are the same."""
+    values are the same: the two estimate the same quantity."""
     time_series = np.random.default_rng(32).standard_normal((1000, 3, 5))
     m = Multitaper(
         time_series,
