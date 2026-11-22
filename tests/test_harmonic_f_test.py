@@ -1,7 +1,10 @@
 """Thomson's harmonic F-test, Multitaper.harmonic_f_test."""
 
+import dataclasses
+
 import numpy as np
 import pytest
+import scipy.stats
 
 from spectral_connectivity import HarmonicFTestResult, Multitaper
 from tests._backend_helpers import to_host
@@ -13,7 +16,8 @@ def _line(time, amplitude, frequency, phase):
     return amplitude * np.cos(2 * np.pi * frequency * time + phase)
 
 
-def test_complex_amplitude_is_the_line_at_each_window_center():
+@pytest.mark.parametrize("start_time", [0.0, 7.3])
+def test_complex_amplitude_is_the_line_at_each_window_center(start_time):
     """The fitted complex amplitude is linear in the data, so over noise
     replicates (trials) its mean is the line's amplitude with its phase at
     each window's center time, the time Multitaper labels the window by. Its
@@ -23,7 +27,7 @@ def test_complex_amplitude_is_the_line_at_each_window_center():
     # Half a window (0.2495 s) of 62 Hz is 15.47 cycles: the phase at the
     # window's start and at its center differ by nearly pi.
     amplitude, frequency, phase = 0.8, 62.0, 1.0
-    time = np.arange(n_time) / _SAMPLING_FREQUENCY
+    time = start_time + np.arange(n_time) / _SAMPLING_FREQUENCY
     rng = np.random.default_rng(300)
     signals = rng.standard_normal((n_time, n_trials, 1))
     signals += _line(time, amplitude, frequency, phase)[:, np.newaxis, np.newaxis]
@@ -33,6 +37,7 @@ def test_complex_amplitude_is_the_line_at_each_window_center():
         time_window_duration=0.5,
         time_window_step=0.25,
         time_halfbandwidth_product=4,
+        start_time=start_time,
     )
     result = multitaper.harmonic_f_test()
     at_line = result.frequencies == frequency
@@ -48,7 +53,7 @@ def test_complex_amplitude_is_the_line_at_each_window_center():
         2 * _SAMPLING_FREQUENCY
     )
     at_start = amplitude * np.exp(1j * (2 * np.pi * frequency * start + phase))
-    noise = estimate.std(axis=1) / np.sqrt(n_trials)  # the complex standard error
+    noise = estimate.std(axis=1, ddof=1) / np.sqrt(n_trials)  # the complex standard error
     assert (np.abs(mean - at_start) > 50 * noise).all()
 
 
@@ -117,6 +122,9 @@ def test_frequencies_within_the_half_bandwidth_of_the_edges_are_nan():
     assert edge[0]
     assert edge[-1]
     assert not edge.all()
+    # The bins exactly W from the edges are defined.
+    assert not edge[result.frequencies == 10.0].any()
+    assert not edge[result.frequencies == nyquist - 10.0].any()
     for values in (result.f_statistic, result.p_value, result.amplitude, result.phase):
         assert np.isnan(values[:, :, edge]).all()
         assert np.isfinite(values[:, :, ~edge]).all()
@@ -139,6 +147,88 @@ def test_result_describes_its_axes_and_null_distribution():
         result.frequencies,
         np.fft.rfftfreq(multitaper.n_fft_samples, 1 / _SAMPLING_FREQUENCY),
     )
+    np.testing.assert_array_equal(
+        result.p_value, scipy.stats.f.sf(result.f_statistic, *result.degrees_of_freedom)
+    )
+    # Host arrays on either backend, as every public result.
+    for field in dataclasses.fields(result):
+        value = getattr(result, field.name)
+        if field.name not in {"degrees_of_freedom", "half_bandwidth"}:
+            assert type(value) is np.ndarray, field.name
+
+
+@pytest.mark.parametrize(
+    ("settings", "n_tapers"),
+    [
+        ({"time_halfbandwidth_product": 1.5}, 2),
+        ({"time_halfbandwidth_product": 4, "n_tapers": 7, "is_low_bias": False}, 7),
+    ],
+    ids=["two_tapers", "no_low_bias_filtering"],
+)
+def test_degrees_of_freedom_follow_the_tapers_used(settings, n_tapers):
+    """With no line the p-values are uniform for any number of tapers, which
+    holds only if the degrees of freedom count the tapers actually used."""
+    rng = np.random.default_rng(306)
+    multitaper = Multitaper(
+        rng.standard_normal((1000, 400, 1)), _SAMPLING_FREQUENCY, **settings
+    )
+    result = multitaper.harmonic_f_test()
+    assert multitaper.n_tapers == n_tapers
+    assert result.degrees_of_freedom == (2, 2 * n_tapers - 2)
+    spacing = int(np.ceil(2 * result.half_bandwidth / result.frequencies[1]))
+    defined = np.flatnonzero(np.isfinite(result.p_value[0, 0, :, 0]))
+    p_values = result.p_value[:, :, defined[::spacing], :].ravel()
+    fraction = np.mean(p_values < 0.05)
+    assert abs(fraction - 0.05) < 5 * np.sqrt(0.05 * 0.95 / p_values.size), fraction
+
+
+def test_zero_padding_recovers_a_line_between_bins():
+    """A line half a bin off the default grid loses part of its fit to the odd
+    tapers (amplitude about a third low); on a grid four times finer the
+    nearest bin recovers it."""
+    n_time, n_trials, amplitude, frequency = 1000, 50, 1.0, 60.5
+    time = np.arange(n_time) / _SAMPLING_FREQUENCY
+    rng = np.random.default_rng(307)
+    signals = rng.standard_normal((n_time, n_trials, 1))
+    signals += amplitude * np.cos(2 * np.pi * frequency * time)[:, np.newaxis, np.newaxis]
+
+    def amplitude_at_nearest_bin(**settings):
+        multitaper = Multitaper(
+            signals, _SAMPLING_FREQUENCY, time_halfbandwidth_product=4, **settings
+        )
+        result = multitaper.harmonic_f_test()
+        nearest = np.argmin(np.abs(result.frequencies - frequency))
+        return result.amplitude[0, :, nearest, 0]
+
+    on_default_grid = amplitude_at_nearest_bin()
+    padded = amplitude_at_nearest_bin(n_fft_samples=4 * n_time)
+    assert np.median(on_default_grid) < 0.8 * amplitude
+    standard_error = padded.std(ddof=1) / np.sqrt(n_trials)
+    assert abs(padded.mean() - amplitude) < 5 * standard_error
+
+
+def test_a_non_finite_or_flat_window_is_nan():
+    """A window holding NaN, or a signal that is zero, has no defined test:
+    every field is NaN there and only there."""
+    signals = np.random.default_rng(308).standard_normal((2000, 1, 3))
+    signals[100, 0, 0] = np.nan  # the first window of signal 0
+    signals[:, 0, 2] = 0.0  # signal 2 is flat
+    with pytest.warns(UserWarning, match="NaN or infinite"):
+        multitaper = Multitaper(
+            signals,
+            _SAMPLING_FREQUENCY,
+            time_window_duration=1.0,
+            time_halfbandwidth_product=4,
+        )
+    result = multitaper.harmonic_f_test()
+    defined = (result.frequencies >= result.half_bandwidth) & (
+        result.frequencies <= _SAMPLING_FREQUENCY / 2 - result.half_bandwidth
+    )
+    for values in (result.f_statistic, result.p_value, result.amplitude, result.phase):
+        assert np.isnan(values[0, 0, :, 0]).all()
+        assert np.isfinite(values[1, 0, defined, 0]).all()
+        assert np.isfinite(values[:, 0, defined, 1]).all()
+        assert np.isnan(values[:, 0, :, 2]).all()
 
 
 @pytest.mark.parametrize("taper_weighting", ["eigen", "adaptive"])

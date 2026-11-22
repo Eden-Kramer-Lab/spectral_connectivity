@@ -171,7 +171,8 @@ class HarmonicFTestResult:
         when there is no sinusoid.
     half_bandwidth : float
         The tapers' half-bandwidth ``W`` in Hz,
-        ``time_halfbandwidth_product / time_window_duration``.
+        ``time_halfbandwidth_product / time_window_duration``: half of
+        :attr:`Multitaper.frequency_resolution`.
     """
 
     frequencies: NDArray[np.floating]
@@ -2430,21 +2431,36 @@ class Multitaper(_WindowedFourierTransform):
         - **Edges**: a real signal's line at ``f`` has a mirror image at
           ``-f``. Within ``W`` of 0 Hz or of the Nyquist frequency the two
           overlap within the tapers' bandwidth, so the test does not hold
-          there and those frequencies are NaN.
+          there and those frequencies are NaN. So is every field of a window
+          whose coefficients are all zero (a flat signal) or not finite.
         - **The line must be stable** in amplitude and frequency over each
           window; a line that drifts is spread over neighboring frequencies.
-        - **Between bins**: the test at a bin detects a line within about
-          ``W`` of it, but less powerfully the further off the bin it lies.
-          Zero-padding (``n_fft_samples``) gives a finer grid without changing
-          ``W``.
+        - **Between bins**: a line off the FFT grid puts part of its power in
+          the odd tapers, which the fit counts as noise. With a 1 s window
+          and ``NW = 4``, a line half a bin from the nearest one was missed at
+          ``p < 0.001`` in simulation, with its amplitude a third too low.
+          Zero-pad (``n_fft_samples`` of 2 to 4 times the window) for a finer
+          grid, which does not change ``W``, and take the line's frequency at
+          the local maximum of ``F``: neighboring bins within the bandwidth
+          are significant too.
+        - **A narrow background peak** violates the flat-background
+          assumption: a rhythm narrower than about ``2W`` (a spindle, say)
+          tests as line-like. For an AR(2) resonance with a half-width of
+          1.6 Hz and no sinusoid, ``p < 0.05`` held at 6% of the frequencies near the peak
+          with ``NW = 3``, 9% with ``NW = 4``, and 23% with ``NW = 8``. Use a
+          small ``NW`` there, or read the test as a screen.
         - **Many tests**: every frequency is a test, so about a fraction
           ``alpha`` of the frequencies without a line fall below ``alpha``.
           Thomson's rule takes a line as detected when its p-value is below
-          ``1 / n_fft_samples``; for an error rate over the frequencies use
+          ``1 / n_time_samples_per_window``, about one chance detection per
+          window and signal. For an error rate over the frequencies of each
+          window, trial, and signal, use
           :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`
-          with ``axis`` the frequency axis (``axis=2``).
+          with ``axis=2``.
         - The coefficients are those of equally weighted tapers, whatever
-          ``taper_weighting`` is: the test is defined for them.
+          ``taper_weighting`` is: the test is defined for them. Keep the
+          default tapers: tapers beyond ``2 NW - 1``, poorly concentrated in
+          the bandwidth, make the test conservative.
 
         References
         ----------
@@ -2494,8 +2510,10 @@ class Multitaper(_WindowedFourierTransform):
         if n_tapers < 2:
             msg = (
                 f"harmonic_f_test needs at least 2 tapers, got {n_tapers}: with one "
-                "taper no degrees of freedom are left for the noise. Use a larger "
-                "time_halfbandwidth_product or n_tapers."
+                "taper no degrees of freedom are left for the noise. Request more "
+                "with n_tapers, or a time_halfbandwidth_product of at least 1.5 "
+                "(which gives 2 tapers); if low-bias filtering dropped tapers, "
+                "is_low_bias=False keeps them."
             )
             raise ValueError(msg)
         coefficients, _ = self._unweighted_fft()
@@ -2527,7 +2545,9 @@ class Multitaper(_WindowedFourierTransform):
         complex_amplitude = to_numpy(amplitude) * np.exp(
             2j * np.pi * frequencies[:, np.newaxis] * center
         )
-        mask = undefined[:, np.newaxis]
+        # A flat or non-finite window has no defined F (0 / 0 or NaN); its
+        # amplitude and phase are then meaningless too (angle(0) is 0).
+        mask = undefined[:, np.newaxis] | np.isnan(f_statistic)
         f_statistic = np.where(mask, np.nan, f_statistic)
         return HarmonicFTestResult(
             frequencies=frequencies,

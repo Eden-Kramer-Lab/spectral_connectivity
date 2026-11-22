@@ -227,7 +227,10 @@ pitfalls common to every measure.
 
 See the [**Cookbook**](docs/cookbook.md) for short, copy-pasteable recipes
 covering functional and directed connectivity, reading the labeled output,
-frequency bands, and using your own Fourier coefficients.
+frequency bands, and using your own Fourier coefficients. To check a recording
+for line noise first, `Multitaper.harmonic_f_test()` tests every frequency for
+a sinusoid
+([recipe](docs/cookbook.md#find-line-noise-with-the-harmonic-f-test)).
 
 Crop, decimate, or aggregate the frequency coordinate without losing labels:
 
