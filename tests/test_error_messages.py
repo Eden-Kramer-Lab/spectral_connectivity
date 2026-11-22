@@ -1039,6 +1039,20 @@ def test_global_coherence_per_bin_path_names_nonfinite_coefficients(
     assert "ZLASCL" not in captured.out + captured.err
 
 
+def test_global_coherence_ignores_nonfinite_negative_frequency_bins():
+    """Only the non-negative bins are decomposed, so NaN confined to a
+    negative frequency does not reach the decomposition: the result is
+    finite rather than an error."""
+    coefficients = Multitaper(np.random.default_rng(7).standard_normal((400, 3, 3)), 500).fft()
+    coefficients[0, 1, 0, -5, 0] = np.nan  # a negative frequency
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(coefficients)
+    fractions, vectors = connectivity.global_coherence()
+    assert np.all(np.isfinite(fractions))
+    assert np.all(np.isfinite(vectors))
+
+
 def _nan_instead_of_raising(kernel):
     """``kernel`` as a backend that returns NaN rather than raising on NaN or
     Inf input (CuPy's decompositions): run on finite stand-ins, then NaN."""

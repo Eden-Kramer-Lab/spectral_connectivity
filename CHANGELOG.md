@@ -449,7 +449,9 @@ The migration guide for code written against 2.x is
   `[..., :len(conn.frequencies), :]` gets the same values. Until 3.2 a call on
   two-sided coefficients emits a `SidednessWarning` once per session.
   The results of `multitaper_connectivity` and `connectivity_to_xarray` were
-  already trimmed so; they are unchanged and do not warn.
+  already trimmed so; they are unchanged and do not warn. Since the negative
+  bins are no longer decomposed, NaN or Inf coefficients confined to them no
+  longer raise the `ValueError` described under Fixed.
 - `Connectivity.global_coherence` follows `expectation_type` for the settings
   that average the tapers: it decomposes the cross-spectral matrix averaged
   over the same axes as the other measures, with the kept axes leading the
