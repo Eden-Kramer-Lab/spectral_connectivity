@@ -1846,7 +1846,8 @@ class Connectivity:
         to ``(1 + sqrt(p / n))**2 / p``, 4x at ``n = p``; see the Notes of
         :meth:`global_coherence`) but no longer bounded
         away from it, so ``n < p`` is where the value stops depending on the
-        data alone and the warning starts.
+        data alone and the warning starts. ``n`` is the raw count: it does not
+        discount observations that zero ``observation_weights`` omit.
         """
         n_observations, n_signals = self.n_observations, self.n_signals
         if n_observations >= n_signals:
@@ -4176,7 +4177,8 @@ class Connectivity:
             (``n_observations < n_signals``): the value is then at least
             ``1 / n_observations`` whatever the data (1 for a single
             observation), above the ``1 / n_signals`` of independent signals.
-            Also if the expectation pools time windows the transform reports
+            The count is :attr:`n_observations`, which includes observations
+            that zero ``observation_weights`` omit. Also if the expectation pools time windows the transform reports
             as correlated (``time_bins_are_independent`` is ``False``, e.g.
             windows overlapping by more than half), which add fewer effective
             observations than their count.
@@ -4223,7 +4225,10 @@ class Connectivity:
           trials x tapers by default, times the windows when time is pooled)
           and ``p`` signals, the leading value is at least ``1 / min(n, p)``
           whatever the data, and 1 for one observation; it warns when
-          ``n < p``.
+          ``n < p``. ``n`` is the raw count: observations that zero
+          ``observation_weights`` omit (the masked edges of a Morlet
+          transform, say) still count, so the floor can be higher than
+          ``1 / min(n, p)`` there, and the warning does not see it.
         - *Bias without coupling*: independent signals of equal power have the
           value ``1 / p``, but the estimate is well above it unless
           ``n >> p``. As ``n`` and ``p`` grow with ``p / n`` fixed, the largest
