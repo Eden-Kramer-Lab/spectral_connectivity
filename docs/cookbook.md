@@ -397,15 +397,23 @@ Which to choose:
 :::{note}
 The gapped windows' tapers are less concentrated than the DPSS (down to 0.9
 rather than about 0.95), and fewer of them smooth less, so their expected
-spectrum differs from that without gaps. For 64-sample windows (NW = 3) with
-gaps of 4 to 12 samples, away from 0 Hz and Nyquist, it differs by under 6% for
-a spectrum spanning a factor of 100 (an AR(2) with poles of radius 0.77) and by
-up to 37% for one spanning 2400 (poles of radius 0.95 at 0.1 cycles per sample,
-two 3-sample gaps). In exchange the valid samples are used: with three of four
+spectrum differs from that without gaps. For 64-sample windows (NW = 3) and
+the gap patterns tested (a 4-, a 12-, and two 3-sample gaps), away from 0 Hz
+and Nyquist, it differs by about 5% for a spectrum spanning a factor of 100
+(an AR(2) with poles of radius 0.77) and by up to 37% for one spanning 2400
+(poles of radius 0.95 at 0.1 cycles per sample, two 3-sample gaps). Other gap
+positions gave 1-13% (a single 4- to 12-sample gap at 165 positions, under 6%
+for 68% of them) and 7-70% (two 3-sample gaps at 325, median 34%), and the
+difference grows
+toward Nyquist. In exchange the valid samples are used: with three of four
 trials gapped in every window, the variance of white-noise power is a third of
 that of `"drop"`. Building the transform finds the tapers of each distinct
 pattern of artifacts in a trial window, about 2 ms per pattern for 1000
-samples and 65 ms for 60000. Windows without artifacts are unchanged.
+samples and 65 ms for 60000. On older NumPy/SciPy stacks with multithreaded
+OpenBLAS, that eigensolver (ARPACK) can be hundreds of times slower per
+pattern (828 ms against 2.7 ms for 1000 samples measured on SciPy 1.11); if
+building the transform is slow, set `OPENBLAS_NUM_THREADS=1` (or limit the
+threads with threadpoolctl). Windows without artifacts are unchanged.
 :::
 
 ## Group measures: canonical coherence between areas

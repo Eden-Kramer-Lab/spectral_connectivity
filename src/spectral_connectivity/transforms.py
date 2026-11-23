@@ -2266,8 +2266,10 @@ class Multitaper(_WindowedFourierTransform):
           ``taper_weighting`` uses each window's own concentrations. Needs
           generated DPSS tapers, ``is_low_bias=True`` and at least 2 tapers.
           Construction finds the tapers of each distinct artifact pattern,
-          about 2 ms per pattern for a 1000-sample window. When to use it,
-          its leakage and its gap limit:
+          about 2 ms per pattern for a 1000-sample window (on older stacks
+          with multithreaded OpenBLAS it can be hundreds of times slower; set
+          ``OPENBLAS_NUM_THREADS=1``). When to use it, its leakage and its
+          gap limit:
           https://spectral-connectivity.readthedocs.io/en/latest/cookbook.html#leave-out-artifacts-and-missing-samples
 
     Attributes
