@@ -3560,11 +3560,19 @@ class Connectivity:
             includes an invalid one.
         """
         frequencies = self.frequencies
-        all_frequencies = to_numpy(self._frequencies)
-        n_fft_samples = all_frequencies.shape[0]
-        spacing = float(all_frequencies[1]) if n_fft_samples > 1 else 0.0
-        nyquist = n_fft_samples * spacing / 2
-        valid = (frequencies >= half_bandwidth) & (frequencies <= nyquist - half_bandwidth)
+        n_fft_samples = len(self._frequencies)
+        # Nyquist is the last non-negative bin for an even FFT length and half a
+        # bin above it for an odd one.
+        nyquist = float(frequencies[-1])
+        if n_fft_samples % 2 and n_fft_samples > 1:
+            nyquist += float(frequencies[1] - frequencies[0]) / 2
+        # The bounds are inclusive, by the package's rule for a bin lying on a
+        # bound (that of frequency_range), so a band starting at
+        # half_bandwidth is accepted below whenever its bins are.
+        lower, upper = half_bandwidth, nyquist - half_bandwidth
+        on_lower, on_upper = _bins_on_bounds(frequencies, (lower, upper))
+        grid = frequencies.astype(np.float64)
+        valid = ((grid > lower) | on_lower) & ((grid < upper) | on_upper)
         if not valid.any():
             msg = (
                 f"surrogate_test(kind='phase_rotation') tests no frequency: every "

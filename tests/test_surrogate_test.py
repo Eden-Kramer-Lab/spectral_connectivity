@@ -949,3 +949,41 @@ def test_nan_surrogates_warn_once_with_their_count(lagged_connectivity, monkeypa
     assert sum("returned NaN" in str(item.message) for item in record) == 1
     assert result.p_value[0, 10, 0, 1] >= 3 / 10
     assert np.all(result.fwer_p_value[np.isfinite(result.fwer_p_value)] >= 3 / 10)
+
+
+def test_rotation_edges_use_the_frequency_range_rule_for_boundary_bins():
+    """A half bandwidth that differs from a bin by rounding (NW / T = 2 / 1.152 s
+    is 1.7361111111111112 Hz, the bin 1.736111111111111 Hz) keeps that bin
+    tested, and a phase_slope_index band starting at it is accepted, by the
+    rule frequency_range uses for a bin on a bound.
+
+    Regression: the edge mask compared with >=, dropping the bin, and then
+    refused frequency_range=(half_bandwidth, 40) asking for low >= half_bandwidth.
+    """
+    rng = np.random.default_rng(0)
+    multitaper = Multitaper(
+        rng.standard_normal((288, 4, 2)), sampling_frequency=250, time_halfbandwidth_product=2
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    half_bandwidth = connectivity.half_bandwidth
+    boundary = connectivity.frequencies[2]
+    assert boundary < half_bandwidth
+    assert np.isclose(boundary, half_bandwidth, rtol=1e-14, atol=0)
+    result = connectivity.surrogate_test(
+        "magnitude_squared_coherence", kind="phase_rotation", n_surrogates=3, random_state=0
+    )
+    assert np.isnan(result.p_value[0, :2, 0, 1]).all()
+    assert np.isfinite(result.p_value[0, 2, 0, 1])
+    # The top edge: Nyquist (125 Hz) minus the half bandwidth lies on a bin too.
+    top = connectivity.frequencies[-3]
+    assert np.isclose(top, 125 - half_bandwidth, rtol=1e-14, atol=0)
+    assert np.isfinite(result.p_value[0, -3, 0, 1])
+    assert np.isnan(result.p_value[0, -2:, 0, 1]).all()
+    psi = connectivity.surrogate_test(
+        "phase_slope_index",
+        kind="phase_rotation",
+        n_surrogates=3,
+        random_state=0,
+        frequency_range=(half_bandwidth, 40.0),
+    )
+    assert np.isfinite(psi.p_value[0, 0, 1])
