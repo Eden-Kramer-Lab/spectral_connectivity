@@ -4740,3 +4740,241 @@ def test_wrapper_warnings_point_at_the_caller(match, call):
     matching = [w for w in record if match in str(w.message)]
     assert matching, [str(w.message)[:80] for w in record]
     assert {w.filename for w in matching} == {__file__}
+
+
+# connectivity_to_xarray with several measures and frequency reductions. The
+# multitaper settings below are multitaper_connectivity's defaults, so the
+# Multitaper the tests build is the one the wrapper builds.
+_MULTI_SAMPLING_FREQUENCY = 128
+_MULTI_GROUPS = ["a", "a", "b", "b"]
+_MULTI_BANDS = {"theta": (4.0, 8.0), "beta": (13.0, 30.0)}
+
+
+@pytest.fixture(scope="module")
+def four_signals():
+    """Four signals sharing a 20 Hz rhythm in noise, shape (256, 3, 4)."""
+    rng = np.random.default_rng(530)
+    time = np.arange(256) / _MULTI_SAMPLING_FREQUENCY
+    shifted = np.sin(2 * np.pi * 20 * time[:, np.newaxis, np.newaxis] - np.linspace(0, 1, 4))
+    return shifted + rng.standard_normal((256, 3, 4))
+
+
+def _recorded(call):
+    """``call()`` and the messages of the warnings it raised."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = call()
+    return result, [str(w.message) for w in record]
+
+
+@pytest.mark.parametrize(
+    "request_settings",
+    [
+        pytest.param({"method": list(DEFAULT_METHODS)}, id="default-set"),
+        pytest.param({"method": ["power", "coherency", "imaginary_coherence"]}, id="several"),
+        pytest.param(
+            {
+                "method": ["canonical_coherence", "power", "canonical_coherency"],
+                "group_labels": _MULTI_GROUPS,
+            },
+            id="group-measures",
+        ),
+        pytest.param(
+            {
+                "method": ["phase_slope_index", "delay", "coherence_phase"],
+                "frequency_range": (10.0, 40.0),
+            },
+            id="range-consumers",
+        ),
+        pytest.param(
+            {
+                "method": ["power", "magnitude_squared_coherence"],
+                "frequency_range": (10.0, 40.0),
+                "frequency_decimation": 2,
+            },
+            id="range-decimation",
+        ),
+        pytest.param(
+            {
+                "method": ["coherence_phase", "coherency", "phase_slope_index"],
+                "frequency_bands": _MULTI_BANDS,
+            },
+            id="bands-mean",
+        ),
+        pytest.param(
+            {
+                "method": ["power", "cross_spectral_density"],
+                "frequency_bands": {"beta": (12.6, 29.3)},
+                "frequency_reduction": "integral",
+                "frequency_range": (10.0, 35.0),
+            },
+            id="bands-integral-range",
+        ),
+        pytest.param(
+            {
+                "method": ["coherence_magnitude", "pairwise_spectral_granger_prediction"],
+                "dtype": np.complex64,
+                "minimum_phase_max_iterations": 40,
+            },
+            id="deprecated-name-and-wilson-settings",
+        ),
+    ],
+)
+@pytest.mark.parametrize("windowed", [False, True], ids=["one-window", "windowed"])
+def test_connectivity_to_xarray_of_a_list_equals_multitaper_connectivity(
+    four_signals, request_settings, windowed
+):
+    """A list of measures gives multitaper_connectivity's Dataset for the same
+    Multitaper: the same variables, coordinates, attributes, and warnings."""
+    windows = {"time_window_duration": 0.5, "time_window_step": 0.25} if windowed else {}
+    expected, expected_warnings = _recorded(
+        lambda: multitaper_connectivity(
+            four_signals, _MULTI_SAMPLING_FREQUENCY, **windows, **request_settings
+        )
+    )
+    actual, actual_warnings = _recorded(
+        lambda: connectivity_to_xarray(
+            Multitaper(four_signals, _MULTI_SAMPLING_FREQUENCY, **windows),
+            **request_settings,
+        )
+    )
+    assert isinstance(actual, xr.Dataset)
+    assert actual.identical(expected)
+    assert actual.attrs == expected.attrs
+    assert actual_warnings == expected_warnings
+
+
+def test_connectivity_to_xarray_of_one_name_in_a_list_is_a_dataset(four_signals):
+    """A one-name list returns a Dataset whose variable is the string's result."""
+    transform = Multitaper(four_signals, _MULTI_SAMPLING_FREQUENCY)
+    alone = connectivity_to_xarray(transform, "magnitude_squared_coherence")
+    listed = connectivity_to_xarray(transform, ["magnitude_squared_coherence"])
+    assert isinstance(alone, xr.DataArray)
+    assert isinstance(listed, xr.Dataset)
+    assert listed["magnitude_squared_coherence"].identical(alone)
+
+
+@pytest.fixture(scope="module")
+def morlet(four_signals):
+    """A Morlet transform on a uniform 4 Hz grid, with invalid edges as NaN."""
+    return MorletWavelet(
+        four_signals,
+        _MULTI_SAMPLING_FREQUENCY,
+        frequencies=np.arange(4.0, 33.0, 4.0),
+        n_cycles=3.0,
+        edge_mode="nan",
+    )
+
+
+def test_connectivity_to_xarray_bands_equal_frequency_band_reduce(morlet):
+    """Bands through connectivity_to_xarray reduce its unreduced result, the
+    validity mask included."""
+    methods = ["power", "magnitude_squared_coherence", "coherence_phase"]
+    reduced = connectivity_to_xarray(morlet, methods, frequency_bands=_MULTI_BANDS)
+    expected = frequency_band_reduce(connectivity_to_xarray(morlet, methods), _MULTI_BANDS)
+    assert reduced.identical(expected)
+    assert "valid_time_band" in reduced.coords
+    assert reduced.sizes["band"] == 2
+
+
+def test_connectivity_to_xarray_integrates_a_band_on_the_uncropped_grid(morlet):
+    """With frequency_range, a band inside the range integrates as without it,
+    though its edges fall between bins; integrating the cropped result does not.
+
+    The range (13, 27) keeps the bins 16, 20, and 24 Hz of the 4 Hz grid; the
+    band's ends lie in the cells of the 12 and 28 Hz bins, which it drops.
+    """
+    band = {"beta": (13.0, 27.0)}
+    settings = {"frequency_bands": band, "frequency_reduction": "integral"}
+    with_range = connectivity_to_xarray(
+        morlet, "power", frequency_range=(13.0, 27.0), **settings
+    )
+    without_range = connectivity_to_xarray(morlet, "power", **settings)
+    np.testing.assert_allclose(with_range, without_range, rtol=1e-12)
+    np.testing.assert_array_equal(with_range.valid_time_band, without_range.valid_time_band)
+    cropped_first = frequency_band_reduce(
+        connectivity_to_xarray(morlet, "power", frequency_range=(13.0, 27.0)),
+        band,
+        frequency_reduction="integral",
+    )
+    finite = np.isfinite(without_range.values)
+    assert finite.any()
+    assert np.all(cropped_first.values[finite] < without_range.values[finite])
+
+
+def test_connectivity_to_xarray_decimates_after_the_range(morlet):
+    decimated = connectivity_to_xarray(
+        morlet, "coherency", frequency_range=(8.0, 28.0), frequency_decimation=2
+    )
+    cropped = connectivity_to_xarray(morlet, "coherency", frequency_range=(8.0, 28.0))
+    np.testing.assert_array_equal(decimated.frequency, [8.0, 16.0, 24.0])
+    # Equal values and coordinates; the attributes record the decimation.
+    xr.testing.assert_equal(decimated, cropped.isel(frequency=slice(None, None, 2)))
+    assert decimated.attrs["frequency_decimation"] == 2
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        pytest.param({"method": "power", "frequency_decimation": 0}, id="decimation-zero"),
+        pytest.param(
+            {"method": "phase_slope_index", "frequency_bands": _MULTI_BANDS},
+            id="bands-of-psi",
+        ),
+        pytest.param(
+            {"method": ["phase_slope_index", "group_delay"], "frequency_decimation": 2},
+            id="decimation-of-psi-and-group-delay",
+        ),
+        pytest.param(
+            {
+                "method": "magnitude_squared_coherence",
+                "frequency_bands": _MULTI_BANDS,
+                "frequency_reduction": "integral",
+            },
+            id="integral-of-coherence",
+        ),
+        pytest.param(
+            {"method": "delay", "connectivity_kwargs": {"frequency_range": (1.0, 2.0)}},
+            id="range-in-kwargs",
+        ),
+        pytest.param(
+            {"method": ["power", "coherency"], "connectivity_kwargs": {"pairs": [(0, 1)]}},
+            id="setting-of-one-measure",
+        ),
+        pytest.param({"method": ["power", "canonical_coherence"]}, id="missing-group-labels"),
+        pytest.param(
+            {"method": ["power", "coherency"], "group_labels": _MULTI_GROUPS},
+            id="labels-without-group-measure",
+        ),
+        pytest.param({"method": ["power", "phase_lock_value"]}, id="unknown-name"),
+        pytest.param(
+            {"method": ["coherence_magnitude", "magnitude_squared_coherence"]},
+            id="deprecated-and-canonical-name",
+        ),
+    ],
+)
+def test_connectivity_to_xarray_rejects_what_multitaper_connectivity_rejects(
+    four_signals, settings
+):
+    """The same request fails with the same error through both wrappers, except
+    for multitaper_connectivity's hint on where transform settings go."""
+    with pytest.raises((ValueError, TypeError)) as expected:
+        multitaper_connectivity(four_signals, _MULTI_SAMPLING_FREQUENCY, **settings)
+    with pytest.raises(expected.type) as actual:
+        connectivity_to_xarray(Multitaper(four_signals, _MULTI_SAMPLING_FREQUENCY), **settings)
+    transform_hint = "\nconnectivity_kwargs configures the measure only."
+    assert str(actual.value) == str(expected.value).split(transform_hint)[0]
+
+
+def test_connectivity_to_xarray_ignores_squeeze_for_a_list(four_signals):
+    two = Multitaper(four_signals[..., :2], _MULTI_SAMPLING_FREQUENCY)
+    with pytest.warns(UserWarning, match="squeeze=True is ignored for multi-measure"):
+        result = connectivity_to_xarray(
+            two, ["power", "magnitude_squared_coherence"], squeeze=True
+        )
+    assert result["magnitude_squared_coherence"].dims == (
+        "time",
+        "frequency",
+        "source",
+        "target",
+    )

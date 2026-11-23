@@ -13,16 +13,20 @@ from spectral_connectivity.wrapper import (
 
 
 @pytest.mark.parametrize(
-    "method",
-    [None, ["power", "phase_locking_value"], ["power"]],
-    ids=["none", "two-names", "one-name-list"],
+    ("method", "received"),
+    [(None, "None"), (3, "int 3"), (["power", 3], "a list holding int 3")],
+    ids=["none", "not-a-name", "list-holding-not-a-name"],
 )
-def test_connectivity_to_xarray_rejects_a_method_that_is_not_one_name(method):
-    """connectivity_to_xarray computes one measure, named by a string."""
+def test_connectivity_to_xarray_rejects_a_method_that_is_not_names(method, received):
+    """connectivity_to_xarray takes a name or a list of names; it has no default
+    set for None to request."""
     transform = Multitaper(
         np.random.default_rng(0).standard_normal((256, 3, 2)), sampling_frequency=100
     )
-    with pytest.raises(TypeError, match="method must be a single measure name"):
+    with pytest.raises(
+        TypeError,
+        match=rf"^method must be a measure name \(str\) or a list of names, got {received}\.",
+    ):
         connectivity_to_xarray(transform, method)
 
 

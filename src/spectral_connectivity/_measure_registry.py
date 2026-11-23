@@ -781,17 +781,18 @@ def _method_type_message(accepted: str, received: str) -> str:
 
 
 def _requested_methods(
-    method: str | Iterable[str] | None, defaults: Sequence[str]
+    method: str | Iterable[str] | None, defaults: Sequence[str] | None
 ) -> tuple[list[str], dict[str, str], bool]:
     """The measures a wrapper call requests, resolved once to canonical names.
 
-    ``None`` requests ``defaults``; a string requests that one measure, whose
-    result is returned as a DataArray rather than a Dataset. An empty request,
-    an unknown name, or a measure named under both its deprecated and its
-    canonical name (one estimate under two variable names) raises. A
-    deprecated name is resolved without a warning here: the wrapper calls
-    :func:`_warn_deprecated_measure_names` just before it returns, so a call
-    rejected for any reason raises only its error.
+    ``None`` requests ``defaults``, and raises ``TypeError`` for a wrapper
+    without a default set (``defaults=None``); a string requests that one
+    measure, whose result is returned as a DataArray rather than a Dataset. An
+    empty request, an unknown name, or a measure named under both its
+    deprecated and its canonical name (one estimate under two variable names)
+    raises. A deprecated name is resolved without a warning here: the wrapper
+    calls :func:`_warn_deprecated_measure_names` just before it returns, so a
+    call rejected for any reason raises only its error.
 
     Returns
     -------
@@ -803,13 +804,19 @@ def _requested_methods(
     single : bool
         Whether ``method`` was a single name.
     """
+    accepted = (
+        "a measure name (str) or a list of names"
+        if defaults is None
+        else "a measure name (str), a list of names, or None (the default measures)"
+    )
     if method is None:
+        if defaults is None:
+            raise TypeError(_method_type_message(accepted, "None"))
         requested = list(defaults)
     elif isinstance(method, str):
         requested = [method]
     else:
         # The annotation is the contract; these checks are for user input.
-        accepted = "a measure name (str), a list of names, or None (the default measures)"
         if not isinstance(method, Iterable):
             received = f"{type(method).__name__} {method!r}"  # type: ignore[unreachable]
             raise TypeError(_method_type_message(accepted, received))
