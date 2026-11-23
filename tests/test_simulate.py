@@ -171,7 +171,13 @@ def test_simulate_MVAR_has_the_stationary_covariance_of_its_model():
             "n_burnin_samples must be a non-negative integer; got -1",
         ),
     ],
-    ids=["2d_coefficients", "non_square", "covariance_size", "fractional_trials", "burnin"],
+    ids=[
+        "2d_coefficients",
+        "non_square",
+        "covariance_size",
+        "fractional_trials",
+        "n_burnin_samples",
+    ],
 )
 def test_simulate_MVAR_rejects_malformed_input_with_the_expected_shape(kwargs, match):
     """Malformed input names the argument, the expected shape, and the one
