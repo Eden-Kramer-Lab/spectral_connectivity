@@ -283,7 +283,9 @@ def test_detrending_uses_the_valid_samples(detrend_type):
     basis = np.ones((WINDOW, 1))
     if detrend_type == "linear":
         basis = np.column_stack([basis, np.arange(WINDOW)])
-    fit, *_ = np.linalg.lstsq(basis[valid], windows[..., valid].reshape(-1, valid.sum()).T)
+    fit, *_ = np.linalg.lstsq(
+        basis[valid], windows[..., valid].reshape(-1, valid.sum()).T, rcond=None
+    )
     expected = windows[..., valid] - (basis[valid] @ fit).T.reshape(3, 2, -1)
     np.testing.assert_allclose(detrended[..., valid], expected, atol=1e-12)
 
