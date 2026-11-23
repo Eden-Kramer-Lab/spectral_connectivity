@@ -92,9 +92,14 @@ def test_measures_using_observations_refuse_an_exact_spectrum(coefficients, name
     ) as info:
         _compute(connectivity, name)
     message = str(info.value)
-    assert "one factorization of the model's cross-spectral matrix" in message
-    assert all(allowed in message for allowed in _EXACT_SPECTRUM_MEASURES)
+    assert "one factor of the model's cross-spectral matrix, not samples" in message
     assert "simulate_MVAR" in message
+    reason = (
+        "significance test whose degrees of freedom are n_observations"
+        if name in {"delay", "group_delay"}
+        else "averages a function of each trial/taper observation"
+    )
+    assert reason in message
 
 
 @pytest.mark.parametrize("name", _EXACT_SPECTRUM_MEASURES)
@@ -114,8 +119,24 @@ def test_measures_of_the_spectral_matrix_are_unchanged_by_the_flag(coefficients,
 
 def test_jackknife_refuses_an_exact_spectrum(coefficients):
     connectivity = Connectivity(coefficients, is_exact_spectrum=True)
-    with pytest.raises(ValueError, match=r"^jackknife is not defined.*leaves out one"):
+    with pytest.raises(ValueError, match=r"^jackknife is not defined.*no sampling error"):
         connectivity.jackknife("magnitude_squared_coherence")
+
+
+def test_observation_weights_are_refused_on_an_exact_spectrum(coefficients):
+    """Weighting the pseudo-tapers would change the spectrum itself."""
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    match = "^observation_weights cannot be set on an exact spectrum"
+    with pytest.raises(ValueError, match=match):
+        Connectivity(coefficients, is_exact_spectrum=True, observation_weights=weights)
+    connectivity = Connectivity(coefficients, is_exact_spectrum=True)
+    with pytest.raises(ValueError, match=match):
+        connectivity.observation_weights = weights
+    connectivity.observation_weights = None
+    transform = _ExactTransform(coefficients)
+    transform.observation_weights = weights
+    with pytest.raises(ValueError, match=match):
+        Connectivity.from_transform(transform)
 
 
 @pytest.mark.parametrize("expectation_type", sorted(EXPECTATION_AXES))

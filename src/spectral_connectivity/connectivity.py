@@ -1173,6 +1173,9 @@ class Connectivity:
         # copied, avoiding a transient 2x peak of the largest array. It must not
         # be set for a caller-owned array (see _adopt_fourier_coefficients).
         dtype = _validated_complex_dtype(dtype)
+        # First, so the expectation_type and observation_weights setters can
+        # check what an exact spectrum allows.
+        self._is_exact_spectrum = _validated_flag("is_exact_spectrum", is_exact_spectrum)
         if _adopt_fourier_coefficients:
             self._adopt_fourier_coefficients(fourier_coefficients)
         else:
@@ -1192,8 +1195,6 @@ class Connectivity:
         self._time_bins_are_independent = _validated_flag(
             "time_bins_are_independent", time_bins_are_independent
         )
-        self._is_exact_spectrum = _validated_flag("is_exact_spectrum", is_exact_spectrum)
-        self._require_tapers_averaged_for_exact_spectrum(self.expectation_type)
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
@@ -1262,6 +1263,17 @@ class Connectivity:
             self._observation_weights = None
             self.clear_cache()
             return
+        if self._is_exact_spectrum:
+            msg = (
+                "observation_weights cannot be set on an exact spectrum "
+                "(is_exact_spectrum is True, as for VARSpectrum). Its tapers are "
+                "the columns of one factor of the model's cross-spectral matrix, "
+                "and weighting them would change that matrix into an arbitrary "
+                "other one (power and coherence included). Leave "
+                "observation_weights as None; to weight time windows, change the "
+                "models instead."
+            )
+            raise ValueError(msg)
         weights = xp.asarray(value)
         expected_shape = (*self._fourier_coefficients.shape[:-1], 1)
         if tuple(weights.shape) != expected_shape:
@@ -1496,9 +1508,7 @@ class Connectivity:
                 error_msg += f"  - '{key}'\n"
             error_msg += "\nMost common: 'trials_tapers' (average over both trials and tapers)"
             raise ValueError(error_msg)
-        # Set in __init__ after the first assignment, which checks it there.
-        if getattr(self, "_is_exact_spectrum", False):
-            self._require_tapers_averaged_for_exact_spectrum(value)
+        self._require_tapers_averaged_for_exact_spectrum(value)
 
         self._expectation_type = value
         self.clear_cache()
@@ -2577,27 +2587,42 @@ class Connectivity:
         raise ValueError(msg)
 
     def _raise_for_exact_spectrum(self, method: str) -> None:
-        """Raise because ``method`` uses individual observations of an exact spectrum."""
-        # The registry imports this module, so it is imported here.
-        from spectral_connectivity._measure_registry import _EXACT_SPECTRUM_MEASURES, _listed
-
-        what = (
-            "leaves out one observation at a time"
-            if method == "jackknife"
-            else "is computed from each trial/taper observation or counts them"
-        )
-        msg = (
+        """Raise because ``method`` needs samples, which an exact spectrum does not have."""
+        intro = (
             f"{method} is not defined for an exact spectrum (is_exact_spectrum is "
-            f"True, as for VARSpectrum). It {what}, but these coefficients are "
-            "not samples: they are one factorization of the model's "
-            "cross-spectral matrix, so the result would depend on an arbitrary "
-            "choice of factor (and an exact spectrum has no sampling error to "
-            "estimate). Use a measure that is a function of the cross-spectral "
-            f"matrix alone: {_listed(list(_EXACT_SPECTRUM_MEASURES))}. For "
-            f"{method}, simulate data from the model (e.g. "
-            "spectral_connectivity.simulate.simulate_MVAR) and estimate it with "
-            "Multitaper."
+            "True, as for VARSpectrum), whose coefficients are one factor of the "
+            "model's cross-spectral matrix, not samples."
         )
+        simulate = (
+            "simulate data from the model (spectral_connectivity.simulate."
+            "simulate_MVAR) and estimate it with Multitaper"
+        )
+        if method == "jackknife":
+            msg = (
+                f"{intro} The jackknife estimates sampling error by leaving out one "
+                "observation at a time, and an exact spectrum has no sampling error "
+                "to estimate. For the spread of an estimate, simulate data from the "
+                "model (spectral_connectivity.simulate.simulate_MVAR), estimate the "
+                "measure with Multitaper, and jackknife that."
+            )
+        elif method in {"delay", "group_delay"}:
+            msg = (
+                f"{intro} {method} uses only the frequencies whose coherence passes "
+                "a significance test whose degrees of freedom are n_observations, "
+                "which here counts the columns of that factor, so which frequencies "
+                "it keeps would be arbitrary. phase_slope_index and coherence_phase "
+                f"are computed from the spectral matrix alone; or {simulate}."
+            )
+        else:
+            msg = (
+                f"{intro} {method} averages a function of each trial/taper "
+                "observation (the debiased measures and pairwise phase consistency "
+                "also count them), so its value would depend on an arbitrary choice "
+                "of factor. Use a measure of the cross-spectral matrix (the coherence "
+                "family, partial coherence, the group and global measures, "
+                "phase_slope_index, and the spectral Granger and transfer-function "
+                f"families), or {simulate}."
+            )
         raise ValueError(msg)
 
     @_refused_for_exact_spectrum
