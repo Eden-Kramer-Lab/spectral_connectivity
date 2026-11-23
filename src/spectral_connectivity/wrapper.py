@@ -1087,23 +1087,16 @@ def _transform_metadata(transform: Any) -> dict[str, Any]:
 def _with_validity_coordinate(
     result: xr.DataArray | xr.Dataset,
     validity: NDArray[np.bool_],
-    expected_shape: tuple[int, int],
     consumed_bins: NDArray[np.bool_] | None,
 ) -> xr.DataArray | xr.Dataset:
     """``result`` with a transform's ``valid_time_frequency`` mask as a coordinate.
 
-    ``validity`` is the mask on the full grid, which must have
-    ``expected_shape`` ``(n_time, n_frequencies)``. ``consumed_bins`` marks the
-    bins of a measure that consumes an interval (``delay``, ``group_delay``,
-    ``phase_slope_index``) and is ``None`` for every other measure, which keeps
-    the full grid until it is cropped.
+    ``validity`` is the mask on the full grid, shape ``(n_time,
+    n_frequencies)``. ``consumed_bins`` marks the bins of a measure that
+    consumes an interval (``delay``, ``group_delay``, ``phase_slope_index``)
+    and is ``None`` for every other measure, which keeps the full grid until it
+    is cropped.
     """
-    if validity.shape != expected_shape:
-        msg = (
-            "transform.valid_time_frequency must have shape "
-            f"{expected_shape}, got {validity.shape}."
-        )
-        raise ValueError(msg)
     validity_attrs = {"long_name": "Full wavelet and smoothing support is in-record"}
     if "frequency" in result.dims:
         # delay keeps only the bins of its interval.
@@ -1186,6 +1179,13 @@ def _labeled_measures(
     validity = (
         None if valid_time_frequency is None else to_numpy(valid_time_frequency).astype(bool)
     )
+    expected_shape = (len(connectivity.time), len(frequencies))
+    if validity is not None and validity.shape != expected_shape:
+        msg = (
+            "transform.valid_time_frequency must have shape "
+            f"{expected_shape}, got {validity.shape}."
+        )
+        raise ValueError(msg)
 
     # An integral leaves its densities uncropped, so a band inside the range
     # also integrates the part of it lying in the cell of a bin just outside
@@ -1242,7 +1242,6 @@ def _labeled_measures(
             result = _with_validity_coordinate(
                 result,
                 validity,
-                (len(connectivity.time), len(frequencies)),
                 selection.mask if consumes_range and selection is not None else None,
             )
         if frequency_range is None or consumes_range:
