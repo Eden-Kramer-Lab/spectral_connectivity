@@ -46,6 +46,13 @@ def is_positive_integer(value: Any, minimum: int = 1) -> bool:
     )
 
 
+def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
+    """Return ``random_state`` if it is a Generator, else a Generator seeded by it."""
+    if isinstance(random_state, np.random.Generator):
+        return random_state
+    return np.random.default_rng(random_state)
+
+
 def _validate_sampling_frequency(sampling_frequency: Any) -> float:
     """Validate a sampling rate and return it as a Python ``float``.
 
