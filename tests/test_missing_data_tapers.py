@@ -30,7 +30,7 @@ from spectral_connectivity.transforms import (
 )
 from tests._artifact_helpers import COUNTING_MEASURES, quietly
 from tests._backend_helpers import to_host
-from tests._expected_spectrum import _expected_tapered_cross_spectrum
+from tests._expected_spectrum import _DETREND_BASIS, _expected_tapered_cross_spectrum
 
 SAMPLING_FREQUENCY = 200.0
 WINDOW = 64  # samples
@@ -63,15 +63,39 @@ def _valid(gaps, n_time=WINDOW):
 DROPPED_ANYWAY = "artifact_handling='missing_data_tapers': .* were dropped"
 
 
-def _multitaper(time_series, artifacts, **kwargs):
+def _multitaper(time_series, artifacts, *, quiet=True, transform=Multitaper, **kwargs):
+    """A ``transform`` of ``WINDOW``-sample windows at NW = ``NW`` with
+    missing-data tapers, by default; ``quiet`` ignores ``DROPPED_ANYWAY``."""
     kwargs.setdefault("n_time_samples_per_window", WINDOW)
     kwargs.setdefault("time_halfbandwidth_product", NW)
     kwargs.setdefault("artifact_handling", "missing_data_tapers")
     with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", DROPPED_ANYWAY, UserWarning)
-        return Multitaper(
-            time_series, SAMPLING_FREQUENCY, artifact_samples=artifacts, **kwargs
-        )
+        if quiet:
+            warnings.filterwarnings("ignore", DROPPED_ANYWAY, UserWarning)
+        return transform(time_series, SAMPLING_FREQUENCY, artifact_samples=artifacts, **kwargs)
+
+
+def _plain(time_series, **kwargs):
+    """The same transform without a mask."""
+    return Multitaper(
+        time_series,
+        SAMPLING_FREQUENCY,
+        n_time_samples_per_window=WINDOW,
+        time_halfbandwidth_product=NW,
+        **kwargs,
+    )
+
+
+def _one_window(artifacts, seed):
+    """Missing-data tapers of one 128-sample window at NW = 2, of noise with
+    ``artifacts`` ``(128, n_trials)``."""
+    rng = np.random.default_rng(seed)
+    return _multitaper(
+        rng.standard_normal((*artifacts.shape, 2)),
+        artifacts,
+        time_halfbandwidth_product=2,
+        n_time_samples_per_window=artifacts.shape[0],
+    )
 
 
 @pytest.fixture(scope="module")
@@ -101,9 +125,20 @@ def recording():
 EXPECTED_TAPER_COUNTS = [[5] * 6, [5, 4, 3, 5, 5, 5], [5, 5, 5, 0, 4, 5], [5] * 5 + [0]]
 
 
-def test_each_window_keeps_its_concentrated_tapers(recording):
-    time_series, artifacts = recording
-    multitaper = _multitaper(time_series, artifacts)
+@pytest.fixture(scope="module")
+def missing_data(recording):
+    """The missing-data transform of the recording, for the tests that only read it."""
+    return _multitaper(*recording)
+
+
+def _clean_windows(artifacts):
+    """``True`` at the trial windows without artifacts, ``(n_windows, n_trials)``."""
+    n_trials = artifacts.shape[1]
+    return ~artifacts.reshape(-1, WINDOW, n_trials).any(axis=1)
+
+
+def test_each_window_keeps_its_concentrated_tapers(missing_data):
+    multitaper = missing_data
     weights = to_host(multitaper.observation_weights)
     assert weights.shape == (4, 6, 5, multitaper.n_fft_samples, 1)
     assert (weights == weights[..., :1, :]).all()  # the same at every frequency
@@ -151,11 +186,11 @@ def test_without_gaps_they_are_the_dpss():
     np.testing.assert_allclose(concentrations, ratios, atol=1e-12)
 
 
-def test_the_coefficients_are_those_of_the_brute_force_tapers(recording):
+def test_the_coefficients_are_those_of_the_brute_force_tapers(recording, missing_data):
     """A gapped window's coefficients: its valid samples, less their mean,
     times each brute-force taper scaled as the DPSS are, transformed."""
     time_series, artifacts = recording
-    multitaper = _multitaper(time_series, artifacts)
+    multitaper = missing_data
     coefficients = to_host(multitaper.fft())
     window, trial = 1, 2
     samples = slice(window * WINDOW, (window + 1) * WINDOW)
@@ -179,8 +214,7 @@ def test_a_window_without_artifacts_is_the_standard_estimate_bit_for_bit(
     recording, taper_weighting
 ):
     time_series, artifacts = recording
-    clean = np.array(EXPECTED_TAPER_COUNTS) == 5
-    clean[1, 1:3] = clean[2, 3:5] = clean[3, 5] = False  # windows with an artifact
+    clean = _clean_windows(artifacts)
     missing_data = to_host(
         _multitaper(time_series, artifacts, taper_weighting=taper_weighting).fft()
     )
@@ -196,29 +230,15 @@ def test_a_window_without_artifacts_is_the_standard_estimate_bit_for_bit(
         np.testing.assert_allclose(missing_data[clean], dropped[clean], rtol=1e-6)
         return
     np.testing.assert_array_equal(missing_data[clean], dropped[clean])
-    plain = to_host(
-        Multitaper(
-            np.nan_to_num(time_series),
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            time_halfbandwidth_product=NW,
-            taper_weighting=taper_weighting,
-        ).fft()
-    )
+    plain = to_host(_plain(np.nan_to_num(time_series), taper_weighting=taper_weighting).fft())
     np.testing.assert_array_equal(missing_data[clean], plain[clean])
 
 
 def test_a_mask_without_artifacts_is_the_transform_without_one():
     time_series = np.random.default_rng(1).standard_normal((2 * WINDOW, 3, 2))
     masked = _multitaper(time_series, np.zeros((2 * WINDOW, 3), dtype=bool))
-    plain = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        n_time_samples_per_window=WINDOW,
-        time_halfbandwidth_product=NW,
-    )
     assert masked.observation_weights is None
-    np.testing.assert_array_equal(to_host(masked.fft()), to_host(plain.fft()))
+    np.testing.assert_array_equal(to_host(masked.fft()), to_host(_plain(time_series).fft()))
 
 
 # Measures of each kind: plain averages, normalized and phase-lag families,
@@ -236,11 +256,10 @@ MEASURES = (
 )
 
 
-def test_every_measure_is_that_of_the_kept_observations(recording):
+def test_every_measure_is_that_of_the_kept_observations(missing_data):
     """Each window's measures equal those of its kept (trial, taper)
     coefficients alone, the dropped tapers physically removed."""
-    time_series, artifacts = recording
-    connectivity = Connectivity.from_transform(_multitaper(time_series, artifacts))
+    connectivity = Connectivity.from_transform(missing_data)
     coefficients = to_host(connectivity.fourier_coefficients)
     kept = np.arange(5) < np.array(EXPECTED_TAPER_COUNTS)[..., np.newaxis]
     for window in range(4):
@@ -280,9 +299,7 @@ def test_detrending_uses_the_valid_samples(detrend_type):
     detrended = _detrend_valid_samples(windows, valid, detrend_type)
     assert (detrended[..., ~valid] == 0).all()
     # The least-squares fit to the valid samples alone.
-    basis = np.ones((WINDOW, 1))
-    if detrend_type == "linear":
-        basis = np.column_stack([basis, np.arange(WINDOW)])
+    basis = _DETREND_BASIS[detrend_type](WINDOW)
     fit, *_ = np.linalg.lstsq(
         basis[valid], windows[..., valid].reshape(-1, valid.sum()).T, rcond=None
     )
@@ -329,29 +346,18 @@ def test_blanking_faster_than_the_bandwidth_caps_the_concentration(
     eigenvalues, _ = _brute_force(valid, 2)
     assert eigenvalues[0] <= kept_fraction + 1e-12
     assert eigenvalues[0] > kept_fraction - 1e-3  # and the cap is reached
-    time_series = np.random.default_rng(3).standard_normal((n_time, 2, 2))
     artifacts = np.zeros((n_time, 2), dtype=bool)
     artifacts[:, 1] = ~valid
-    multitaper = _multitaper(
-        time_series,
-        artifacts,
-        time_halfbandwidth_product=2,
-        n_time_samples_per_window=n_time,
+    np.testing.assert_array_equal(
+        to_host(_one_window(artifacts, seed=3).valid_windows), [[True, False]]
     )
-    np.testing.assert_array_equal(to_host(multitaper.valid_windows), [[True, False]])
 
 
 def _blanked_one_sample_in(period):
-    """A Multitaper of one 128-sample window missing every ``period``-th sample."""
-    n_time = 128
-    artifacts = np.zeros((n_time, 1), dtype=bool)
+    """The window missing every ``period``-th sample."""
+    artifacts = np.zeros((128, 1), dtype=bool)
     artifacts[::period] = True
-    return _multitaper(
-        np.random.default_rng(4).standard_normal((n_time, 1, 2)),
-        artifacts,
-        time_halfbandwidth_product=2,
-        n_time_samples_per_window=n_time,
-    )
+    return _one_window(artifacts, seed=4)
 
 
 def test_the_threshold_on_blanking_one_sample_in_a_period():
@@ -363,9 +369,20 @@ def test_the_threshold_on_blanking_one_sample_in_a_period():
         _blanked_one_sample_in(9)
 
 
-def test_eigen_weighting_uses_each_windows_concentrations(recording):
+def test_a_window_keeping_one_concentrated_taper_is_dropped():
+    """50 of 128 samples missing at NW = 2 leaves exactly one taper above 0.9."""
+    artifacts = np.zeros((128, 2), dtype=bool)
+    artifacts[:50, 1] = True
+    eigenvalues, _ = _brute_force(~artifacts[:, 1], 2)
+    assert eigenvalues[0] > 0.9 > eigenvalues[1]
+    multitaper = _one_window(artifacts, seed=6)
+    np.testing.assert_array_equal(to_host(multitaper.n_kept_tapers), [[3, 0]])
+    np.testing.assert_array_equal(to_host(multitaper.valid_windows), [[True, False]])
+
+
+def test_eigen_weighting_uses_each_windows_concentrations(recording, missing_data):
     time_series, artifacts = recording
-    uniform = to_host(_multitaper(time_series, artifacts).fft())
+    uniform = to_host(missing_data.fft())
     eigen = to_host(_multitaper(time_series, artifacts, taper_weighting="eigen").fft())
     window, trial = 1, 1  # four kept tapers
     valid = ~artifacts[window * WINDOW : (window + 1) * WINDOW, trial]
@@ -378,11 +395,13 @@ def test_eigen_weighting_uses_each_windows_concentrations(recording):
     )
 
 
-def test_adaptive_weighting_weights_a_gapped_window_as_a_window_of_its_own(recording):
+def test_adaptive_weighting_weights_a_gapped_window_as_a_window_of_its_own(
+    recording, missing_data
+):
     """Thomson's weights of a gapped window, from its own concentrations and the
     variance of its valid samples, as if its kept tapers were all it had."""
     time_series, artifacts = recording
-    uniform = to_host(_multitaper(time_series, artifacts).fft())
+    uniform = to_host(missing_data.fft())
     adaptive = to_host(_multitaper(time_series, artifacts, taper_weighting="adaptive").fft())
     window, trial = 1, 1
     samples = slice(window * WINDOW, (window + 1) * WINDOW)
@@ -417,15 +436,10 @@ def test_adaptive_weighting_weights_a_gapped_window_as_a_window_of_its_own(recor
 )
 def test_invalid_settings_are_rejected(recording, kwargs, match):
     time_series, artifacts = recording
-    kwargs = {"artifact_samples": artifacts, **kwargs}
+    kwargs = {"artifacts": artifacts, **kwargs}
+    kwargs["artifacts"] = kwargs.pop("artifact_samples", artifacts)
     with pytest.raises(ValueError, match=match):
-        Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            artifact_handling=kwargs.pop("artifact_handling", "missing_data_tapers"),
-            **kwargs,
-        )
+        _multitaper(time_series, **kwargs)
 
 
 def test_the_stft_refuses_missing_data_tapers(recording):
@@ -459,9 +473,9 @@ def test_the_stft_refuses_missing_data_tapers(recording):
     assert stft._provenance_metadata()["artifact_handling"] == "drop"
 
 
-def test_artifact_handling_is_immutable_and_reported(recording):
+def test_artifact_handling_is_immutable_and_reported(recording, missing_data):
     time_series, artifacts = recording
-    multitaper = _multitaper(time_series, artifacts)
+    multitaper = missing_data
     assert multitaper.artifact_handling == "missing_data_tapers"
     with pytest.raises(AttributeError, match="immutable"):
         multitaper.artifact_handling = "drop"
@@ -474,10 +488,8 @@ def test_artifact_handling_is_immutable_and_reported(recording):
         in (repr(multitaper))
     )
     assert f"Artifact samples:              {kept}" in multitaper.summarize_parameters()
-    assert "artifact_handling" not in repr(
-        _multitaper(time_series, artifacts, artifact_handling="drop")
-    )
     dropping = _multitaper(time_series, artifacts, artifact_handling="drop")
+    assert "artifact_handling" not in repr(dropping)
     np.testing.assert_array_equal(
         to_host(dropping.n_kept_tapers), 5 * to_host(dropping.valid_windows)
     )
@@ -490,16 +502,8 @@ def test_artifact_handling_is_immutable_and_reported(recording):
 def test_dropping_windows_with_artifacts_warns(recording):
     """Once, with the count, what the dropped windows look like, the rule
     against the window's 1/(2W), and the remedies."""
-    time_series, artifacts = recording
     with pytest.warns(UserWarning, match=DROPPED_ANYWAY) as record:
-        Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            time_halfbandwidth_product=NW,
-            artifact_samples=artifacts,
-            artifact_handling="missing_data_tapers",
-        )
+        _multitaper(*recording, quiet=False)
     assert len(record) == 1
     message = str(record[0].message)
     for part in (
@@ -514,23 +518,6 @@ def test_dropping_windows_with_artifacts_warns(recording):
         "Multitaper.n_kept_tapers",
     ):
         assert part in message, part
-
-
-def test_a_window_keeping_one_concentrated_taper_is_dropped():
-    """50 of 128 samples missing at NW = 2 leaves exactly one taper above 0.9."""
-    n_time = 128
-    artifacts = np.zeros((n_time, 2), dtype=bool)
-    artifacts[:50, 1] = True
-    eigenvalues, _ = _brute_force(~artifacts[:, 1], 2)
-    assert eigenvalues[0] > 0.9 > eigenvalues[1]
-    multitaper = _multitaper(
-        np.random.default_rng(6).standard_normal((n_time, 2, 2)),
-        artifacts,
-        time_halfbandwidth_product=2,
-        n_time_samples_per_window=n_time,
-    )
-    np.testing.assert_array_equal(to_host(multitaper.n_kept_tapers), [[3, 0]])
-    np.testing.assert_array_equal(to_host(multitaper.valid_windows), [[True, False]])
 
 
 def test_a_long_computation_warns_with_its_estimate(recording, monkeypatch):
@@ -553,58 +540,39 @@ def test_a_long_computation_warns_with_its_estimate(recording, monkeypatch):
         _multitaper(time_series, artifacts)
 
 
-def test_the_drop_warning_names_the_alternative():
-    time_series = np.random.default_rng(7).standard_normal((2 * WINDOW, 1, 2))
-    artifacts = np.zeros((2 * WINDOW, 1), dtype=bool)
-    artifacts[WINDOW + 3] = True
-    with pytest.warns(
-        UserWarning, match=r"Alternatively, artifact_handling='missing_data_tapers'"
-    ):
-        _multitaper(time_series, artifacts, artifact_handling="drop")
-
-
-def test_the_drop_rule_is_stated_once_when_two_warnings_fire():
-    """Window 1, blanked every other sample, is dropped in its only trial: the
-    dropped-anyway warning states the rule, the empty-window one does not."""
+@pytest.mark.parametrize(
+    ("artifact_handling", "rule", "first"),
+    [
+        ("drop", "Alternatively, artifact_handling='missing_data_tapers'", "leaves 1 of 2"),
+        ("missing_data_tapers", "fewer than 2 of its missing-data tapers", "1 of 1 trial"),
+    ],
+    ids=["drop", "missing_data_tapers"],
+)
+def test_the_drop_rule_is_stated_once(artifact_handling, rule, first):
+    """Window 1, blanked every other sample, is dropped in its only trial. The
+    first warning states the handling's rule: drop names missing-data tapers;
+    with those, the dropped-anyway warning comes first, then the empty-window
+    one without the rule."""
     time_series = np.random.default_rng(5).standard_normal((2 * WINDOW, 1, 2))
     artifacts = np.zeros((2 * WINDOW, 1), dtype=bool)
     artifacts[WINDOW::2] = True
     with pytest.warns(UserWarning, match="artifact") as record:
-        Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            time_halfbandwidth_product=NW,
-            artifact_samples=artifacts,
-            artifact_handling="missing_data_tapers",
-        )
+        _multitaper(time_series, artifacts, artifact_handling=artifact_handling, quiet=False)
     messages = [str(warning.message) for warning in record]
-    assert len(messages) == 2
-    assert "1 of 1 trial windows with artifacts kept fewer than 2 tapers" in messages[0]
-    assert "leaves 1 of 2 time windows (0-based indices [1])" in messages[1]
-    rule = "fewer than 2 of its missing-data tapers"
-    assert [rule in message for message in messages] == [True, False]
+    assert first in messages[0]
+    assert "leaves 1 of 2 time windows (0-based indices [1])" in messages[-1]
+    assert [rule in message for message in messages] == [True] + [False] * (len(messages) - 1)
 
 
 def test_a_multitaper_subclass_takes_missing_data_tapers(recording):
     class Subclass(Multitaper):
         pass
 
-    time_series, artifacts = recording
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", DROPPED_ANYWAY, UserWarning)
-        subclass = Subclass(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            time_halfbandwidth_product=NW,
-            artifact_samples=artifacts,
-            artifact_handling="missing_data_tapers",
-        )
+    subclass = _multitaper(*recording, transform=Subclass)
     np.testing.assert_array_equal(to_host(subclass.n_kept_tapers), EXPECTED_TAPER_COUNTS)
 
 
-def test_the_wrapper_takes_artifact_handling_in_transform_kwargs(recording):
+def test_the_wrapper_takes_artifact_handling_in_transform_kwargs(recording, missing_data):
     time_series, artifacts = recording
     transform_kwargs = {
         "n_time_samples_per_window": WINDOW,
@@ -619,11 +587,7 @@ def test_the_wrapper_takes_artifact_handling_in_transform_kwargs(recording):
         time_halfbandwidth_product=NW,
         transform_kwargs=transform_kwargs,
     )
-    direct = quietly(
-        Connectivity.from_transform(
-            _multitaper(time_series, artifacts)
-        ).pairwise_phase_consistency
-    )
+    direct = quietly(Connectivity.from_transform(missing_data).pairwise_phase_consistency)
     np.testing.assert_allclose(result.values, direct, rtol=1e-12, equal_nan=True)
     assert (
         '"artifact_handling":"missing_data_tapers"'
@@ -644,27 +608,32 @@ MC_FREQUENCIES = [6, 9, 12, 15, 18, 21, 24, 27]
 
 @pytest.fixture(scope="module")
 def mc_artifacts():
-    artifacts = np.zeros((N_REPLICATES * WINDOW, MC_TRIALS), dtype=bool)
+    window = np.zeros((WINDOW, MC_TRIALS), dtype=bool)
     for trial, gaps in GAPS.items():
-        for start, length in gaps:
-            for replicate in range(N_REPLICATES):
-                begin = replicate * WINDOW + start
-                artifacts[begin : begin + length, trial] = True
-    return artifacts
+        window[:, trial] = ~_valid(gaps)
+    return np.tile(window, (N_REPLICATES, 1))
 
 
-def _mc_transform(time_series, artifacts=None, artifact_handling="missing_data_tapers"):
-    """The Monte Carlo transform; with ``artifact_handling="drop"`` it warns that
-    it drops most trial windows."""
-    return quietly(
-        Multitaper,
-        time_series,
-        sampling_frequency=WINDOW,
-        time_halfbandwidth_product=NW,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples=artifacts,
-        artifact_handling=artifact_handling if artifacts is not None else "drop",
-    )
+def _mc_transforms(time_series, artifacts):
+    """The Monte Carlo transforms by ``artifact_handling``, ``None`` without
+    a mask; drop warns that it drops most trial windows."""
+    settings = {
+        "sampling_frequency": WINDOW,  # 1 Hz bins
+        "time_halfbandwidth_product": NW,
+        "n_time_samples_per_window": WINDOW,
+    }
+    transforms = {
+        handling: quietly(
+            Multitaper,
+            time_series,
+            artifact_samples=artifacts,
+            artifact_handling=handling,
+            **settings,
+        )
+        for handling in ("missing_data_tapers", "drop")
+    }
+    transforms[None] = Multitaper(time_series, **settings)
+    return transforms
 
 
 def _mean_and_limit(per_replicate):
@@ -679,12 +648,7 @@ def white_noise_transforms(mc_artifacts):
     time_series = np.random.default_rng(10).standard_normal(
         (N_REPLICATES * WINDOW, MC_TRIALS, 2)
     )
-    return {
-        handling: _mc_transform(
-            time_series, None if handling is None else mc_artifacts, handling
-        )
-        for handling in ("missing_data_tapers", "drop", None)
-    }
+    return _mc_transforms(time_series, mc_artifacts)
 
 
 @pytest.fixture
@@ -760,10 +724,10 @@ def test_coupled_coherence_is_close_to_that_without_gaps(mc_artifacts):
     target = 0.8 * np.roll(source, 1, axis=0) + 0.6 * rng.standard_normal(source.shape)
     time_series = np.stack([source, target], axis=-1)
     coherence = {
-        handling: Connectivity.from_transform(
-            _mc_transform(time_series, None if handling is None else mc_artifacts, handling)
-        ).magnitude_squared_coherence()[:, MC_FREQUENCIES, 0, 1]
-        for handling in ("missing_data_tapers", "drop", None)
+        handling: Connectivity.from_transform(transform).magnitude_squared_coherence()[
+            :, MC_FREQUENCIES, 0, 1
+        ]
+        for handling, transform in _mc_transforms(time_series, mc_artifacts).items()
     }
     difference, limit = _mean_and_limit(
         (coherence["missing_data_tapers"] - coherence[None]).mean(axis=1)
@@ -804,9 +768,15 @@ def test_ar_power_averages_to_its_tapers_expectation_near_the_gapless_one(mc_art
         )
     expected = expected[:, 0, 0].real / sum(MC_TAPER_COUNTS) / WINDOW
     gapless = gapless[:, 0, 0].real / WINDOW
-    power = Connectivity.from_transform(_mc_transform(time_series, mc_artifacts)).power(
-        one_sided=False
-    )[:, MC_FREQUENCIES, 0]
+    transform = Multitaper(
+        time_series,
+        sampling_frequency=WINDOW,
+        time_halfbandwidth_product=NW,
+        n_time_samples_per_window=WINDOW,
+        artifact_samples=mc_artifacts,
+        artifact_handling="missing_data_tapers",
+    )
+    power = Connectivity.from_transform(transform).power(one_sided=False)[:, MC_FREQUENCIES, 0]
     mean, limit = _mean_and_limit((power / expected[MC_FREQUENCIES]).mean(axis=1))
     assert abs(mean - 1) < limit, (mean, limit)
     leakage = np.abs(expected[MC_FREQUENCIES] / gapless[MC_FREQUENCIES] - 1)
