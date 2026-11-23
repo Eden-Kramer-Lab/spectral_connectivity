@@ -4053,8 +4053,12 @@ def _multitaper_fft(
 
     Parameters
     ----------
-    tapers : array_like, shape (n_time_samples_per_window, n_tapers)
-    time_series : array_like, shape (n_windows, n_trials, n_time_samples_per_window)
+    tapers : array_like, shape (..., n_time_samples_per_window, n_tapers)
+        One set of tapers for every window, or a set per window broadcasting
+        against the leading axes of ``time_series``.
+    time_series : array_like, shape (..., n_time_samples_per_window)
+        The windows, such as ``(n_windows, n_trials, n_signals,
+        n_time_samples_per_window)``.
     n_fft_samples : int
     sampling_frequency : int
     workers : int, optional
@@ -4065,13 +4069,10 @@ def _multitaper_fft(
 
     Returns
     -------
-    fourier_coefficients : array_like,
-        shape (n_windows, n_trials, n_tapers n_fft_samples, n_signals)
+    fourier_coefficients : array_like, shape (..., n_fft_samples, n_tapers)
 
     """
-    projected_time_series: NDArray[np.floating] = (
-        time_series[..., xp.newaxis] * tapers[xp.newaxis, xp.newaxis, ...]
-    )
+    projected_time_series: NDArray[np.floating] = time_series[..., xp.newaxis] * tapers
     # Only SciPy's CPU FFT accepts ``workers``; cupyx's FFT does not, so pass it
     # only when a worker count is requested and we are on the CPU backend.
     fft_kwargs: dict[str, Any] = {}
