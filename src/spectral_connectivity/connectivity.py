@@ -993,6 +993,13 @@ class Connectivity:
         ``MorletWavelet`` samples closer than four wavelet standard
         deviations). The measures that count observations then warn for
         expectations that include time; it has no effect otherwise.
+    half_bandwidth : float, optional
+        Half-width of the transform's spectral smoothing, in the units of
+        ``frequencies`` (``frequency_resolution / 2`` for ``Multitaper``,
+        which :meth:`from_transform` reads from the transform). Within it of
+        0 Hz and Nyquist the coefficients are not circular;
+        :meth:`surrogate_test` with ``kind="phase_rotation"`` leaves those
+        frequencies untested. ``None`` (the default) when unknown.
 
     Attributes
     ----------
@@ -1160,6 +1167,7 @@ class Connectivity:
         observations_are_independent: bool = True,
         time_bins_are_independent: bool = True,
         *,
+        half_bandwidth: float | None = None,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
         # fourier_coefficients and expectation_type are validated in their
@@ -1188,6 +1196,9 @@ class Connectivity:
         )
         self._time_bins_are_independent = _validated_flag(
             "time_bins_are_independent", time_bins_are_independent
+        )
+        self._half_bandwidth = (
+            None if half_bandwidth is None else _validated_half_bandwidth(half_bandwidth)
         )
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
@@ -1439,13 +1450,15 @@ class Connectivity:
         if frequencies_stale or time_stale or weights_stale:
             warnings.warn(
                 "Reassigning fourier_coefficients changed the FFT/time geometry; "
-                "incompatible frequency/time coordinates and observation weights "
-                "were reset to defaults or cleared. Construct a new Connectivity "
+                "incompatible frequency/time coordinates, observation weights and "
+                "half_bandwidth were reset to defaults or cleared. Construct a new Connectivity "
                 "if you need specific coordinates or weights for the new data.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
             if frequencies_stale:
+                # A half bandwidth is in the units of the discarded coordinate.
+                self._half_bandwidth = None
                 self._frequencies = (
                     xp.linspace(0.0, 0.5, n_fft_samples)
                     if getattr(self, "_is_one_sided", False)
@@ -1646,6 +1659,9 @@ class Connectivity:
         weights = _optional_transform_attribute(transform, "observation_weights", None)
         if weights is not None:
             init_kwargs["observation_weights"] = weights
+        half_bandwidth = _optional_transform_attribute(transform, "half_bandwidth", None)
+        if half_bandwidth is not None:
+            init_kwargs["half_bandwidth"] = half_bandwidth
         # The SpectralTransform contract requires fft() to return a freshly
         # built, unshared array, so adopt it in place instead of copying (see
         # Connectivity._adopt_fourier_coefficients). Only pass the private
@@ -2433,6 +2449,17 @@ class Connectivity:
         return self._observations_are_independent
 
     @property
+    def half_bandwidth(self) -> float | None:
+        """Half-width of the transform's spectral smoothing, or ``None`` if unknown.
+
+        In the units of :attr:`frequencies`. :meth:`from_transform` reads it
+        from the transform (``frequency_resolution / 2`` for
+        :class:`~spectral_connectivity.transforms.Multitaper`); it is the
+        default ``half_bandwidth`` of :meth:`surrogate_test`.
+        """
+        return self._half_bandwidth
+
+    @property
     def time_bins_are_independent(self) -> bool:
         """Whether the time bins may be counted as independent observations.
 
@@ -2788,6 +2815,7 @@ class Connectivity:
                 is_one_sided=self._is_one_sided,
                 observation_weights=subset_weights,
                 observations_are_independent=self._observations_are_independent,
+                half_bandwidth=self._half_bandwidth,
                 _adopt_fourier_coefficients=True,
             )
             token = _emit_migration_notices.set(False)
@@ -2922,12 +2950,14 @@ class Connectivity:
             n_signals)``, ``fwer_axis=(1, 2, 3)`` corrects across
             frequencies and pairs separately in each time window.
         half_bandwidth : float, optional
-            Required for ``kind="phase_rotation"`` and refused otherwise: the
+            For ``kind="phase_rotation"`` only (refused otherwise): the
             half-width of the transform's spectral smoothing, in the units of
-            ``frequencies``. For a :class:`~spectral_connectivity.Multitaper`
-            transform it is ``frequency_resolution / 2``
-            (``time_halfbandwidth_product / time_window_duration``). The
-            frequencies below it and above Nyquist minus it are not tested.
+            ``frequencies``. The frequencies below it and above Nyquist minus
+            it are not tested. Defaults to :attr:`half_bandwidth`, which
+            :meth:`from_transform` records for a
+            :class:`~spectral_connectivity.Multitaper` transform
+            (``frequency_resolution / 2``); pass it for coefficients from
+            elsewhere.
         random_state : int, numpy.random.Generator, or None
             Seed or generator of the surrogates' random numbers. ``None``
             draws a fresh seed.
@@ -3139,9 +3169,10 @@ class Connectivity:
                 f"{', '.join(map(repr, _SURROGATE_ALTERNATIVES))}, got {alternative!r}."
             )
             raise ValueError(msg)
-        if kind == "phase_rotation":
-            half_bandwidth = self._validated_half_bandwidth(half_bandwidth)
-        elif half_bandwidth is not None:
+        rotation_half_bandwidth = (
+            self._rotation_half_bandwidth(half_bandwidth) if kind == "phase_rotation" else None
+        )
+        if kind != "phase_rotation" and half_bandwidth is not None:
             msg = (
                 f"half_bandwidth applies only to kind='phase_rotation', whose "
                 f"surrogates are invalid near 0 Hz and Nyquist; kind={kind!r} "
@@ -3169,10 +3200,9 @@ class Connectivity:
             else _normalized_axes(fwer_axis, estimate.ndim, "fwer_axis")
         )
         tested = np.isfinite(estimate) & ~np.eye(self.n_signals, dtype=bool)
-        if kind == "phase_rotation":
-            assert half_bandwidth is not None  # validated above
+        if rotation_half_bandwidth is not None:
             tested &= self._rotation_valid_frequencies(
-                method, estimate, half_bandwidth, method_kwargs
+                method, estimate, rotation_half_bandwidth, method_kwargs
             )
         tally = _SurrogateTally(
             _surrogate_statistic(estimate, alternative), tested, family_axes, n_surrogates
@@ -3191,6 +3221,7 @@ class Connectivity:
                 observation_weights=self._observation_weights,
                 observations_are_independent=self._observations_are_independent,
                 time_bins_are_independent=self._time_bins_are_independent,
+                half_bandwidth=self._half_bandwidth,
                 _adopt_fourier_coefficients=True,
             )
             token = _emit_migration_notices.set(False)
@@ -3215,8 +3246,11 @@ class Connectivity:
             fwer_axis=family_axes,
         )
 
-    def _validated_half_bandwidth(self, half_bandwidth: Any) -> float:
-        """``half_bandwidth`` for ``kind="phase_rotation"``, or the error it raises."""
+    def _rotation_half_bandwidth(self, half_bandwidth: float | None) -> float:
+        """The half bandwidth ``kind="phase_rotation"`` masks with, or the error it raises.
+
+        An explicit ``half_bandwidth`` overrides the one this instance holds.
+        """
         if self._is_one_sided:
             msg = (
                 "surrogate_test(kind='phase_rotation') needs two-sided coefficients: "
@@ -3227,23 +3261,21 @@ class Connectivity:
                 "kind='conjugation', or a two-sided transform such as Multitaper."
             )
             raise ValueError(msg)
-        if (
-            half_bandwidth is None
-            or isinstance(half_bandwidth, (bool, np.bool_))
-            or not isinstance(half_bandwidth, (int, float, np.integer, np.floating))
-            or not np.isfinite(half_bandwidth)
-            or half_bandwidth <= 0
-        ):
+        if half_bandwidth is None:
+            half_bandwidth = self._half_bandwidth
+        if half_bandwidth is None:
             msg = (
-                "surrogate_test(kind='phase_rotation') needs half_bandwidth, the "
-                "half-width of the transform's spectral smoothing in the units of "
-                f"frequencies, as a positive number; got {half_bandwidth!r}. Rotated "
-                "coefficients within it of 0 Hz or Nyquist are not valid "
-                "surrogates, so those frequencies are not tested. For a Multitaper "
-                "transform pass half_bandwidth=multitaper.frequency_resolution / 2."
+                "surrogate_test(kind='phase_rotation') needs the half-width of the "
+                "transform's spectral smoothing, and this Connectivity does not "
+                "know it (half_bandwidth is None). Rotated coefficients within it "
+                "of 0 Hz or Nyquist are not valid surrogates, so those frequencies "
+                "are not tested. Build the Connectivity with "
+                "Connectivity.from_transform(multitaper), which records it, or pass "
+                "half_bandwidth= in the units of frequencies (for a Multitaper, "
+                "multitaper.frequency_resolution / 2)."
             )
             raise ValueError(msg)
-        return float(half_bandwidth)
+        return _validated_half_bandwidth(half_bandwidth)
 
     def _surrogate_unit_axes(self, kind: str, n_surrogates: int) -> tuple[int, ...]:
         """Observation axes indexing the independent units a surrogate randomizes.
@@ -7664,6 +7696,23 @@ class Connectivity:
             xp.conj(bandpassed_coherency[..., :-1, :, :]) * bandpassed_coherency[..., 1:, :, :]
         ).sum(axis=-3)
         return adjacent_product.imag
+
+
+def _validated_half_bandwidth(half_bandwidth: Any) -> float:
+    """``half_bandwidth`` as a float, or a ``ValueError`` unless finite and positive."""
+    if (
+        isinstance(half_bandwidth, (bool, np.bool_))
+        or not isinstance(half_bandwidth, (int, float, np.integer, np.floating))
+        or not np.isfinite(half_bandwidth)
+        or half_bandwidth <= 0
+    ):
+        msg = (
+            "half_bandwidth must be a positive number, the half-width of the "
+            "transform's spectral smoothing in the units of frequencies (for a "
+            f"Multitaper, frequency_resolution / 2); got {half_bandwidth!r}."
+        )
+        raise ValueError(msg)
+    return float(half_bandwidth)
 
 
 def _real_array_result(

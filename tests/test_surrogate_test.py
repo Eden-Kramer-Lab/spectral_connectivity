@@ -461,11 +461,11 @@ def small_connectivity():
             ValueError,
             "alternative must be one of",
         ),
-        ({"kind": "phase_rotation"}, ValueError, "needs half_bandwidth"),
+        ({"kind": "phase_rotation"}, ValueError, "does not know it"),
         (
             {"kind": "phase_rotation", "half_bandwidth": -1.0},
             ValueError,
-            "needs half_bandwidth",
+            "half_bandwidth must be a positive number",
         ),
         ({"kind": "phase_rotation", "half_bandwidth": 0.6}, ValueError, "tests no frequency"),
         (
@@ -803,3 +803,65 @@ def test_a_shared_evoked_response_is_in_the_shuffle_null_but_not_the_rotation_nu
     _, limit = _assert_rate(rates["trial_shuffle"], _ALPHA, label="trial_shuffle")
     _assert_rate(rates["conjugation"], _ALPHA, allowance=0.02, label="conjugation")
     assert rates["phase_rotation"].mean() > _ALPHA + 5 * limit
+
+
+def test_phase_rotation_uses_the_half_bandwidth_from_the_transform(lagged_connectivity):
+    """from_transform records the Multitaper's half bandwidth (NW / T = 2 Hz
+    here), which phase_rotation uses unless one is passed; reassigning
+    coefficients of another FFT length forgets it."""
+    assert lagged_connectivity.half_bandwidth == 2.0
+    recorded = lagged_connectivity.surrogate_test(
+        "magnitude_squared_coherence", kind="phase_rotation", n_surrogates=4, random_state=0
+    )
+    explicit = lagged_connectivity.surrogate_test(
+        "magnitude_squared_coherence",
+        kind="phase_rotation",
+        half_bandwidth=2.0,
+        n_surrogates=4,
+        random_state=0,
+    )
+    np.testing.assert_array_equal(recorded.p_value, explicit.p_value)
+    wider = lagged_connectivity.surrogate_test(
+        "magnitude_squared_coherence",
+        kind="phase_rotation",
+        half_bandwidth=5.0,
+        n_surrogates=4,
+        random_state=0,
+    )
+    assert np.isnan(wider.p_value[0, :5, 0, 1]).all()
+    assert np.isfinite(wider.p_value[0, 5, 0, 1])
+
+    connectivity = Connectivity(
+        lagged_connectivity.fourier_coefficients,
+        frequencies=lagged_connectivity.all_frequencies,
+        half_bandwidth=2.0,
+    )
+    with pytest.warns(UserWarning, match="half_bandwidth were reset"):
+        connectivity.fourier_coefficients = _coefficients(
+            np.random.default_rng(0), (1, 4, 3, 8, 3)
+        )
+    assert connectivity.half_bandwidth is None
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, np.inf, True, "2"])
+def test_connectivity_refuses_an_invalid_half_bandwidth(value):
+    with pytest.raises(ValueError, match="half_bandwidth must be a positive number"):
+        Connectivity(_coefficients(np.random.default_rng(0)), half_bandwidth=value)
+
+
+def test_jackknife_replicates_keep_the_half_bandwidth(lagged_connectivity, monkeypatch):
+    """Every Connectivity the jackknife and surrogate test rebuild carries it."""
+    seen = []
+    original = Connectivity.__init__
+
+    def recording_init(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        seen.append(self.half_bandwidth)
+
+    monkeypatch.setattr(Connectivity, "__init__", recording_init)
+    lagged_connectivity.jackknife("magnitude_squared_coherence")
+    lagged_connectivity.surrogate_test(
+        "magnitude_squared_coherence", kind="conjugation", n_surrogates=2, random_state=0
+    )
+    assert seen
+    assert set(seen) == {2.0}

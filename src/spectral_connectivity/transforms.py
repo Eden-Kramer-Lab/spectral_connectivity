@@ -668,6 +668,13 @@ class SpectralTransform(Protocol):
         Whether successive time windows are independent (e.g. ``False`` for
         windows overlapping by more than half). It affects only expectations that
         average over time.
+    ``half_bandwidth`` : float, default None
+        Half-width of the transform's spectral smoothing, in Hz (the units of
+        ``frequencies``): within it of 0 Hz and Nyquist the coefficients of a
+        real signal are not circular. :class:`Multitaper` defines it as
+        ``frequency_resolution / 2``. ``None`` means unknown;
+        :meth:`Connectivity.surrogate_test` with ``kind="phase_rotation"``
+        then needs it passed explicitly.
 
     ``isinstance`` checks only that ``fft``, ``frequencies``, and ``time``
     exist (on Python 3.11 and earlier it also evaluates the two properties).
@@ -2317,6 +2324,23 @@ class Multitaper(_WindowedFourierTransform):
         return estimate_frequency_resolution(
             self.sampling_frequency, self.time_window_duration, self.time_halfbandwidth_product
         )
+
+    @property
+    def half_bandwidth(self) -> float:
+        """Return the half bandwidth W, ``frequency_resolution / 2``, in Hz.
+
+        ``time_halfbandwidth_product / time_window_duration``. Within W of 0 Hz
+        and of Nyquist the eigencoefficients of a real signal are not circular
+        (they mix the spectrum at ``f`` and ``-f``), which
+        :meth:`Connectivity.surrogate_test` reads to leave those frequencies
+        untested with ``kind="phase_rotation"``.
+
+        Returns
+        -------
+        float
+            Half bandwidth in Hz.
+        """
+        return self.frequency_resolution / 2
 
     @property
     def observations_are_independent(self) -> bool:
