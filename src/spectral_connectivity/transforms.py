@@ -2434,8 +2434,11 @@ class Multitaper(_WindowedFourierTransform):
         ValueError
             If the tapers are custom (the test's null distribution is that of
             orthonormal DPSS tapers with a known bandwidth), there are fewer
-            than two tapers (no degrees of freedom are left for the noise), or
-            ``n_fft_samples`` is shorter than the window.
+            than two tapers (no degrees of freedom are left for the noise),
+            ``n_fft_samples`` is shorter than the window, or artifact windows
+            are estimated with missing-data tapers
+            (``artifact_handling="missing_data_tapers"``), whose taper sums
+            and counts differ from window to window.
 
         Notes
         -----
@@ -2455,7 +2458,9 @@ class Multitaper(_WindowedFourierTransform):
           ``-f``. Within ``W`` of 0 Hz or of the Nyquist frequency the two
           overlap within the tapers' bandwidth, so the test does not hold
           there and those frequencies are NaN. So is every field of a window
-          whose coefficients are all zero (a flat signal) or not finite.
+          whose coefficients are all zero (a flat signal) or not finite, and
+          of a trial's window that ``artifact_samples`` leaves out (see
+          ``valid_windows``): its coefficients come from zero-filled samples.
         - **The line must be stable** in amplitude and frequency over each
           window; a line that drifts is spread over neighboring frequencies.
         - **Between bins**: a line off the test's grid puts part of its power
@@ -2539,6 +2544,21 @@ class Multitaper(_WindowedFourierTransform):
                 "custom tapers need not be. Build the Multitaper without tapers=."
             )
             raise ValueError(msg)
+        # Settings that exist only where artifact handling does; read with
+        # getattr so the checks apply as soon as it is present.
+        if (
+            getattr(self, "artifact_handling", "drop") == "missing_data_tapers"
+            and getattr(self, "artifact_samples", None) is not None
+        ):
+            msg = (
+                "harmonic_f_test needs one set of DPSS tapers for every window, but "
+                "artifact_handling='missing_data_tapers' gives each window with "
+                "artifacts its own tapers, with their own sums and number, which the "
+                "test's fit and its F(2, 2K - 2) null do not allow. Run it on a "
+                "Multitaper with artifact_handling='drop' (its left-out windows are "
+                "NaN), or before marking artifacts."
+            )
+            raise ValueError(msg)
         n_tapers = self.n_tapers
         if n_tapers < 2:
             msg = (
@@ -2588,6 +2608,15 @@ class Multitaper(_WindowedFourierTransform):
         # NaN), so its fit is meaningless too (angle(0) is 0).
         center = (window - 1) / (2 * self.sampling_frequency)
         mask = undefined[:, np.newaxis] | np.isnan(f_statistic)
+        valid_windows = getattr(self, "valid_windows", None)
+        if valid_windows is not None:
+            # A left-out window's coefficients come from zero-filled samples.
+            mask = (
+                mask
+                | ~np.asarray(to_numpy(valid_windows), dtype=bool)[
+                    :, :, np.newaxis, np.newaxis
+                ]
+            )
         f_statistic = np.where(mask, np.nan, f_statistic)
         complex_amplitude = np.where(
             mask,

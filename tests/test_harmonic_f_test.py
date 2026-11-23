@@ -287,3 +287,39 @@ def test_rejects_an_fft_shorter_than_the_window(n_fft_samples):
     multitaper = Multitaper(np.zeros((300, 1, 1)), _SAMPLING_FREQUENCY)
     with pytest.raises(ValueError, match="at least the window's 300 samples"):
         multitaper.harmonic_f_test(n_fft_samples=n_fft_samples)
+
+
+def test_left_out_windows_are_nan(monkeypatch):
+    """A trial's window that artifact_samples leaves out (valid_windows False)
+    is NaN in every field: its coefficients come from zero-filled samples.
+    ``valid_windows`` exists where artifact handling does; set it here so the
+    rule is tested on every branch."""
+    rng = np.random.default_rng(3)
+    multitaper = Multitaper(
+        rng.standard_normal((400, 2, 2)),
+        200,
+        time_window_duration=1.0,
+        time_halfbandwidth_product=3,
+    )
+    kept = np.array([[True, False], [True, True]])
+    monkeypatch.setattr(multitaper, "valid_windows", kept, raising=False)
+    result = multitaper.harmonic_f_test()
+    for field in (result.f_statistic, result.p_value, result.amplitude, result.phase):
+        assert np.isnan(field[0, 1]).all()
+        interior = ~np.isnan(field[1, 0])
+        assert interior.any()
+
+
+def test_missing_data_tapers_are_refused(monkeypatch):
+    """Per-window missing-data tapers have their own sums and counts, which the
+    test's fit and null do not allow."""
+    rng = np.random.default_rng(4)
+    multitaper = Multitaper(
+        rng.standard_normal((200, 1, 2)), 200, time_halfbandwidth_product=3
+    )
+    monkeypatch.setattr(multitaper, "artifact_handling", "missing_data_tapers", raising=False)
+    monkeypatch.setattr(
+        multitaper, "artifact_samples", np.zeros((200, 1), bool), raising=False
+    )
+    with pytest.raises(ValueError, match="missing_data_tapers"):
+        multitaper.harmonic_f_test()
