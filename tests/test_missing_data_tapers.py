@@ -566,9 +566,12 @@ def test_artifact_handling_is_immutable_and_reported(recording, missing_data):
         f"artifact_samples={kept},\n           artifact_handling='missing_data_tapers')"
         in (repr(multitaper))
     )
-    assert f"Artifact samples:              {kept}" in multitaper.summarize_parameters()
+    summary = multitaper.summarize_parameters()
+    assert f"Artifact samples:              {kept}" in summary
+    assert "Artifact handling:             missing_data_tapers" in summary
     dropping = _multitaper(time_series, artifacts, artifact_handling="drop")
     assert "artifact_handling" not in repr(dropping)
+    assert "Artifact handling" not in dropping.summarize_parameters()
     np.testing.assert_array_equal(
         to_host(dropping.n_kept_tapers), 5 * to_host(dropping.valid_windows)
     )
@@ -654,6 +657,33 @@ def test_line_removal_is_refused(recording, set_first):
     with pytest.raises(ValueError, match="line_frequencies cannot be combined with"):
         _multitaper(*recording, transform=transform, **kwargs)
     _multitaper(*recording, transform=transform, artifact_handling="drop", **kwargs)
+
+
+def test_a_refused_line_frequencies_is_not_stored(missing_data):
+    """The guard raises before the value is set, so the transform stays valid."""
+    before = getattr(missing_data, "line_frequencies", None)
+    with pytest.raises(ValueError, match="line_frequencies cannot be combined with"):
+        missing_data.line_frequencies = [60.0]
+    assert getattr(missing_data, "line_frequencies", None) is before
+
+
+def test_lanczos_that_does_not_converge_falls_back_to_the_dense_solve(monkeypatch):
+    from scipy.sparse.linalg import ArpackNoConvergence
+
+    from spectral_connectivity import transforms
+
+    def no_convergence(*args, **kwargs):
+        msg = "no convergence"
+        raise ArpackNoConvergence(msg, np.empty(0), np.empty((0, 0)))
+
+    valid = _valid([(20, 4)])
+    reference = dpss(WINDOW, NW, 5).T
+    converged = _missing_data_slepian_tapers(valid, NW, 5, reference)
+    monkeypatch.setattr(transforms, "scipy_eigsh", no_convergence)
+    tapers, concentrations = _missing_data_slepian_tapers(valid, NW, 5, reference)
+    eigenvalues, _ = _brute_force(valid, NW)
+    np.testing.assert_allclose(concentrations, eigenvalues[:5], atol=1e-12)
+    np.testing.assert_allclose(tapers, converged[0], atol=1e-10)
 
 
 @pytest.mark.skipif(

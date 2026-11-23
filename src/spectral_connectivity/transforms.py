@@ -20,7 +20,7 @@ from numpy.typing import NDArray
 from scipy.linalg import eigh as scipy_eigh
 from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
-from scipy.sparse.linalg import LinearOperator
+from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator
 from scipy.sparse.linalg import eigsh as scipy_eigsh
 
 from spectral_connectivity._array_utils import _divide_where
@@ -1419,6 +1419,8 @@ class _WindowedFourierTransform:
                 *spectral_rows,
                 ("Artifact samples", self._artifact_samples_description()),
             ]
+            if self.artifact_handling != "drop":
+                spectral_rows.append(("Artifact handling", self.artifact_handling))
         spectral = "\n".join(
             f"{label + ':':<31}{value}"
             for label, value in [
@@ -2399,9 +2401,9 @@ class Multitaper(_WindowedFourierTransform):
                 "Multitaper instance with the desired parameters."
             )
             raise AttributeError(msg)
-        object.__setattr__(self, name, value)
         if name in ("artifact_handling", "line_frequencies"):
-            self._refuse_line_removal_with_missing_data_tapers()
+            self._refuse_line_removal_with_missing_data_tapers(**{name: value})
+        object.__setattr__(self, name, value)
 
     @reject_sampling_frequency_aliases
     def __init__(
@@ -2628,13 +2630,17 @@ class Multitaper(_WindowedFourierTransform):
         self._set_artifact_samples(artifact_samples)
         object.__setattr__(self, "_initialized", True)
 
-    def _refuse_line_removal_with_missing_data_tapers(self) -> None:
+    def _refuse_line_removal_with_missing_data_tapers(self, **new: Any) -> None:
         """Raise if line removal (``line_frequencies``, when Multitaper has
-        it) is combined with ``artifact_handling="missing_data_tapers"``;
-        called by :meth:`__setattr__` when either is set."""
-        line_frequencies = getattr(self, "line_frequencies", None)
+        it) would be combined with ``artifact_handling="missing_data_tapers"``;
+        called by :meth:`__setattr__` with the value about to be set, before
+        it is stored."""
+        line_frequencies = new.get("line_frequencies", getattr(self, "line_frequencies", None))
+        artifact_handling = new.get(
+            "artifact_handling", getattr(self, "artifact_handling", "drop")
+        )
         if (
-            getattr(self, "artifact_handling", "drop") != "missing_data_tapers"
+            artifact_handling != "missing_data_tapers"
             or line_frequencies is None
             or np.size(line_frequencies) == 0
         ):
@@ -4913,12 +4919,23 @@ def _leading_eigenpairs(
     found, and the pairs are recomputed on their span. ARPACK needs more
     Lanczos vectors than eigenpairs and fewer than the matrix order; at or
     below its default count, ``max(2 k + 1, 20)``, the matrix is solved
-    densely.
+    densely, as it is if ARPACK does not converge.
     """
     n = indices.size
-    if n <= max(2 * k + 1, 20):
-        kernel = first_row[np.abs(indices[:, np.newaxis] - indices[np.newaxis, :])]
-        return scipy_eigh(kernel, subset_by_index=[n - k, n - 1])
+    if n > max(2 * k + 1, 20):
+        try:
+            return _lanczos_eigenpairs(first_row, indices, k)
+        except ArpackNoConvergence:
+            pass
+    kernel = first_row[np.abs(indices[:, np.newaxis] - indices[np.newaxis, :])]
+    return scipy_eigh(kernel, subset_by_index=[n - k, n - 1])
+
+
+def _lanczos_eigenpairs(
+    first_row: NDArray[np.floating], indices: NDArray[np.intp], k: int
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+    """The Lanczos solve and completeness check of :func:`_leading_eigenpairs`."""
+    n = indices.size
     operator = _restricted_toeplitz_operator(first_row, indices)
     # Generic, so no eigenvector is orthogonal to it by symmetry.
     start = np.random.default_rng(0).standard_normal(n)
