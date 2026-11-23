@@ -1572,8 +1572,8 @@ def multitaper_connectivity(
     ``canonical_coherency``, and the global-coherence vectors) need an engine
     that stores complex data, e.g.
     ``result.to_netcdf("result.h5", engine="h5netcdf", invalid_netcdf=True)``,
-    or netCDF4 >= 1.7 with ``engine="netcdf4", auto_complex=True`` (open with the
-    same option).
+    or netCDF4 >= 1.7 with xarray >= 2024.10 and
+    ``engine="netcdf4", auto_complex=True`` (open with the same option).
 
     The result records provenance as NetCDF-safe attributes so a saved file is
     self-describing:
