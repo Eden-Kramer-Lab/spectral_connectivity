@@ -1067,10 +1067,12 @@ def _transform_metadata(transform: Any) -> dict[str, Any]:
     which coordinates it left to ``Connectivity``: normalized frequencies and
     window indices, not Hz and seconds.
     """
+    metadata: dict[str, Any]
     provenance_metadata = getattr(transform, "_provenance_metadata", None)
     if provenance_metadata is not None:
-        return dict(provenance_metadata())
-    metadata: dict[str, Any] = {"transform": type(transform).__name__}
+        metadata = provenance_metadata()
+        return metadata
+    metadata = {"transform": type(transform).__name__}
     if transform.frequencies is None:
         metadata.update(
             frequency_coordinate="normalized",
@@ -1816,7 +1818,7 @@ def multitaper_connectivity(
     # Capture metadata and build the shared calculation object from the same
     # immutable transform. The private formatter below never accepts a separate
     # Multitaper, so data and labels cannot be paired accidentally.
-    metadata = _transform_metadata(m)
+    metadata = m._provenance_metadata()
     shared_connectivity = Connectivity.from_transform(
         m,
         dtype=dtype,
