@@ -12,22 +12,38 @@ from spectral_connectivity.wrapper import (
 )
 
 
-@pytest.mark.parametrize(
-    ("method", "received"),
-    [(None, "None"), (3, "int 3"), (["power", 3], "a list holding int 3")],
-    ids=["none", "not-a-name", "list-holding-not-a-name"],
-)
-def test_connectivity_to_xarray_rejects_a_method_that_is_not_names(method, received):
-    """connectivity_to_xarray takes a name or a list of names; it has no default
-    set for None to request."""
-    transform = Multitaper(
+@pytest.fixture(scope="module")
+def two_signal_multitaper():
+    return Multitaper(
         np.random.default_rng(0).standard_normal((256, 3, 2)), sampling_frequency=100
     )
+
+
+@pytest.mark.parametrize(
+    ("method", "received"),
+    [(3, "int 3"), (["power", 3], "a list holding int 3")],
+    ids=["not-a-name", "list-holding-not-a-name"],
+)
+def test_connectivity_to_xarray_rejects_a_method_that_is_not_names(
+    two_signal_multitaper, method, received
+):
+    """connectivity_to_xarray takes a name or a list of names."""
     with pytest.raises(
         TypeError,
         match=rf"^method must be a measure name \(str\) or a list of names, got {received}\.",
     ):
-        connectivity_to_xarray(transform, method)
+        connectivity_to_xarray(two_signal_multitaper, method)
+
+
+def test_connectivity_to_xarray_rejects_none_and_names_the_default_set(
+    two_signal_multitaper,
+):
+    """It has no default set for None to request, so the error says how to ask
+    for multitaper_connectivity's."""
+    with pytest.raises(TypeError, match=r"^method=None is not accepted") as excinfo:
+        connectivity_to_xarray(two_signal_multitaper, None)
+    assert "method=spectral_connectivity.DEFAULT_METHODS" in str(excinfo.value)
+    assert "list_measures()" in str(excinfo.value)
 
 
 def test_time_halfbandwidth_product_kwarg_passthrough():
