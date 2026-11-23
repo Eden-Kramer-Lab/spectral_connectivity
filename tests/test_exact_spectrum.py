@@ -28,6 +28,7 @@ _MEASURE_KWARGS = {
     "maximized_imaginary_coherency_components": {"group_labels": _GROUPS},
     "multivariate_interaction_measure": {"group_labels": _GROUPS},
     "blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
+    "time_reversed_blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
     "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
 }
 _REFUSED = [

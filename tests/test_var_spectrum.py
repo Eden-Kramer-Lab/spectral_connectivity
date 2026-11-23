@@ -196,40 +196,52 @@ def test_pairwise_conditional_and_time_reversed_granger_match_the_state_space_or
     )
 
     conditional = _directed(connectivity, "conditional_spectral_granger_prediction")[0]
+    reversed_conditional = _directed(
+        connectivity, "time_reversed_conditional_spectral_granger_prediction"
+    )[0]
     for source, target in zip(*np.nonzero(_OFF_DIAGONAL), strict=True):
-        np.testing.assert_allclose(
-            conditional[:, source, target],
-            _state_space_conditional_granger(
-                coefficients, noise_covariance, n_fft, target, source
-            ),
-            rtol=0,
-            atol=1e-9,
-            err_msg=f"{source} -> {target}",
-        )
+        for result, model in (
+            (conditional, (coefficients, noise_covariance)),
+            (reversed_conditional, reversed_var),
+        ):
+            np.testing.assert_allclose(
+                result[:, source, target],
+                _state_space_conditional_granger(*model, n_fft, target, source),
+                rtol=0,
+                atol=1e-9,
+                err_msg=f"{source} -> {target}",
+            )
 
 
 def test_blockwise_granger_matches_the_state_space_oracle():
-    """Between groups of a 5-signal model whose groups differ in size."""
+    """Between groups of a 5-signal model whose groups differ in size, forward
+    and time-reversed (the state-space Granger of the VAR read backwards)."""
     coefficients, noise_covariance = _dense_stable_var(
         n_signals=5, n_lags=2, spectral_radius=0.8, seed=0
     )
     var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
     group_labels = ["a", "b", "b", "c", "c"]
-    blockwise, labels = _directed(
-        _tightly_factored(var),
-        "blockwise_spectral_granger_prediction",
-        group_labels=group_labels,
-    )
-    blocks = [
-        [i for i, label in enumerate(group_labels) if label == group] for group in labels
-    ]
-    oracle = _block_granger_from_state_space(
-        coefficients, noise_covariance, var.n_fft_samples, blocks
-    )
-    assert oracle[:, _OFF_DIAGONAL].max(axis=0).min() > 0.01
-    np.testing.assert_allclose(
-        blockwise[0][:, _OFF_DIAGONAL], oracle[:, _OFF_DIAGONAL], rtol=0, atol=1e-9
-    )
+    connectivity = _tightly_factored(var)
+    for measure, model in (
+        ("blockwise_spectral_granger_prediction", (coefficients, noise_covariance)),
+        (
+            "time_reversed_blockwise_spectral_granger_prediction",
+            _time_reversed_var(coefficients, noise_covariance),
+        ),
+    ):
+        blockwise, labels = _directed(connectivity, measure, group_labels=group_labels)
+        blocks = [
+            [i for i, label in enumerate(group_labels) if label == group] for group in labels
+        ]
+        oracle = _block_granger_from_state_space(*model, var.n_fft_samples, blocks)
+        assert oracle[:, _OFF_DIAGONAL].max(axis=0).min() > 0.01
+        np.testing.assert_allclose(
+            blockwise[0][:, _OFF_DIAGONAL],
+            oracle[:, _OFF_DIAGONAL],
+            rtol=0,
+            atol=1e-9,
+            err_msg=measure,
+        )
 
 
 @pytest.mark.parametrize(
