@@ -2380,6 +2380,26 @@ class Connectivity:
         return _divide_where(numerator, denominator, denominator > 0, xp.nan)
 
     @cached_property
+    def _kept_observations(self) -> BackendArray | None:
+        """The observations 0/1 weights keep, when they are the same at every
+        frequency: ``(n_time_windows, n_trials, n_tapers, 1, 1)`` booleans.
+
+        ``Multitaper(artifact_samples=...)`` gives such weights. The phase-lag
+        moments then zero each dropped observation of a tile in place and
+        divide by the count kept, the values of the weighted path at a
+        fraction of its cost (the other expectations multiply by the weights
+        either way). ``None`` without weights or for any other weights.
+        """
+        weights = self._observation_weights
+        if weights is None:
+            return None
+        first = weights[..., :1, :]
+        if not bool(xp.all((first == 0) | (first == 1))) or not bool(xp.all(weights == first)):
+            return None
+        kept: BackendArray = first > 0
+        return kept
+
+    @cached_property
     def _observation_weights_only_drop(self) -> bool:
         """Whether the observation weights only keep or drop observations.
 
@@ -2392,7 +2412,7 @@ class Connectivity:
         the weights also reweight the observations they keep (a smoothing
         kernel other than a boxcar), which those measures refuse.
         """
-        if self._observation_weights is None:
+        if self._observation_weights is None or self._kept_observations is not None:
             return True
         weights = self._observation_weights[..., 0]
         kept_axes = self._kept_observation_axes
@@ -5105,9 +5125,8 @@ class Connectivity:
             # Filled here and cached only once complete, so an error partway
             # through leaves no uninitialized moments behind.
             if (
-                self._observation_weights is None
-                and self.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS
-            ):
+                self._observation_weights is None or self._kept_observations is not None
+            ) and self.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS:
                 computed_keys = list(_IMAGINARY_MOMENTS)
             else:
                 computed_keys = list(dict.fromkeys(key for key in keys if key not in cache))
@@ -5229,7 +5248,8 @@ class Connectivity:
         :meth:`_expectation`, which needs the per-observation values.
         """
         block = (..., slice(start, stop), slice(start, None))
-        if self._observation_weights is not None:
+        keep = self._kept_observations
+        if self._observation_weights is not None and keep is None:
             if "sign" in moments or "nonzero" in moments:
                 # One sign pass into the scratch buffer serves both moments.
                 xp.sign(imaginary, out=scratch)
@@ -5244,28 +5264,54 @@ class Connectivity:
             return
 
         observation_axes = self._expectation_axes
-        n_observations = self.n_observations
+        if keep is not None:
+            # Zero the dropped observations in place (they add nothing to any
+            # sum) and divide each sum by the count kept.
+            keep = keep[..., 0, 0].reshape((*keep.shape[:3], 1, 1, 1))
+            xp.copyto(imaginary, 0, where=~keep)
+            count = xp.sum(keep, axis=observation_axes)
+
+            def mean(total: BackendArray) -> BackendArray:
+                return _divide_where(total, count, count > 0, xp.nan)
+
+        else:
+            n_observations = self.n_observations
+
+            def mean(total: BackendArray) -> BackendArray:
+                return total / n_observations
+
         if "sign" in moments or "nonzero" in moments:
             positive = xp.count_nonzero(imaginary > 0, axis=observation_axes)
             negative = xp.count_nonzero(imaginary < 0, axis=observation_axes)
             invalid = xp.any(xp.isnan(imaginary), axis=observation_axes)
             if "sign" in moments:
-                moments["sign"][block] = xp.where(
-                    invalid, xp.nan, (positive - negative) / n_observations
-                )
+                moments["sign"][block] = xp.where(invalid, xp.nan, mean(positive - negative))
             if "nonzero" in moments:
                 moments["nonzero"][block] = xp.where(
-                    invalid, xp.nan, (positive + negative) / n_observations
+                    invalid, xp.nan, mean(positive + negative)
                 )
         if "imaginary" in moments:
-            moments["imaginary"][block] = xp.mean(imaginary, axis=observation_axes)
+            moments["imaginary"][block] = (
+                xp.mean(imaginary, axis=observation_axes)
+                if keep is None
+                else mean(xp.sum(imaginary, axis=observation_axes))
+            )
         if "squared" in moments:
-            # Sum of squares without materializing imaginary * imaginary.
-            squared_sum = xp.einsum(squared_subscripts, imaginary, imaginary)
-            moments["squared"][block] = squared_sum / n_observations
+            if keep is None:
+                # Sum of squares without materializing imaginary * imaginary.
+                squared_sum = xp.einsum(squared_subscripts, imaginary, imaginary)
+            else:
+                # As the weighted path sums them, to the bit.
+                xp.multiply(imaginary, imaginary, out=scratch)
+                squared_sum = xp.sum(scratch, axis=observation_axes)
+            moments["squared"][block] = mean(squared_sum)
         if "absolute" in moments:
             xp.abs(imaginary, out=scratch)
-            moments["absolute"][block] = xp.mean(scratch, axis=observation_axes)
+            moments["absolute"][block] = (
+                xp.mean(scratch, axis=observation_axes)
+                if keep is None
+                else mean(xp.sum(scratch, axis=observation_axes))
+            )
 
     @_asnumpy
     def phase_lag_index(self) -> NDArray[np.floating]:

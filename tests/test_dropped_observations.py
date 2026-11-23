@@ -342,3 +342,31 @@ def test_drop_weights_keep_the_working_precision(measure):
     )()
     plain = getattr(Connectivity(coefficients, dtype=np.complex64), measure)()
     assert masked.dtype == plain.dtype
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+    ],
+)
+def test_phase_lag_moments_of_many_observations_match_their_removal(measure):
+    """With enough observations every moment is reduced from one tile pass,
+    the dropped observations zeroed in place."""
+    rng = np.random.default_rng(12)
+    coefficients = _coefficients(rng, (2, 30, 3, 8, 3))
+    valid = np.ones((2, 30), dtype=bool)
+    valid[0, :4] = False
+    valid[1, 10:19] = False
+    weights = np.broadcast_to(valid[:, :, None, None, None], (*coefficients.shape[:-1], 1))
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    assert connectivity._kept_observations is not None
+    value = getattr(connectivity, measure)()
+    for window in range(2):
+        kept = Connectivity(coefficients[[window]][:, valid[window]])
+        np.testing.assert_allclose(
+            value[window], getattr(kept, measure)()[0], rtol=1e-12, atol=1e-15
+        )
