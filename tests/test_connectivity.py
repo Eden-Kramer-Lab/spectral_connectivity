@@ -3448,13 +3448,15 @@ def test_mvar_regularized_inverse_ill_conditioned_is_finite():
 def test_mvar_rank_deficient_fails_gracefully_without_linalg_error():
     """A rank-deficient input must not raise LinAlgError.
 
-    With near-identical channels the cross-spectral matrix is singular and the
-    Wilson decomposition cannot converge; the result is NaN (with a convergence
-    warning), but the regularized solve must not crash. On CuPy the batched
-    Cholesky returns NaN instead of raising, so only NumPy warns that it failed
-    (see ``minimum_phase_decomposition._get_initial_conditions``).
+    With identical channels the cross-spectral matrix is exactly singular and
+    the Wilson decomposition cannot converge; the result is NaN (with a
+    convergence warning), but the regularized solve must not crash. On CuPy the
+    batched Cholesky returns NaN instead of raising, so only NumPy warns that it
+    failed (see ``minimum_phase_decomposition._get_initial_conditions``).
+    Channels differing by 1e-10 are singular only to rounding, so whether the
+    Cholesky start fails for them depends on the LAPACK build.
     """
-    conn = Connectivity(fourier_coefficients=_near_singular_fourier(1e-10))
+    conn = Connectivity(fourier_coefficients=_near_singular_fourier(0.0))
     with (
         nullcontext() if ON_GPU else pytest.warns(UserWarning, match="Cholesky failed"),
         pytest.warns(UserWarning, match="did not converge"),
