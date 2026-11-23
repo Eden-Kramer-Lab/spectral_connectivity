@@ -60,6 +60,13 @@ def _real_signal_spectrum(n_fft=16, seed=0, n_signals=3):
     )
 
 
+# Spectra of real-valued signals are exactly conjugate-symmetric and take the
+# half-spectrum iteration; those of complex-valued signals the two-sided one.
+_BOTH_FACTORIZATION_PATHS = pytest.mark.parametrize(
+    "real_signals", [False, True], ids=["two_sided", "half_spectrum"]
+)
+
+
 # A VAR(1) whose autocovariance has decayed to 3% by lag 32 and to 1e-12 by
 # lag 256. With real coefficients its spectrum is conjugate-symmetric and is
 # factored on the non-negative frequencies; the complex rotation makes it not
@@ -84,7 +91,7 @@ def test_factor_reproduces_the_spectrum_on_even_and_odd_grids(n_fft, rotation):
     assert _reconstruction_error(spectrum, factor)[0] < 1e-7
 
 
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+@_BOTH_FACTORIZATION_PATHS
 def test_minimum_phase_decomposition_non_convergence_warns_and_nans(real_signals):
     """Only the unconverged sub-spectra are NaN (entirely), with a counted warning.
 
@@ -381,7 +388,7 @@ def _ignoring_cholesky_start_warning():
         yield
 
 
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+@_BOTH_FACTORIZATION_PATHS
 def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_signals):
     """One rank-deficient sub-spectrum must not NaN-poison the whole batch.
 
@@ -732,6 +739,17 @@ def test_minimum_phase_decomposition():
     assert np.allclose(cross_spectral_matrix, expected_cross_spectral_matrix)
 
 
+# A 2x2 minimum-phase MA(1) factor G(z) = G0 + G1 z^-1.
+_MA1_COEFFICIENTS = (np.array([[1.5, 0.4], [0.0, 0.8]]), np.array([[0.3, -0.2], [0.5, 0.1]]))
+
+
+def _minimum_phase_ma1_factor(n_fft):
+    """The minimum-phase MA(1) factor on an ``n_fft`` grid, one window."""
+    g0, g1 = _MA1_COEFFICIENTS
+    omega = 2 * np.pi * np.arange(n_fft) / n_fft
+    return (g0 + g1 * np.exp(-1j * omega)[:, np.newaxis, np.newaxis])[np.newaxis]
+
+
 def test_minimum_phase_decomposition_recovers_matrix_factor():
     """A 2x2 minimum-phase MA(1) factor is recovered, not just its product.
 
@@ -740,9 +758,7 @@ def test_minimum_phase_decomposition_recovers_matrix_factor():
     outside the unit circle, so ``G`` is the unique minimum-phase factor of
     ``S = G G^H``. A transposed or elementwise (non-matmul) factor would fail.
     """
-    n_fft = 64
-    g0 = np.array([[1.5, 0.4], [0.0, 0.8]])
-    g1 = np.array([[0.3, -0.2], [0.5, 0.1]])
+    g0, g1 = _MA1_COEFFICIENTS
     # det(G0 + G1 w) has its roots at |w| ~ 3.04 > 1 (w = z^-1): minimum phase.
     determinant_coefficients = [
         np.linalg.det(g1),
@@ -751,8 +767,7 @@ def test_minimum_phase_decomposition_recovers_matrix_factor():
     ]
     assert np.all(np.abs(np.roots(determinant_coefficients)) > 1)
 
-    omega = 2 * np.pi * np.arange(n_fft) / n_fft
-    expected_factor = (g0 + g1 * np.exp(-1j * omega)[:, np.newaxis, np.newaxis])[np.newaxis]
+    expected_factor = _minimum_phase_ma1_factor(n_fft=64)
     cross_spectral_matrix = np.matmul(expected_factor, _conjugate_transpose(expected_factor))
 
     factor = to_host(minimum_phase_decomposition(to_device(cross_spectral_matrix)))
@@ -915,7 +930,7 @@ def test_real_signal_factorization_matches_full_spectrum_iteration(monkeypatch, 
     np.testing.assert_array_equal(half_spectrum_factor, mirrored.conj())
 
 
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+@_BOTH_FACTORIZATION_PATHS
 def test_rescaling_the_signals_rescales_the_factor(real_signals):
     """Each signal is scaled to unit mean power before the iteration, so the
     factor of ``D S D`` is ``D G`` to rounding for any positive diagonal ``D``,
@@ -941,7 +956,7 @@ def test_rescaling_the_signals_rescales_the_factor(real_signals):
     )
 
 
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+@_BOTH_FACTORIZATION_PATHS
 def test_a_zero_power_signal_keeps_a_unit_scale_and_its_window_converges(real_signals):
     """A signal with no power has no scale to divide by, so it keeps a scale
     of 1. Its window's zero-lag matrix is singular, so that window starts
@@ -974,15 +989,6 @@ def test_a_zero_power_signal_keeps_a_unit_scale_and_its_window_converges(real_si
         assert [str(w.message).split(" for ")[0] for w in caught] == [
             mpd_module.CHOLESKY_FALLBACK_WARNING_START
         ]
-
-
-def _minimum_phase_ma1_factor(n_fft):
-    """The 2x2 minimum-phase MA(1) factor of
-    ``test_minimum_phase_decomposition_recovers_matrix_factor``, one window."""
-    g0 = np.array([[1.5, 0.4], [0.0, 0.8]])
-    g1 = np.array([[0.3, -0.2], [0.5, 0.1]])
-    omega = 2 * np.pi * np.arange(n_fft) / n_fft
-    return (g0 + g1 * np.exp(-1j * omega)[:, np.newaxis, np.newaxis])[np.newaxis]
 
 
 @pytest.mark.parametrize("n_fft", [64, 65])

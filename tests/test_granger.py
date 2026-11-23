@@ -1,13 +1,21 @@
 """Tests for the spectral Granger kernels in ``spectral_connectivity._granger``."""
 
+import warnings
+
 import numpy as np
 import pytest
 
+from spectral_connectivity import (
+    Connectivity,
+    DirectedOrientationWarning,
+    Multitaper,
+    _granger,
+)
 from spectral_connectivity._granger import (
     _remove_instantaneous_causality,
     _sanitized_nonnegative_granger,
 )
-from tests._backend_helpers import to_device, to_host
+from tests._backend_helpers import to_device, to_host, xp
 
 
 def test__remove_instantaneous_causality():
@@ -78,16 +86,6 @@ def test_granger_measures_name_the_pairs_whose_factor_is_not_minimum_phase(
     """Each Granger measure warns once per call, naming the source -> target
     pairs whose (pairwise, reduced, or block) factor the check flagged,
     however many factorizations the measure makes."""
-    import warnings
-
-    from spectral_connectivity import (
-        Connectivity,
-        DirectedOrientationWarning,
-        Multitaper,
-        _granger,
-    )
-    from spectral_connectivity._backend import xp
-
     signals = np.random.default_rng(0).standard_normal((512, 10, 3))
     connectivity = Connectivity.from_transform(
         Multitaper(signals, sampling_frequency=256, time_halfbandwidth_product=2)
