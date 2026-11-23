@@ -95,7 +95,13 @@ def test_measures_using_observations_refuse_an_exact_spectrum(coefficients, name
 
 @pytest.mark.parametrize("name", _EXACT_SPECTRUM_MEASURES)
 def test_measures_of_the_spectral_matrix_are_unchanged_by_the_flag(coefficients, name):
-    """The flag refuses measures; it changes none of the others' values."""
+    """The flag refuses measures; it changes none of the others' values.
+
+    Compared to rounding rather than bitwise: the conditional Granger
+    factorizations differed by 2.2e-16 (13 of 297 elements) between two
+    identical computations on the Linux minimum-dependency CI job, where
+    threaded BLAS can reorder sums; the flag itself changes no arithmetic.
+    """
     exact = _compute(Connectivity(coefficients, is_exact_spectrum=True), name)
     plain = _compute(Connectivity(coefficients), name)
     if hasattr(exact, "scores"):  # MultivariateConnectivityResult
@@ -105,7 +111,10 @@ def test_measures_of_the_spectral_matrix_are_unchanged_by_the_flag(coefficients,
         plain if isinstance(plain, tuple) else (plain,),
         strict=True,
     ):
-        np.testing.assert_array_equal(exact_part, plain_part)
+        if np.issubdtype(np.asarray(exact_part).dtype, np.number):
+            np.testing.assert_allclose(exact_part, plain_part, rtol=1e-12, atol=1e-15)
+        else:  # group labels
+            np.testing.assert_array_equal(exact_part, plain_part)
 
 
 def test_jackknife_refuses_an_exact_spectrum(coefficients):
