@@ -2119,6 +2119,7 @@ class Connectivity:
         fourier_coefficients: NDArray[np.complexfloating] | None = None,
         *,
         dtype: DTypeLike | None = None,
+        conjugated_coefficients: NDArray[Any] | None = None,
     ) -> NDArray[np.complexfloating]:
         """Expected cross-spectral matrix via a single batched matmul.
 
@@ -2143,6 +2144,10 @@ class Connectivity:
             non-negative frequencies); observation weights are sliced to match.
         dtype : complex dtype, optional
             Precision of the product; ``self._dtype`` by default.
+        conjugated_coefficients : array, optional
+            Coefficients of the same shape as ``fourier_coefficients`` whose
+            conjugate is the right factor, giving ``mean_obs f_i * conj(g_j)``;
+            ``fourier_coefficients`` itself by default.
 
         Returns
         -------
@@ -2165,18 +2170,12 @@ class Connectivity:
         # signals) so the averaged axes collapse into a single observation axis
         # adjacent to signals, ready for a batched matmul.
         order = [*kept_axes, *batch_axes, *average_axes, signal_axis]
-        observations = xp.transpose(fourier_coefficients, order)
-
         n_observations = int(
             np.prod([fourier_coefficients.shape[axis] for axis in average_axes])
         )
         n_signals = fourier_coefficients.shape[signal_axis]
-        observations = observations.reshape(
-            (
-                *observations.shape[: len(kept_axes) + len(batch_axes)],
-                n_observations,
-                n_signals,
-            )
+        leading_shape = tuple(
+            fourier_coefficients.shape[axis] for axis in [*kept_axes, *batch_axes]
         )
         weights = None
         if self._observation_weights is not None:
@@ -2188,20 +2187,33 @@ class Connectivity:
                 [*kept_axes, frequency_axis, *average_axes],
             ).reshape(
                 (
-                    *observations.shape[: len(kept_axes) + 1],
+                    *leading_shape[: len(kept_axes) + 1],
                     *(1,) * (len(batch_axes) - 1),
                     n_observations,
                 )
             )
-            observations = _weight_observations(
-                observations, xp.sqrt(weights)[..., xp.newaxis]
+
+        def observations_of(coefficients: BackendArray) -> BackendArray:
+            observations = xp.transpose(coefficients, order).reshape(
+                (*leading_shape, n_observations, n_signals)
             )
+            if weights is not None:
+                observations = _weight_observations(
+                    observations, xp.sqrt(weights)[..., xp.newaxis]
+                )
+            # Cast before multiplying (see _complex_inner_product).
+            return observations.astype(self._dtype if dtype is None else dtype, copy=False)
+
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
-        # Cast before multiplying (see _complex_inner_product).
-        observations = observations.astype(self._dtype if dtype is None else dtype, copy=False)
+        observations = observations_of(fourier_coefficients)
+        conjugated = (
+            observations
+            if conjugated_coefficients is None
+            else observations_of(conjugated_coefficients)
+        )
         cross_spectral_matrix: NDArray[np.complexfloating] = xp.matmul(
-            xp.swapaxes(observations, -1, -2), xp.conj(observations)
+            xp.swapaxes(observations, -1, -2), xp.conj(conjugated)
         )
         if weights is None:
             return cross_spectral_matrix / n_observations
