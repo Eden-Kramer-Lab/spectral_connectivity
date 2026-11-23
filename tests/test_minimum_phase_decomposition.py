@@ -982,10 +982,10 @@ def _minimum_phase_ma1_factor(n_fft):
 @pytest.mark.parametrize("n_fft", [64, 65])
 def test_is_not_minimum_phase_flags_an_all_pass_rotation_of_the_factor(n_fft):
     """``G U`` reproduces ``G Gᴴ`` for any unitary ``U(f)``. The all-pass
-    ``U = diag(b, 1)`` with ``b(z) = (z - a) / (1 - a z)``, whose impulse
-    response is at negative lags (powers of ``z``), makes the product
-    anticausal, which the check flags, while ``G`` itself and ``G`` times a
-    constant unitary matrix are not flagged."""
+    ``U = diag(b, 1)`` with ``b(z) = (z - a) / (1 - a z)`` makes the product
+    anticausal and its determinant wind once around zero, which the check
+    flags, while ``G`` itself and ``G`` times a constant unitary matrix are
+    not flagged."""
     factor = _minimum_phase_ma1_factor(n_fft)
     spectrum = factor @ _conjugate_transpose(factor)
     z = np.exp(2j * np.pi * np.arange(n_fft) / n_fft)
@@ -998,7 +998,7 @@ def test_is_not_minimum_phase_flags_an_all_pass_rotation_of_the_factor(n_fft):
     spectra = np.concatenate([spectrum] * 3)
     np.testing.assert_allclose(factors @ _conjugate_transpose(factors), spectra, atol=1e-12)
 
-    flagged = to_host(mpd_module._is_not_minimum_phase(to_device(factors), to_device(spectra)))
+    flagged = to_host(mpd_module._is_not_minimum_phase(to_device(factors)))
     winding = to_host(mpd_module._determinant_winding_number(to_device(factors)))
 
     np.testing.assert_array_equal(flagged, [False, False, True])

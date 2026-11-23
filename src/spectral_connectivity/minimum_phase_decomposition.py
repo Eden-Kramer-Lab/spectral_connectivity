@@ -25,14 +25,6 @@ NOT_MINIMUM_PHASE_WARNING_START = (
     "Wilson minimum-phase decomposition converged to a factor that is not minimum phase"
 )
 
-# A minimum-phase factor's impulse response is causal; on the FFT grid it
-# reaches the negative lags only by wrapping around, as the spectrum's
-# autocovariance does past a quarter of the grid. A converged factor with more
-# of its energy at negative lags than this multiple of that wrap-around share
-# (and than the floor, which covers spectra that do not wrap at all) is not
-# minimum phase. The largest ratio measured across the test suite was 35.
-ANTICAUSAL_ENERGY_MARGIN = 100
-ANTICAUSAL_ENERGY_FLOOR = 1e-6
 # The winding number of det G is counted only where its phase changes by less
 # than this between neighbouring bins. Factors that were not minimum phase
 # changed by at most 0.31 per bin; aliased counts on coarse grids (a winding
@@ -48,9 +40,8 @@ def _not_minimum_phase_message(where: str) -> str:
     measure's signal pairs.
     """
     return (
-        f"{NOT_MINIMUM_PHASE_WARNING_START} for {where}: its impulse response has "
-        "far more energy at negative lags than the spectrum's wrap-around on the "
-        "FFT grid explains, or its determinant winds around zero. The factor "
+        f"{NOT_MINIMUM_PHASE_WARNING_START} for {where}: its determinant winds "
+        "around zero on the frequency grid. The factor "
         "reproduces the spectrum, but its transfer function and noise covariance, "
         "and every directed measure read from them (spectral Granger, DTF, PDC, "
         "etc.), are wrong there. This is a numerical failure of the factorization "
@@ -402,43 +393,6 @@ def _check_convergence(
     return error / scale < tolerance
 
 
-def _lag_energy_share(
-    frequency_domain: NDArray[np.complexfloating],
-    lags: NDArray[np.bool_],
-    n_fft_samples: int | None,
-) -> NDArray[np.floating]:
-    """Share of each sub-spectrum's lag-domain energy that lies at ``lags``.
-
-    Parameters
-    ----------
-    frequency_domain : NDArray[complexfloating],
-        shape (..., n_frequencies, n_signals, n_signals)
-        Matrices on the frequency axis (-3): all ``n_lags`` bins, or the
-        non-negative half of a conjugate-symmetric function when
-        ``n_fft_samples`` is given.
-    lags : NDArray[bool], shape (n_lags,)
-        The lags whose energy to count.
-    n_fft_samples : int, optional
-        Two-sided length of a half spectrum.
-
-    Returns
-    -------
-    NDArray[floating], shape (...,)
-        Energy (sum of squared magnitudes over every entry) at ``lags`` over
-        the energy at all lags; NaN for a non-finite or all-zero sub-spectrum.
-    """
-    if n_fft_samples is None:
-        coefficients = ifft(frequency_domain, axis=-3)
-    else:
-        coefficients = irfft(frequency_domain, n=n_fft_samples, axis=-3)
-    energy = xp.sum(xp.abs(coefficients) ** 2, axis=(-2, -1))
-    with np.errstate(invalid="ignore", divide="ignore"):
-        share: NDArray[np.floating] = xp.sum(xp.where(lags, energy, 0), axis=-1) / xp.sum(
-            energy, axis=-1
-        )
-    return share
-
-
 def _determinant_winding_number(
     factor: NDArray[np.complexfloating],
     n_fft_samples: int | None = None,
@@ -489,38 +443,29 @@ def _determinant_winding_number(
 
 def _is_not_minimum_phase(
     factor: NDArray[np.complexfloating],
-    cross_spectral_matrix: NDArray[np.complexfloating],
     n_fft_samples: int | None = None,
 ) -> NDArray[np.bool_]:
     """Flag converged factors that are not minimum phase.
 
     Every factor ``G`` with ``G Gᴴ = S`` is a fixed point of the Wilson
     iteration, so convergence alone does not make ``G`` minimum phase. A
-    minimum-phase factor is causal: its impulse response reaches the negative
-    lags only by wrapping around the grid, and so does the spectrum's
-    autocovariance past a quarter of the grid. A factor is flagged when its
-    share of energy at negative lags exceeds both
-    ``ANTICAUSAL_ENERGY_MARGIN`` times the spectrum's share beyond a quarter
-    of the grid and ``ANTICAUSAL_ENERGY_FLOOR``, or when ``det G`` winds
-    around zero (see :func:`_determinant_winding_number`). Both energy shares
-    depend on the signals' scales, so pass the scaled spectrum and its
-    factor, in which every signal counts equally. A non-finite sub-spectrum
-    is not flagged.
+    factor is flagged when ``det G(e^{iω})`` winds around zero (see
+    :func:`_determinant_winding_number`); a non-finite factor, or one whose
+    determinant turns too fast between bins to count, is not flagged.
 
-    The check is best effort. A factor that is causal but not minimum phase
-    passes it unless its determinant winds around zero on a grid fine enough
-    to count, and so does one whose anticausal part is within the allowance.
+    The check is best effort. A factor that is causal but not minimum phase,
+    or anticausal, passes it unless its determinant winds countably. An
+    anticausal-energy criterion (energy at negative lags against the
+    spectrum's wrap-around) also flagged factors that were not wrong: 10 of
+    240 windows of zero-padded multitaper estimates, whose measures agreed
+    with those from a twice finer grid as closely as unflagged windows did.
 
     Parameters
     ----------
     factor : NDArray[complexfloating],
         shape (..., n_frequencies, n_signals, n_signals)
-        Converged factors, on the same frequencies as ``cross_spectral_matrix``.
-    cross_spectral_matrix : NDArray[complexfloating],
-        shape (..., n_frequencies, n_signals, n_signals)
-        The spectra they factor: all ``n_frequencies`` bins of a two-sided
-        grid, or the non-negative half of a conjugate-symmetric one of
-        ``n_fft_samples`` bins.
+        Converged factors: all bins of a two-sided grid, or the non-negative
+        half of a conjugate-symmetric one of ``n_fft_samples`` bins.
     n_fft_samples : int, optional
         Two-sided length of a half spectrum.
 
@@ -529,17 +474,8 @@ def _is_not_minimum_phase(
     NDArray[bool], shape (...,)
         True for each factor that is not minimum phase.
     """
-    n_lags = factor.shape[-3] if n_fft_samples is None else n_fft_samples
-    lag = xp.arange(n_lags)
-    # Lag n_lags / 2 of an even grid is its own negative; count neither it
-    # nor lag 0 as anticausal.
-    negative_lags = lag > n_lags // 2
-    beyond_a_quarter = xp.minimum(lag, n_lags - lag) > n_lags // 4
-    anticausal = _lag_energy_share(factor, negative_lags, n_fft_samples)
-    wrapped = _lag_energy_share(cross_spectral_matrix, beyond_a_quarter, n_fft_samples)
-    allowed = xp.maximum(ANTICAUSAL_ENERGY_MARGIN * wrapped, ANTICAUSAL_ENERGY_FLOOR)
     winding = _determinant_winding_number(factor, n_fft_samples)
-    is_flagged: NDArray[np.bool_] = (anticausal > allowed) | (xp.abs(winding) > 0.5)
+    is_flagged: NDArray[np.bool_] = xp.abs(winding) > 0.5
     return is_flagged
 
 
@@ -862,17 +798,12 @@ def minimum_phase_decomposition(
     non-finite power keeps a scale of 1.
 
     Each converged factor is then checked, on a best-effort basis, for being
-    minimum phase. Such a factor is causal: its impulse response reaches the
-    negative lags only by wrapping around the grid, as the spectrum's
-    autocovariance does past a quarter of the grid; and its determinant does
-    not wind around zero. A sub-spectrum whose scaled factor has more of its
-    energy at negative lags than 100 times the scaled spectrum's share past a
-    quarter of the grid (and more than 1e-6), or whose ``det G(e^{iω})``
-    winds around zero where its phase turns by less than ``π / 2`` between
-    bins, gives a ``UserWarning``; its factor is returned as computed. A
-    factor that is causal but not minimum phase passes the check unless its
-    determinant winds countably, and so does one whose anticausal part is
-    within the allowance. It costs less than one iteration.
+    minimum phase: a sub-spectrum whose ``det G(e^{iω})`` winds around zero,
+    counted where its phase turns by less than ``π / 2`` between bins, gives
+    a ``UserWarning`` (a spectral Granger measure warns once per call, naming
+    the signal pairs), and its factor is returned as computed. A factor that
+    fails to be minimum phase without its determinant winding countably
+    passes the check. It costs less than one iteration.
 
     Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
     computed once, which lets sub-spectra with near-collinear channels converge.
@@ -1122,11 +1053,9 @@ def _minimum_phase_factor_and_flags(
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
-    # Checked on the scaled factor, where every signal counts equally; the
-    # unconverged sub-spectra are NaN by now and are not flagged.
-    not_minimum_phase = _is_not_minimum_phase(
-        minimum_phase_factor, working_cross_spectral_matrix, half_spectrum_n_fft
-    )
+    # The winding number is unchanged by the scaling; the unconverged
+    # sub-spectra are NaN by now and are not flagged.
+    not_minimum_phase = _is_not_minimum_phase(minimum_phase_factor, half_spectrum_n_fft)
     minimum_phase_factor = signal_scale[..., xp.newaxis, :, xp.newaxis] * minimum_phase_factor
     if half_spectrum_n_fft is not None:
         minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)
