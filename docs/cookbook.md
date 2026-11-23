@@ -713,9 +713,15 @@ connectivity = Connectivity.from_var(fitted.coefs, fitted.sigma_u, sampling_freq
 Give `coefficients` a leading `n_time_windows` axis for a time-varying model
 (one model per window, with `noise_covariance` shared or per window, and
 `time=` the window times in seconds). The frequency grid defaults to the
-shortest one on which the directed measures are exact to about 1e-10
+shortest one that does not limit the directed measures' accuracy
 (`VARSpectrum.minimum_n_fft_samples`), which grows as the model's poles near
-the unit circle; a shorter `n_fft_samples` raises.
+the unit circle. A shorter `n_fft_samples` warns: power and the coherence
+family stay exact on any grid, the directed measures do not. The directed
+measures also inherit the Wilson factorization's limits: for a model whose
+signals differ in power by orders of magnitude, with poles very near the unit
+circle (a chain of three signals with poles at 0.99, say), it can converge to a
+wrong factor without a warning, leaving pairwise Granger far from the model's
+value.
 
 ## Result schema and transform bandwidth
 

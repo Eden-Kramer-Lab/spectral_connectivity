@@ -56,9 +56,13 @@ The migration guide for code written against 2.x is
   matrix, entry `[i, j]` the effect of `j` on `i`), and a leading window axis
   gives a time-varying model. Power is in the units of a multitaper estimate
   of the simulated process. Complex, unstable, and indefinite models are
-  refused, as is an FFT length too short for the directed measures to be
-  exact (`VARSpectrum.minimum_n_fft_samples`, the default's lower bound).
-  Fitting the model is left to other packages.
+  refused. An FFT length below `VARSpectrum.minimum_n_fft_samples` (the
+  default's lower bound) warns that the directed measures are no longer exact
+  there, and a default grid above 2**18 bins warns of its size. The directed
+  measures are only as exact as the Wilson factorization, which for signals
+  whose powers differ by orders of magnitude and poles very near the unit
+  circle can converge to a wrong factor without a warning. Fitting the model
+  is left to other packages.
 - `is_exact_spectrum`, an optional `SpectralTransform` attribute (and a
   keyword-only `Connectivity` argument and property) for coefficients that
   are one factorization of a cross-spectral matrix rather than samples, as

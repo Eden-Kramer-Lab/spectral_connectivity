@@ -1641,7 +1641,8 @@ class Connectivity:
         The shortcut for ``Connectivity.from_transform(VARSpectrum(coefficients,
         noise_covariance, sampling_frequency=..., n_fft_samples=..., time=...))``:
         every measure that is a function of the cross-spectral matrix is then
-        the model's population value, with no estimation error, and the
+        the model's population value, with no estimation error (the directed
+        measures to the accuracy of the Wilson factorization), and the
         measures that use individual observations raise (see
         :class:`~spectral_connectivity.transforms.VARSpectrum`).
 

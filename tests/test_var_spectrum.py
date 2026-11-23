@@ -431,12 +431,12 @@ def test_the_minimum_grid_follows_the_decay_of_the_model():
             "radius of their companion",
         ),
         ({"coefficients": [[[1.2, 0.0], [0.0, 0.5]]]}, ValueError, "is 1.2, not below 1"),
+        ({"n_fft_samples": 2.5}, ValueError, "an integer of at least 2"),
         (
-            {"n_fft_samples": 10},
+            {"coefficients": np.zeros((4, 2, 2)), "n_fft_samples": 4},
             ValueError,
-            r"n_fft_samples=10 is too short.*power 5 still has norm",
+            r"at least 5 \(2, and n_lags \+ 1 = 5",
         ),
-        ({"n_fft_samples": 2.5}, ValueError, "positive integer"),
         ({"time": [0.0, 1.0]}, ValueError, r"one time in seconds per window \(1\)"),
     ],
 )
@@ -451,8 +451,8 @@ def test_invalid_models_are_refused(arguments, error, match):
 
 
 def test_messages_name_the_radius_and_the_grid():
-    """Unstable: the radius, and the scaling that makes it 0.9. Too short a
-    grid: the minimum, which then constructs."""
+    """Unstable: the radius, and the scaling that makes it 0.9. A grid below
+    the minimum warns that only the directed measures lose exactness."""
     coefficients, noise_covariance = _DENSE
     with pytest.raises(
         ValueError, match=r"is 1\.6, not below 1.*c = 0\.5625 gives a radius of 0\.9"
@@ -464,21 +464,42 @@ def test_messages_name_the_radius_and_the_grid():
         )
     var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
     minimum = var.minimum_n_fft_samples
-    with pytest.raises(ValueError, match=rf"Use n_fft_samples >= {minimum}") as info:
-        VARSpectrum(
+    assert f"spectral_radius={var.spectral_radius[0]:.6g}" in repr(var)
+    match = rf"below this model's minimum_n_fft_samples \({minimum}\)"
+    with pytest.warns(UserWarning, match=match) as caught:
+        short = VARSpectrum(
             coefficients,
             noise_covariance,
             sampling_frequency=_SAMPLING_FREQUENCY,
-            n_fft_samples=minimum - 1,
+            n_fft_samples=minimum - 2,
         )
-    assert "where that norm is at most 1e-10" in str(info.value)
-    exact = VARSpectrum(
-        coefficients,
-        noise_covariance,
-        sampling_frequency=_SAMPLING_FREQUENCY,
-        n_fft_samples=minimum,
-    )
+    message = str(caught[0].message)
+    assert "the coherence family stay exact" in message
+    assert f"use n_fft_samples >= {minimum}" in message
+    # Power stays exact on the short grid.
+    power = Connectivity.from_transform(short).power(one_sided=True)[0]
+    density = _model_spectrum(coefficients, noise_covariance, minimum - 2)
+    expected = np.real(np.diagonal(density, 0, -2, -1))[: (minimum - 2) // 2 + 1].copy()
+    expected[1:-1] *= 2
+    np.testing.assert_allclose(power, expected, rtol=1e-12)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        exact = VARSpectrum(
+            coefficients,
+            noise_covariance,
+            sampling_frequency=_SAMPLING_FREQUENCY,
+            n_fft_samples=minimum,
+        )
     assert exact.n_fft_samples == minimum
+
+
+def test_a_huge_default_grid_warns_of_its_size():
+    """A pole this close to the unit circle needs a grid of millions of bins."""
+    match = r"n_fft_samples=\d+ frequency bins.*0\.99999"
+    with pytest.warns(UserWarning, match=match) as caught:
+        var = VARSpectrum(np.array([[[0.99999]]]), sampling_frequency=_SAMPLING_FREQUENCY)
+    assert var.n_fft_samples > 2**18
+    assert "exact on any grid" in str(caught[0].message)
 
 
 def test_the_sampling_frequency_is_required_by_its_name():
@@ -607,3 +628,43 @@ def test_from_var_refuses_what_varspectrum_and_the_flag_refuse():
         )
     with pytest.raises(TypeError, match="positional arguments"):
         Connectivity.from_var(coefficients, noise_covariance, _SAMPLING_FREQUENCY)  # type: ignore[misc]
+
+
+def _shared_dynamics_chain(rho):
+    """A chain 0 -> 1 -> 2 of couplings 0.2 whose signals all have a pole at
+    ``rho``: their powers grow by orders of magnitude along the chain."""
+    coefficients = rho * np.eye(3)[np.newaxis]
+    coefficients[0, 1, 0] = coefficients[0, 2, 1] = 0.2
+    return coefficients, np.eye(3)
+
+
+@pytest.mark.parametrize(
+    "rho",
+    [
+        0.9,
+        pytest.param(
+            0.99,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="Wilson factorization of badly scaled spectra; fixed by "
+                "fix/wilson-scaling",
+            ),
+        ),
+    ],
+)
+def test_pairwise_granger_of_a_chain_with_shared_slow_dynamics(rho):
+    """At rho 0.99 the signals' standard deviations are about 7, 100 and 1800,
+    and the Wilson factorization of the (0, 2) pair converges to a factor
+    that reproduces its spectrum but is not minimum phase: 2 -> 0, which is
+    exactly 0 (signal 0 is driven by nothing), came out 3.9."""
+    coefficients, noise_covariance = _shared_dynamics_chain(rho)
+    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    granger = _directed(
+        Connectivity.from_transform(var), "pairwise_spectral_granger_prediction"
+    )[0]
+    oracle = _pairwise_granger_from_state_space(
+        coefficients, noise_covariance, var.n_fft_samples
+    )
+    np.testing.assert_allclose(
+        granger[:, _OFF_DIAGONAL], oracle[:, _OFF_DIAGONAL], rtol=0, atol=1e-8
+    )

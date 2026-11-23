@@ -3518,6 +3518,8 @@ class MorletWavelet:
 #: impulse response beyond that lag, which the Wilson factorization of the
 #: directed measures wraps around.
 _VAR_GRID_TOLERANCE = 1e-10
+# A default VARSpectrum grid longer than this many bins warns of its size.
+_VAR_LARGE_GRID = 2**18
 # A VAR's layouts: coefficient matrices per lag, and innovation covariance.
 _VAR_COEFFICIENTS_LAYOUT = (
     "(n_lags, n_signals, n_signals) or (n_time_windows, n_lags, n_signals, n_signals)"
@@ -3634,9 +3636,10 @@ class VARSpectrum:
         axis and sets the units of power (signal² / Hz).
     n_fft_samples : int, optional
         Number of frequency bins, from 0 Hz up and wrapping to the negative
-        frequencies as an FFT does (``numpy.fft.fftfreq``). It must be at least
-        :attr:`minimum_n_fft_samples` (see Notes); by default it is the
-        smallest FFT-friendly length (``scipy.fft.next_fast_len``) that is.
+        frequencies as an FFT does (``numpy.fft.fftfreq``). By default it is the
+        smallest FFT-friendly length (``scipy.fft.next_fast_len``) of at least
+        :attr:`minimum_n_fft_samples` (see Notes); a shorter one warns, as the
+        directed measures are then not exact.
     time : array, shape (n_time_windows,), optional
         Time of each window, in seconds. By default the windows are labeled by
         their indices (``0, 1, ...``), and labeled results say so
@@ -3650,8 +3653,15 @@ class VARSpectrum:
         If a shape does not fit the layouts above, a value is not finite, the
         covariance is not symmetric and positive definite, a model is not
         stable (the spectral radius of its companion matrix is not below 1),
-        ``time`` does not label every window, or ``n_fft_samples`` is below
-        :attr:`minimum_n_fft_samples`.
+        ``time`` does not label every window, or ``n_fft_samples`` is shorter
+        than 2 or than ``n_lags + 1``.
+
+    Warns
+    -----
+    UserWarning
+        If ``n_fft_samples`` is below :attr:`minimum_n_fft_samples` (the
+        directed measures then lose exactness; power and the coherence family
+        do not), or if the default grid exceeds ``2**18`` bins.
 
     See Also
     --------
@@ -3708,10 +3718,17 @@ class VARSpectrum:
     need more. That grid also resolves the sharpest spectral peaks: a pole at
     radius ``r`` near 1 gives a peak about ``(1 - r) * sampling_frequency /
     (2 pi)`` Hz wide on each side, about 7 bins or more for ``r <= rho``.
-    Wilson's own tolerance (the
-    ``minimum_phase_tolerance`` of :class:`Connectivity`, 1e-8 by default)
-    then dominates the error. A grid that is a multiple of another
-    transform's FFT length contains its frequencies.
+    On that grid the error comes from the Wilson factorization itself: its
+    tolerance (the ``minimum_phase_tolerance`` of :class:`Connectivity`, 1e-8
+    by default) for well-scaled models, and more where it fails. For signals
+    whose powers differ by orders of magnitude and poles very near the unit
+    circle it can converge, without a warning, to a factor that reproduces
+    the spectrum but is not its minimum-phase factor: in a chain 0 -> 1 -> 2
+    with every pole at 0.99, pairwise spectral Granger prediction of the pair
+    (0, 2) came out up to 4.6 from the model's value, and no longer grid
+    removes that. The same limit applies to estimates of data with such a
+    spectrum. A grid that is a multiple of another transform's FFT length
+    contains its frequencies.
 
     Examples
     --------
@@ -3835,15 +3852,33 @@ class VARSpectrum:
                 )
                 raise ValueError(msg)
             self._time = mark_readonly_if_supported(time_values)
+        # The FFT of the lag polynomial I, -A_1, ..., -A_p needs every lag on
+        # the grid (a shorter FFT would crop it), and a measure two bins.
+        shortest = max(2, self.n_lags + 1)
         if n_fft_samples is None:
             self._n_fft_samples = int(default_fft_length(self.minimum_n_fft_samples))
-        elif not is_positive_integer(n_fft_samples):
-            msg = f"n_fft_samples must be a positive integer, got {n_fft_samples!r}."
+            if self._n_fft_samples > _VAR_LARGE_GRID:
+                warnings.warn(
+                    self._large_grid_message(),
+                    UserWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
+        elif not is_positive_integer(n_fft_samples, minimum=shortest):
+            msg = (
+                f"n_fft_samples must be an integer of at least {shortest} (2, and "
+                f"n_lags + 1 = {self.n_lags + 1} so every lag fits on the grid), got "
+                f"{n_fft_samples!r}. Omit it for the grid on which every measure is "
+                f"exact ({self.minimum_n_fft_samples} bins)."
+            )
             raise ValueError(msg)
-        elif n_fft_samples < self.minimum_n_fft_samples:
-            raise ValueError(self._short_grid_message(int(n_fft_samples)))
         else:
             self._n_fft_samples = int(n_fft_samples)
+            if self._n_fft_samples < self.minimum_n_fft_samples:
+                warnings.warn(
+                    self._short_grid_message(self._n_fft_samples),
+                    UserWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
 
     @staticmethod
     def _symmetric_positive_definite(
@@ -3901,7 +3936,7 @@ class VARSpectrum:
 
     @property
     def minimum_n_fft_samples(self) -> int:
-        """Shortest FFT length on which the directed measures are exact to about 1e-10.
+        """Shortest FFT length on which the grid adds about 1e-10 to the directed measures' error.
 
         Twice the smallest lag ``k`` at which the Frobenius norm of the
         ``k``-th power of every window's companion matrix is at most 1e-10,
@@ -3912,17 +3947,30 @@ class VARSpectrum:
     def _short_grid_message(self, n_fft_samples: int) -> str:
         wrapped = _companion_power_norm(self._companion, n_fft_samples // 2)
         return (
-            f"n_fft_samples={n_fft_samples} is too short for this model. The directed "
-            "measures factor the spectrum's periodic extension on the grid, which "
-            "wraps around the model's autocovariance and impulse response beyond lag "
-            "n_fft_samples / 2. They decay as the powers of its companion matrix, "
-            f"whose power {n_fft_samples // 2} still has norm {wrapped:.2g} (spectral "
-            f"radius {self._spectral_radius.max():.6g}), so the directed measures "
-            f"would be off by about that much. Use n_fft_samples >= "
-            f"{self.minimum_n_fft_samples}, where that norm is at most "
-            f"{_VAR_GRID_TOLERANCE:g}, or omit it for the shortest fast length that "
-            "is. A multiple of another transform's FFT length contains its "
-            "frequencies."
+            f"n_fft_samples={n_fft_samples} is below this model's minimum_n_fft_samples "
+            f"({self.minimum_n_fft_samples}). Power, the cross-spectral density and "
+            "the coherence family stay exact on any grid, but the directed "
+            "(Wilson-factorized) measures factor the spectrum's periodic extension, "
+            "which wraps around the model's autocovariance and impulse response "
+            "beyond lag n_fft_samples / 2. They decay as the powers of its companion "
+            f"matrix, whose power {n_fft_samples // 2} still has norm {wrapped:.2g} "
+            f"(spectral radius {self._spectral_radius.max():.6g}), so the directed "
+            "measures can be off by about that much. For them, use n_fft_samples >= "
+            f"{self.minimum_n_fft_samples} (where that norm is at most "
+            f"{_VAR_GRID_TOLERANCE:g}) or omit it; a multiple of another transform's "
+            "FFT length contains its frequencies."
+        )
+
+    def _large_grid_message(self) -> str:
+        gigabytes = 16 * self.n_time_windows * self.n_signals**2 * self.n_fft_samples / 1e9
+        return (
+            f"VARSpectrum's default grid has n_fft_samples={self.n_fft_samples} "
+            f"frequency bins, because the model's spectral radius is "
+            f"{self._spectral_radius.max():.6g}: its autocovariance decays so slowly "
+            "that the directed measures need that many bins to be exact. fft() "
+            f"returns {gigabytes:.2g} GB of coefficients, and the measures need "
+            "several times that. Power and the coherence family are exact on any "
+            "grid; for them, pass a smaller n_fft_samples."
         )
 
     @property
@@ -4036,7 +4084,8 @@ class VARSpectrum:
             f"VARSpectrum(n_signals={self.n_signals}, n_lags={self.n_lags}, "
             f"n_time_windows={self.n_time_windows}, "
             f"sampling_frequency={self.sampling_frequency!r}, "
-            f"n_fft_samples={self.n_fft_samples})"
+            f"n_fft_samples={self.n_fft_samples}, "
+            f"spectral_radius={float(self._spectral_radius.max()):.6g})"
         )
 
     def _provenance_metadata(self) -> dict[str, Any]:
