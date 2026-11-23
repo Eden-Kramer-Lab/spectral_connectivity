@@ -153,3 +153,32 @@ def test_signal_names_length_is_validated():
     m = Multitaper(np.zeros((128, 3, 2)), sampling_frequency=128)
     with pytest.raises(ValueError, match="signal_names must contain 2 names"):
         connectivity_to_xarray(m, signal_names=["only-one"])
+
+
+@pytest.mark.parametrize("wrapper", ["multitaper_connectivity", "fourier_connectivity"])
+@pytest.mark.parametrize("transform", ["VARSpectrum", "Multitaper"])
+def test_a_transform_given_as_data_points_to_connectivity_to_xarray(wrapper, transform):
+    """A transform passed where data goes names the route for transforms,
+    not a conversion with np.asarray."""
+    from spectral_connectivity import (
+        VARSpectrum,
+        fourier_connectivity,
+        multitaper_connectivity,
+    )
+
+    made = (
+        VARSpectrum(np.array([[[0.5, 0.0], [0.4, 0.5]]]), sampling_frequency=100)
+        if transform == "VARSpectrum"
+        else Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100)
+    )
+    call = {
+        "multitaper_connectivity": lambda: multitaper_connectivity(
+            made, sampling_frequency=100
+        ),
+        "fourier_connectivity": lambda: fourier_connectivity(made),
+    }[wrapper]
+    with pytest.raises(TypeError, match=rf"is a spectral transform \({transform}\)") as info:
+        call()
+    message = str(info.value)
+    assert "connectivity_to_xarray(transform, method)" in message
+    assert "np.asarray" not in message
