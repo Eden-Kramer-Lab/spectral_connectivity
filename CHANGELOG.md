@@ -1207,8 +1207,9 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   3e-7). 2.x has the same start and defect. Recompute directed results.
 - As preconditioning, every signal is scaled to unit mean power for the
   factorization and the factor unscaled afterwards. Pairwise Granger of raw
-  and standardized multitaper estimates of that chain differed by up to 3.7
-  (4.3 in 2.x) and now agree to 1e-12. Signals of comparable power move by
+  and standardized multitaper estimates of that chain differed by 2.7-5.8 at
+  their largest in five simulations (3.7-5.9 in 2.x) and now agree to within
+  the convergence tolerance (at most 7e-7). Signals of comparable power move by
   much less than their estimation error: at most 7e-3 in the regression
   examples, under a sixth of their RMS error against the generating models,
   which is unchanged to 0.1%.
@@ -1222,10 +1223,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   DTF, PDC, and dDTF covariant.
 - The factorization warns, as a best-effort check, when a converged factor's
   determinant winds around zero (so the factor is not minimum phase); the
-  spectral Granger measures warn once per call, naming the signal pairs. It
-  caught all 9 failures of the old start and nothing in the test suite or in
-  720 windows of zero-padded multitaper estimates. A factor that fails to be
-  minimum phase without its determinant winding countably is not caught.
+  spectral Granger measures warn once per call, naming the signal pairs. In
+  the sweep of 400 random dense VARs it caught all 9 failures of the old
+  start, and it flagged nothing in the test suite or in 720 windows of
+  zero-padded multitaper estimates. It cannot judge a determinant whose
+  phase turns by more than `π/2` between bins (a zero near the unit circle
+  on a coarse grid), and a factor that fails to be minimum phase without its
+  determinant winding countably is not caught.
 - The Wilson iteration builds each update from a square root of the
   cross-spectrum, so it is Hermitian positive semidefinite by construction.
   Sub-spectra with near-duplicate channels (condition numbers from about 1e10)

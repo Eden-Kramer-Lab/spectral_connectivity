@@ -412,7 +412,9 @@ def _determinant_winding_number(
     As a test of minimum phase it is best effort: a factor that is not
     minimum phase but whose determinant does not wind countably (a causal
     factor with zeros outside the unit circle that the count misses, or an
-    anticausal one) passes it.
+    anticausal one) passes it, and so does one whose determinant turns by
+    ``WINDING_MAX_PHASE_INCREMENT`` or more between bins, as near a zero close
+    to the unit circle on a coarse grid.
 
     Parameters
     ----------
@@ -775,7 +777,9 @@ def minimum_phase_decomposition(
     A converged factor whose ``det G(e^{iω})`` winds around zero, counted
     where its phase turns by less than ``π / 2`` between bins, is not minimum
     phase and gives a ``UserWarning``; its factor is returned as computed.
-    The check is best effort and costs less than one iteration.
+    The check is best effort: it cannot judge a determinant whose phase
+    turns by ``π / 2`` or more between bins, and it costs less than one
+    iteration.
 
     Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
     computed once, which lets sub-spectra with near-collinear channels converge.
