@@ -12,6 +12,7 @@ import warnings
 import numpy as np
 import pytest
 import xarray as xr
+from packaging.version import Version
 
 from spectral_connectivity import (
     MorletWavelet,
@@ -203,8 +204,14 @@ def test_complex_results_roundtrip_with_h5netcdf_invalid_netcdf(measure_results,
 def test_complex_results_roundtrip_with_netcdf4_auto_complex(measure_results, tmp_path):
     """The documented recipe for complex results: netCDF4 with auto_complex."""
     netcdf4 = pytest.importorskip("netCDF4")
-    if not hasattr(netcdf4.Dataset, "__init__") or netcdf4.__version__ < "1.7":
-        pytest.skip("auto_complex needs netCDF4 >= 1.7")
+    # netCDF4 1.7.0 added auto_complex to Dataset; xarray 2024.10.0 added it to
+    # to_netcdf and the netCDF4 backend of open_dataset/open_dataarray.
+    netcdf4_too_old = Version(netcdf4.__version__) < Version("1.7")
+    if netcdf4_too_old or Version(xr.__version__) < Version("2024.10"):
+        pytest.skip(
+            "auto_complex needs netCDF4 >= 1.7 and xarray >= 2024.10; found "
+            f"netCDF4 {netcdf4.__version__} and xarray {xr.__version__}"
+        )
     for method in _complex_measures(measure_results):
         result = measure_results[method]
         path = tmp_path / f"{method}.nc"
