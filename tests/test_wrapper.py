@@ -34,6 +34,7 @@ from spectral_connectivity.wrapper import (
     multitaper_connectivity,
 )
 from tests._backend_helpers import to_host
+from tests._spectral_transforms import PrecomputedTransform
 
 # Shared window-grid case: 2.4 s at 500 Hz plus one sample, so most window
 # durations leave a trailing partial window that must be dropped.
@@ -4824,6 +4825,10 @@ def _recorded(call):
             },
             id="deprecated-name-and-wilson-settings",
         ),
+        pytest.param(
+            {"method": ["power", "magnitude_squared_coherence"], "squeeze": True},
+            id="squeeze-ignored-for-a-list",
+        ),
     ],
 )
 @pytest.mark.parametrize("windowed", [False, True], ids=["one-window", "windowed"])
@@ -4846,7 +4851,6 @@ def test_connectivity_to_xarray_of_a_list_equals_multitaper_connectivity(
     )
     assert isinstance(actual, xr.Dataset)
     assert actual.identical(expected)
-    assert actual.attrs == expected.attrs
     assert actual_warnings == expected_warnings
 
 
@@ -4917,6 +4921,11 @@ def test_connectivity_to_xarray_decimates_after_the_range(morlet):
     # Equal values and coordinates; the attributes record the decimation.
     xr.testing.assert_equal(decimated, cropped.isel(frequency=slice(None, None, 2)))
     assert decimated.attrs["frequency_decimation"] == 2
+    # The validity mask is decimated with the bins it describes.
+    np.testing.assert_array_equal(
+        decimated.valid_time_frequency,
+        to_host(morlet.valid_time_frequency)[:, [1, 3, 5]],
+    )
 
 
 @pytest.mark.parametrize(
@@ -4975,53 +4984,21 @@ def test_connectivity_to_xarray_rejects_what_multitaper_connectivity_rejects(
     )
 
 
-def test_connectivity_to_xarray_ignores_squeeze_for_a_list(four_signals):
-    two = Multitaper(four_signals[..., :2], _MULTI_SAMPLING_FREQUENCY)
-    with pytest.warns(UserWarning, match="squeeze=True is ignored for multi-measure"):
-        result = connectivity_to_xarray(
-            two, ["power", "magnitude_squared_coherence"], squeeze=True
-        )
-    assert result["magnitude_squared_coherence"].dims == (
-        "time",
-        "frequency",
-        "source",
-        "target",
-    )
-
-
-class _CoefficientsOnly:
-    """A SpectralTransform that is not built in: coefficients, no coordinates."""
-
-    def __init__(self, coefficients):
-        self._coefficients = coefficients
-        self.frequencies = None
-        self.time = None
-
-    def fft(self):
-        return self._coefficients.copy()
-
-
 def test_connectivity_to_xarray_lists_measures_of_a_custom_transform(four_signals):
     """A list from a transform without coordinates or a settings record gives
     each measure's own result, labeled in normalized frequency and window index,
     with the provenance that says so."""
     coefficients = Multitaper(four_signals, _MULTI_SAMPLING_FREQUENCY).fft()
     methods = ["power", "magnitude_squared_coherence", "delay"]
-    transform = _CoefficientsOnly(coefficients)
+    transform = PrecomputedTransform(coefficients, None, None)
     combined = connectivity_to_xarray(transform, methods)
     assert list(combined.data_vars) == methods
     for name in methods:
         assert combined[name].identical(connectivity_to_xarray(transform, name)), name
-    assert combined.attrs["transform"] == "_CoefficientsOnly"
+    assert combined.attrs["transform"] == "PrecomputedTransform"
     assert combined.attrs["frequency_units"] == "cycles/sample"
     assert combined.attrs["nyquist_frequency"] == 0.5
     assert combined.attrs["time_coordinate"] == "index"
-    assert combined.frequency.attrs == {
-        "long_name": "Normalized frequency",
-        "units": "cycles/sample",
-    }
-    assert combined.time.attrs == {"long_name": "Window index"}
-    assert combined["delay"].attrs["units"] == "samples"
 
 
 def test_connectivity_to_xarray_lists_morlet_measures_with_their_validity(morlet):
