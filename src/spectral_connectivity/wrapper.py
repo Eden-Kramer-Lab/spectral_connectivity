@@ -1707,7 +1707,7 @@ def multitaper_connectivity(
         transform_settings["valid_samples"] = _valid_samples_in_core_layout(
             transform_settings["valid_samples"],
             time_series,
-            time_series_data.ndim,
+            tuple(time_series_data.shape),
             time_dim=time_dim,
             trial_dim=trial_dim,
             signal_dim=signal_dim,
@@ -1793,7 +1793,7 @@ def multitaper_connectivity(
 def _valid_samples_in_core_layout(
     valid_samples: Any,
     time_series: Any,
-    n_dimensions: int,
+    shape: tuple[int, ...],
     **dimensions: Hashable | None,
 ) -> Any:
     """``valid_samples`` in Multitaper's ``(n_time_samples, n_trials[, n_signals])``.
@@ -1803,7 +1803,9 @@ def _valid_samples_in_core_layout(
     time, trial and signal dimensions; it may lack the trial and signal ones).
     The mask of a 2-D ``(n_time_samples, n_signals)`` time series has that
     layout, ``(n_time_samples,)`` or ``(n_time_samples, n_signals)``, and
-    gains the trial axis the time series does. Any other value is passed on.
+    gains the trial axis the time series does; ``shape`` is the time series'
+    in ``(n_time_samples[, n_trials], n_signals)`` order. Any other value is
+    passed on, for Multitaper to check.
     """
     if valid_samples is None or isinstance(valid_samples, str):
         return valid_samples
@@ -1822,13 +1824,19 @@ def _valid_samples_in_core_layout(
         valid_samples = valid_samples.transpose(
             *[dimension for dimension in order if dimension in valid_samples.dims]
         ).data
-    if n_dimensions == 2:
+    if len(shape) == 2:
         mask = np.asarray(valid_samples)
-        if mask.ndim not in (1, 2):
+        n_time, n_signals = shape
+        if mask.shape not in ((n_time,), (n_time, n_signals)):
+            transposed = (
+                " Did you transpose it? Pass valid_samples.T."
+                if mask.shape == (n_signals, n_time)
+                else ""
+            )
             msg = (
-                f"valid_samples has shape {mask.shape}; for a 2-D time series "
-                "(n_time_samples, n_signals) it must be (n_time_samples,), shared by "
-                "every signal, or (n_time_samples, n_signals)."
+                f"valid_samples has shape {mask.shape}; for the 2-D time_series "
+                f"{shape} = (n_time_samples, n_signals) it must be ({n_time},), shared "
+                f"by every signal, or {shape}.{transposed}"
             )
             raise ValueError(msg)
         return mask[:, np.newaxis] if mask.ndim == 1 else mask[:, np.newaxis, :]

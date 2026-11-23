@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
+from spectral_connectivity.connectivity import _find_significant_frequencies
 from spectral_connectivity.statistics import coherence_significance_pvalue
 from tests._backend_helpers import to_host
 
@@ -139,9 +140,9 @@ def test_jackknife_equals_that_of_the_kept_trial_windows(recording):
 def test_without_time_resolution_the_kept_trials_are_used(recording):
     time_series, valid = recording
     trials = valid.all(axis=0)
-    masked = Connectivity.from_transform(
-        Multitaper(time_series, SAMPLING_FREQUENCY, valid_samples=valid)
-    )
+    with pytest.warns(UserWarning, match=r"drops 80% of trial windows \(1 of 5 kept\)"):
+        multitaper = Multitaper(time_series, SAMPLING_FREQUENCY, valid_samples=valid)
+    masked = Connectivity.from_transform(multitaper)
     kept = Connectivity.from_transform(Multitaper(time_series[:, trials], SAMPLING_FREQUENCY))
     assert trials.sum() == 1  # only trial 4 is clean throughout
     for measure in ("power", "magnitude_squared_coherence"):
@@ -223,7 +224,12 @@ def test_nan_at_valid_samples_still_warns(recording):
     time_series = time_series.copy()
     time_series[120, 0, 1] = np.nan  # in window 2, which every trial keeps
     with pytest.warns(UserWarning, match="1 NaN or infinite value at samples valid_samples"):
-        Multitaper(time_series, SAMPLING_FREQUENCY, valid_samples=valid)
+        Multitaper(
+            time_series,
+            SAMPLING_FREQUENCY,
+            n_time_samples_per_window=WINDOW,
+            valid_samples=valid,
+        )
 
 
 def test_nan_covered_by_the_mask_does_not_warn(recording):
@@ -242,8 +248,11 @@ def test_nan_covered_by_the_mask_does_not_warn(recording):
 def test_unmasked_nan_warning_suggests_valid_samples():
     time_series = np.random.default_rng(2).standard_normal((200, 2, 2))
     time_series[5, 0, 0] = np.nan
-    with pytest.warns(UserWarning, match="valid_samples='finite' drops every"):
+    with pytest.warns(UserWarning, match="NaN or infinite") as record:
         Multitaper(time_series, SAMPLING_FREQUENCY)
+    message = str(record[0].message)
+    # The first remedy named.
+    assert "raise a ValueError instead). Pass valid_samples='finite'" in message
 
 
 def test_a_window_with_no_valid_trial_warns_and_is_nan():
@@ -251,7 +260,7 @@ def test_a_window_with_no_valid_trial_warns_and_is_nan():
     valid = np.ones((200, 2), dtype=bool)
     valid[60, :] = False  # window 1, both trials
     with pytest.warns(
-        UserWarning, match=r"leaves 1 of 4 time windows \(0-based indices \[1\]\)"
+        UserWarning, match=r"leaves 1 of 4 time windows \(0-based indices \[1\]\).*50 samples"
     ):
         multitaper = Multitaper(
             time_series,
@@ -264,11 +273,56 @@ def test_a_window_with_no_valid_trial_warns_and_is_nan():
     assert np.isfinite(power[[0, 2, 3]]).all()
 
 
+def test_a_time_only_mask_is_shared_by_every_trial_and_signal():
+    time_series = np.random.default_rng(12).standard_normal((200, 3, 2))
+    shared = np.ones(200, dtype=bool)
+    shared[60] = False  # window 1, in every trial
+    with pytest.warns(UserWarning, match="leaves 1 of 4 time windows"):
+        from_time = Multitaper(
+            time_series,
+            SAMPLING_FREQUENCY,
+            n_time_samples_per_window=WINDOW,
+            valid_samples=shared,
+        )
+    expected = np.broadcast_to(shared[:, None], (200, 3))
+    np.testing.assert_array_equal(to_host(from_time.valid_samples), expected)
+
+
+def test_dropping_most_trial_windows_warns_and_suggests_an_inverted_mask():
+    """A mask true at artifacts, passed as is, keeps little: here the first
+    window, clean but for the mask."""
+    time_series = np.random.default_rng(8).standard_normal((200, 2, 2))
+    artifacts = np.zeros((200, 2), dtype=bool)
+    artifacts[60:65, 0] = True
+    inverted = artifacts | (np.arange(200)[:, None] < 50)
+    with pytest.warns(UserWarning, match="valid_samples") as record:
+        Multitaper(
+            time_series,
+            SAMPLING_FREQUENCY,
+            n_time_samples_per_window=WINDOW,
+            valid_samples=inverted,
+        )
+    messages = [str(warning.message) for warning in record]
+    assert any(
+        "drops 75% of trial windows (2 of 8 kept)" in message and "pass ~mask" in message
+        for message in messages
+    )
+    # Passed the right way round, it drops one trial window and is quiet.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        Multitaper(
+            time_series,
+            SAMPLING_FREQUENCY,
+            n_time_samples_per_window=WINDOW,
+            valid_samples=~artifacts,
+        )
+
+
 def test_a_mask_leaving_no_valid_trial_window_raises():
     time_series = np.random.default_rng(4).standard_normal((100, 2, 2))
     valid = np.ones((100, 2), dtype=bool)
     valid[[10, 60], :] = False
-    with pytest.raises(ValueError, match="leaves no valid trial window"):
+    with pytest.raises(ValueError, match=r"leaves no valid trial window.*pass ~mask"):
         Multitaper(
             time_series,
             SAMPLING_FREQUENCY,
@@ -282,8 +336,8 @@ def test_a_mask_leaving_no_valid_trial_window_raises():
     [
         ("nan", ValueError, "must be a boolean array, 'finite', or None"),
         (np.ones((100, 2)), TypeError, "must be a boolean array .* got dtype float64"),
-        (np.ones((100,), dtype=bool), ValueError, r"has shape \(100,\)"),
-        (np.ones((100, 3), dtype=bool), ValueError, r"must be \(n_time_samples, n_trials\)"),
+        (np.ones((99,), dtype=bool), ValueError, r"has shape \(99,\)"),
+        (np.ones((100, 3), dtype=bool), ValueError, r"has shape \(100, 3\); it must be"),
         (np.ones((100, 2, 3), dtype=bool), ValueError, r"has shape \(100, 2, 3\)"),
     ],
 )
@@ -324,7 +378,8 @@ def test_valid_samples_is_immutable_and_reported(recording):
     assert "Valid samples:                 <mask> (16 of 20 trial windows kept)" in (
         multitaper.summarize_parameters()
     )
-    finite = Multitaper(time_series, SAMPLING_FREQUENCY, valid_samples="finite")
+    with pytest.warns(UserWarning, match="drops 80% of trial windows"):
+        finite = Multitaper(time_series, SAMPLING_FREQUENCY, valid_samples="finite")
     assert "valid_samples='finite' (1 of 5 trial windows kept)" in repr(finite)
     assert "valid_samples" not in repr(Multitaper(time_series[:, [4]], SAMPLING_FREQUENCY))
 
@@ -383,6 +438,57 @@ def test_the_wrapper_reads_a_mask_of_2d_input_in_its_layout(shared):
     power = result.values
     assert np.isnan(power[1]).all()
     assert np.isfinite(power[[0, 2, 3]]).all()
+
+
+@pytest.mark.parametrize(
+    ("shape", "match"),
+    [
+        ((200, 4), r"has shape \(200, 4\); for the 2-D time_series \(200, 2\) .* \(200,\)"),
+        ((2, 200), r"Did you transpose it\? Pass valid_samples.T"),
+    ],
+)
+def test_the_wrapper_states_the_mask_shapes_of_2d_input(shape, match):
+    time_series = np.random.default_rng(9).standard_normal((200, 2))
+    with pytest.raises(ValueError, match=match):
+        multitaper_connectivity(
+            time_series,
+            SAMPLING_FREQUENCY,
+            method="power",
+            transform_kwargs={"valid_samples": np.ones(shape, dtype=bool)},
+        )
+
+
+def test_delay_significance_agrees_window_by_window(recording):
+    """Each window's zero-coherence test, corrected within that window, selects
+    the frequencies the kept trials alone select."""
+    time_series, valid = recording
+    connectivity = Connectivity.from_transform(
+        Multitaper(
+            time_series,
+            SAMPLING_FREQUENCY,
+            time_halfbandwidth_product=2,
+            n_time_samples_per_window=WINDOW,
+            valid_samples=valid,
+        )
+    )
+    coherency = connectivity.coherency()[..., [0], [1]]
+    counts = connectivity.n_valid_observations[..., np.newaxis]
+    for window in range(4):
+        samples = slice(window * WINDOW, (window + 1) * WINDOW)
+        trials = valid[samples].all(axis=0)
+        kept = Connectivity.from_transform(
+            Multitaper(
+                time_series[samples, trials], SAMPLING_FREQUENCY, time_halfbandwidth_product=2
+            )
+        )
+        selected = _find_significant_frequencies(coherency[[window]], counts[[window]])
+        assert selected.any()
+        np.testing.assert_array_equal(
+            selected,
+            _find_significant_frequencies(
+                kept.coherency()[..., [0], [1]], kept.n_observations
+            ),
+        )
 
 
 def test_the_wrapper_transposes_a_labeled_mask_like_its_labeled_input(recording):
