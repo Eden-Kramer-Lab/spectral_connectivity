@@ -63,6 +63,21 @@ The migration guide for code written against 2.x is
   `group_labels="region"`, whose values then label the signals. A string
   given with a plain array, or to `connectivity_to_xarray`, now raises
   `TypeError` saying so, where it raised a shape `ValueError`.
+- `Connectivity.surrogate_test(method, kind=...)` tests a real pairwise measure
+  against surrogate data and returns a `SurrogateTestResult` (exported from
+  `spectral_connectivity`) with element-wise Monte Carlo p-values and p-values
+  adjusted for the family-wise error rate by the maximum statistic over the
+  axes named by `fwer_axis` (Nichols and Holmes, 2002). `kind` chooses the
+  null hypothesis: `"trial_shuffle"` (signals independent across trials;
+  each signal keeps its stimulus-locked response), `"phase_rotation"` (signals
+  independent; works with one trial; needs `half_bandwidth` and leaves the
+  frequencies within it of 0 Hz and Nyquist untested), and `"conjugation"`
+  (real coherency, as for zero-lag mixing such as volume conduction; tests
+  lagged interaction and Granger causality beyond mixing). Correlated
+  observations (`observations_are_independent=False`) are randomized as whole
+  trials. `alternative` takes `"greater"`, `"less"`, or `"two-sided"`;
+  `random_state` seeds the surrogates. It refuses `power`, `delay`, and
+  complex, tuple-valued, or structured measures.
 - `Connectivity.jackknife(method, leave_out="trial")` leaves out whole trials
   (all their tapers) instead of single trial-taper observations, so the
   interval includes the variability between trials; the default interval is

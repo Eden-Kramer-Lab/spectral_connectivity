@@ -400,6 +400,13 @@ bias-corrected estimate, standard error, and confidence interval, and applies
 a variance-stabilizing transformation automatically: log for power,
 `atanh(sqrt(.))` for magnitude-squared coherence, and circular for phase.
 
+For significance, `Connectivity.surrogate_test(method, kind=...)` compares a
+measure with its values on surrogate data: trials shuffled between signals,
+phases rotated, or observations conjugated (time-reversed), each for a
+different null hypothesis. It returns element-wise p-values and p-values
+corrected for the family-wise error rate; see the
+[cookbook recipe](docs/cookbook.md#test-against-surrogate-data).
+
 ## Documentation
 
 <!-- docs/index.md skips from here: a link to the docs site itself. -->

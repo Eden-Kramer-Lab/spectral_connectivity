@@ -355,6 +355,72 @@ max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * (b^H S_tt b)),
 
 ```
 
+## Test against surrogate data
+
+`Connectivity.surrogate_test` recomputes a measure on surrogate coefficients
+built to satisfy a null hypothesis and returns Monte Carlo p-values. Here
+signal 1 is signal 0 delayed by 3 samples (6 ms) and signal 2 is independent:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> rng = np.random.default_rng(1)
+>>> leader = rng.standard_normal((503, 10))
+>>> lagged = np.stack([leader[3:], leader[:-3], rng.standard_normal((500, 10))], axis=-1)
+>>> lagged += rng.standard_normal(lagged.shape)
+>>> multitaper = Multitaper(lagged, sampling_frequency=500, time_halfbandwidth_product=2)
+>>> connectivity = Connectivity.from_transform(multitaper)
+>>> result = connectivity.surrogate_test(
+...     "imaginary_coherence", kind="conjugation", n_surrogates=199, random_state=0
+... )
+>>> result.p_value.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+(1, 251, 3, 3)
+>>> significant = result.fwer_p_value <= 0.05  # family-wise over every frequency and pair
+>>> bool(significant[0, 40, 0, 1]), bool(significant[..., [0, 1], [2, 2]].any())
+(True, False)
+
+```
+
+`p_value` is each element's own test; `fwer_p_value` adjusts for testing every
+element of a family (all of them by default; `fwer_axis` chooses the axes).
+The diagonal is not tested and its p-values are NaN.
+
+`kind` sets the null hypothesis, so choose it for the question:
+
+- `"trial_shuffle"`: are the signals related from trial to trial? Shuffles each
+  signal's trials. Needs several trials (the expectation must average them).
+  A stimulus-locked response common to the signals is kept in every surrogate,
+  so it does not count as connectivity.
+- `"phase_rotation"`: are the signals independent at all? Rotates each trial
+  and taper by a random phase, so it works with one trial. Pass
+  `half_bandwidth` (for a `Multitaper`, `frequency_resolution / 2`); the
+  frequencies within it of 0 Hz and Nyquist are not tested. A common
+  stimulus-locked response is rejected too: subtract each signal's mean
+  across trials first, or use `"trial_shuffle"`, to ask about interaction
+  beyond it.
+- `"conjugation"`: is there more than zero-lag mixing (volume conduction)?
+  Conjugates (time-reverses) random observations. Instantaneous mixing of
+  independent sources is in its null, so `imaginary_coherence`, the
+  phase-lag indices, `phase_slope_index` and pairwise spectral Granger test
+  for lagged interaction with it.
+
+```python
+>>> shuffled = connectivity.surrogate_test(
+...     "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=199, random_state=0
+... )
+>>> rotated = connectivity.surrogate_test(
+...     "magnitude_squared_coherence",
+...     kind="phase_rotation",
+...     half_bandwidth=multitaper.frequency_resolution / 2,
+...     n_surrogates=199,
+...     random_state=0,
+... )
+>>> bool(np.isnan(rotated.p_value[0, :2, 0, 1]).all())  # 0 and 1 Hz: within 2 Hz of 0 Hz
+True
+>>> bool((shuffled.fwer_p_value[0, 40, 0, 1] <= 0.05) and (rotated.fwer_p_value[0, 40, 0, 1] <= 0.05))
+True
+
+```
+
 ## Global coherence pooled over time windows
 
 `method="global_coherence"` decomposes each time window's trials and tapers
