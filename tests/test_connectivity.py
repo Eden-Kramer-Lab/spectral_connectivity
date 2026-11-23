@@ -2907,12 +2907,15 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     assert "regularization" not in named[0]
     # The generic, pair-less non-convergence warning is not repeated for the
     # measure's own factorizations, and no other warning reports the same NaN
-    # bins. Only conditional Granger's full model is the factorization cached
-    # and shared with DTF, PDC and the other directed measures; its warning is
-    # kept because it is the only one those measures get. The time-reversed
-    # full model is used by its measure alone.
+    # bins. Conditional Granger's full model, forward (the factorization
+    # cached and shared with DTF, PDC and the other directed measures) or
+    # time-reversed, keeps it, so a full-model failure is reported the same
+    # way in both directions.
     n_generic = sum("Wilson minimum-phase" in message for message in messages)
-    shares_full_model = measure == "conditional_spectral_granger_prediction"
+    shares_full_model = measure in (
+        "conditional_spectral_granger_prediction",
+        "time_reversed_conditional_spectral_granger_prediction",
+    )
     assert n_generic == int(shares_full_model), messages
     assert not any("not positive" in message for message in messages), messages
     assert not any("not positive-definite" in message for message in messages), messages
@@ -3130,14 +3133,21 @@ def test_conditional_granger_factorizes_each_channel_set_once():
     shape = (1, 20, 3, 32, 4)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     conn = Connectivity(coefficients)
-    # The full model and every reduced model are factorized through _granger.
-    with patch.object(
-        _granger,
-        "_minimum_phase_factor_and_flags",
-        wraps=_granger._minimum_phase_factor_and_flags,
-    ) as factorize:
+    # The full model is factorized (with its warnings) through _granger's
+    # minimum_phase_decomposition, and every reduced model through its core.
+    with (
+        patch.object(
+            _granger, "minimum_phase_decomposition", wraps=_granger.minimum_phase_decomposition
+        ) as factorize_full,
+        patch.object(
+            _granger,
+            "_minimum_phase_factor_and_flags",
+            wraps=_granger._minimum_phase_factor_and_flags,
+        ) as factorize_reduced,
+    ):
         conn.conditional_spectral_granger_prediction()
-    assert factorize.call_count == shape[-1] + 1
+    assert factorize_full.call_count == 1
+    assert factorize_reduced.call_count == shape[-1]
 
 
 @pytest.mark.parametrize(

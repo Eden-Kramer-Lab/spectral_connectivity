@@ -7,6 +7,7 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 
 import warnings
 from logging import DEBUG, getLogger
+from typing import NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -718,8 +719,6 @@ def minimum_phase_decomposition(
     cross_spectral_matrix: NDArray[np.complexfloating],
     tolerance: float = 1e-8,
     max_iterations: int = 500,
-    *,
-    _warn_on_failure: bool = True,
 ) -> NDArray[np.complexfloating]:
     """Compute minimum phase decomposition using Wilson algorithm.
 
@@ -873,47 +872,66 @@ def minimum_phase_decomposition(
            information flow in brain networks with nonparametric Granger
            causality. NeuroImage, 41(2), 354-362.
     """
-    factor, not_minimum_phase = _minimum_phase_factor_and_flags(
-        cross_spectral_matrix,
-        tolerance,
-        max_iterations,
-        warn_on_failure=_warn_on_failure,
+    factorization = _minimum_phase_factor_and_flags(
+        cross_spectral_matrix, tolerance, max_iterations
     )
-    if _warn_on_failure:
-        _warn_not_minimum_phase(not_minimum_phase)
-    return factor
-
-
-def _warn_not_minimum_phase(not_minimum_phase: NDArray[np.bool_]) -> None:
-    """Warn, counting the sub-spectra whose factor is not minimum phase."""
-    n_not_minimum_phase = int(not_minimum_phase.sum())
+    n_units = factorization.unconverged.size
+    n_failed = int(factorization.unconverged.sum())
+    if n_failed:
+        reason = (
+            "a sub-spectrum became singular (rank-deficient / duplicated channels)"
+            if bool(factorization.singular.any())
+            else f"within {max_iterations} iterations (tolerance={tolerance})"
+        )
+        warnings.warn(
+            f"{NONCONVERGENCE_WARNING_START} for "
+            f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
+            f"sub-spectra are returned as NaN and will produce NaN in any "
+            f"directed connectivity measure (spectral Granger, DTF, etc.). "
+            f"Consider increasing max_iterations, using more tapers/trials, or "
+            f"checking for near-singular cross-spectral matrices (highly "
+            f"correlated channels).",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+    n_not_minimum_phase = int(factorization.not_minimum_phase.sum())
     if n_not_minimum_phase:
         warnings.warn(
             _not_minimum_phase_message(
-                f"{n_not_minimum_phase} of {not_minimum_phase.size} sub-spectrum/spectra"
+                f"{n_not_minimum_phase} of {n_units} sub-spectrum/spectra"
             ),
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
+    return factorization.factor
+
+
+class _Factorization(NamedTuple):
+    """A Wilson factorization and what went wrong in it, per sub-spectrum.
+
+    The masks have shape ``cross_spectral_matrix.shape[:-3]``.
+    """
+
+    factor: NDArray[np.complexfloating]
+    """Two-sided factor; NaN for the unconverged sub-spectra."""
+    not_minimum_phase: NDArray[np.bool_]
+    """Converged factors whose determinant winds around zero."""
+    unconverged: NDArray[np.bool_]
+    """Sub-spectra that did not converge."""
+    singular: NDArray[np.bool_]
+    """Unconverged sub-spectra whose factor became non-finite (singular)."""
 
 
 def _minimum_phase_factor_and_flags(
     cross_spectral_matrix: NDArray[np.complexfloating],
     tolerance: float,
     max_iterations: int,
-    *,
-    warn_on_failure: bool,
-) -> tuple[NDArray[np.complexfloating], NDArray[np.bool_]]:
-    """:func:`minimum_phase_decomposition`, and which factors are not minimum phase.
+) -> _Factorization:
+    """:func:`minimum_phase_decomposition` without its warnings.
 
-    Returns the factor and a per-sub-spectrum mask (shape
-    ``cross_spectral_matrix.shape[:-3]``) of converged factors that
-    :func:`_is_not_minimum_phase` flags, without warning about them; the
-    callers name what was flagged. ``warn_on_failure`` controls only the
-    non-convergence warning.
+    Returns the factor with the masks of its failures; the callers report
+    them (the spectral Granger measures name the signal pairs).
     """
-    # warn_on_failure=False is private to the spectral Granger measures, which
-    # report the NaN signal pairs themselves instead of this pair-less warning.
     if not np.isfinite(tolerance) or tolerance <= 0:
         msg = f"tolerance must be a finite positive number, got {tolerance}."
         raise ValueError(msg)
@@ -1029,41 +1047,21 @@ def _minimum_phase_factor_and_flags(
     # factor became singular), returning the partially-converged factor silently
     # would feed numerically wrong values into every downstream
     # directed-connectivity measure with no way for the caller to tell. Mark only
-    # the unconverged sub-spectra as NaN (leaving the converged ones intact) and
-    # warn loudly.
-    n_failed = int((~is_converged).sum())
-    if n_failed:
-        # A singular sub-spectrum is the unconverged one whose factor is non-finite.
-        singular_factor = bool(
-            (~is_converged & ~_all_finite_units(minimum_phase_factor, batch_shape)).any()
-        )
-        unconverged = ~is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
+    # the unconverged sub-spectra as NaN (leaving the converged ones intact);
+    # the callers report them.
+    unconverged = ~is_converged
+    # A singular sub-spectrum is the unconverged one whose factor is non-finite.
+    singular = unconverged & ~_all_finite_units(minimum_phase_factor, batch_shape)
+    if bool(unconverged.any()):
         minimum_phase_factor = xp.where(
-            unconverged,
+            unconverged[..., xp.newaxis, xp.newaxis, xp.newaxis],
             xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
             minimum_phase_factor,
         )
-        if warn_on_failure:
-            reason = (
-                "a sub-spectrum became singular (rank-deficient / duplicated channels)"
-                if singular_factor
-                else f"within {max_iterations} iterations (tolerance={tolerance})"
-            )
-            warnings.warn(
-                f"{NONCONVERGENCE_WARNING_START} for "
-                f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
-                f"sub-spectra are returned as NaN and will produce NaN in any "
-                f"directed connectivity measure (spectral Granger, DTF, etc.). "
-                f"Consider increasing max_iterations, using more tapers/trials, or "
-                f"checking for near-singular cross-spectral matrices (highly "
-                f"correlated channels).",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
     # The winding number is unchanged by the scaling; the unconverged
     # sub-spectra are NaN by now and are not flagged.
     not_minimum_phase = _is_not_minimum_phase(minimum_phase_factor, half_spectrum_n_fft)
     minimum_phase_factor = signal_scale[..., xp.newaxis, :, xp.newaxis] * minimum_phase_factor
     if half_spectrum_n_fft is not None:
         minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)
-    return minimum_phase_factor, not_minimum_phase
+    return _Factorization(minimum_phase_factor, not_minimum_phase, unconverged, singular)

@@ -31,7 +31,7 @@ from spectral_connectivity._backend import ON_GPU, xp
 from spectral_connectivity.minimum_phase_decomposition import (
     _minimum_phase_factor_and_flags,
     _not_minimum_phase_message,
-    _warn_not_minimum_phase,
+    minimum_phase_decomposition,
 )
 from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
@@ -314,7 +314,7 @@ def _scatter_pairwise_granger(
     *,
     minimum_phase_tolerance: float,
     minimum_phase_max_iterations: int,
-    not_minimum_phase: NDArray[np.bool_] | None = None,
+    not_minimum_phase: NDArray[np.bool_],
 ) -> None:
     """Factor ``pairs`` together and write their Granger values in place.
 
@@ -326,7 +326,7 @@ def _scatter_pairwise_granger(
     csm : array, shape (..., n_fft_samples, n_signals, n_signals)
     pairs : host int array, shape (n_pairs, 2)
         Distinct signal pairs.
-    not_minimum_phase : host bool array, shape (n_signals, n_signals), optional
+    not_minimum_phase : host bool array, shape (n_signals, n_signals)
         Set (both directions) for each pair whose factor is not minimum phase
         in some time window; updated in place.
     """
@@ -342,7 +342,7 @@ def _scatter_pairwise_granger(
         )
     except np.linalg.LinAlgError:
         # A lone pair is left NaN; the calling measure names the NaN pairs
-        # (_warn_nan_granger_pairs). Retry a stack pair by pair so one failing
+        # (_warn_granger_failures). Retry a stack pair by pair so one failing
         # pair does not take the others with it (warnings the failed stack
         # already issued can repeat). NumPy raises LinAlgError, as does CuPy
         # under ``cupyx.errstate(linalg="raise")``.
@@ -359,8 +359,7 @@ def _scatter_pairwise_granger(
                 )
         return
     predictive_power[..., rows, columns] = xp.moveaxis(value, -4, -3)
-    if not_minimum_phase is not None:
-        _mark_pairs(not_minimum_phase, pairs, pair_not_minimum_phase)
+    _mark_pairs(not_minimum_phase, pairs, pair_not_minimum_phase)
 
 
 def _estimate_spectral_granger_prediction(
@@ -369,8 +368,7 @@ def _estimate_spectral_granger_prediction(
     pairs: Iterable[tuple[int, int]] | NDArray[np.integer],
     minimum_phase_tolerance: float = 1e-8,
     minimum_phase_max_iterations: int = 500,
-    not_minimum_phase: NDArray[np.bool_] | None = None,
-) -> NDArray[np.floating]:
+) -> tuple[NDArray[np.floating], NDArray[np.bool_]]:
     """
     Estimate spectral granger causality.
 
@@ -383,13 +381,14 @@ def _estimate_spectral_granger_prediction(
     pairs : list of tuples
         The pairs of signals to estimate the spectral granger
         causality for.
-    not_minimum_phase : host bool array, shape (n_signals, n_signals), optional
-        Set for the pairs whose factor is not minimum phase; updated in place.
 
     Returns
     -------
     predictive_power : ndarray, shape (..., n_frequencies, n_signals, n_signals)
         The spectral granger causality of the signals.
+    not_minimum_phase : host bool array, shape (n_signals, n_signals)
+        ``[target, source]``, True for the pairs whose factor is not minimum
+        phase in some time window.
     """
     n_nonnegative = total_power.shape[-2] // 2 + 1
     total_power = total_power[..., :n_nonnegative, :]
@@ -399,6 +398,7 @@ def _estimate_spectral_granger_prediction(
     predictive_power = xp.full(new_shape, xp.nan)
 
     pair_array = np.asarray(list(pairs), dtype=int).reshape(-1, 2)
+    not_minimum_phase = np.zeros((csm.shape[-1], csm.shape[-1]), dtype=bool)
     pairs_per_chunk = _pairs_per_wilson_batch(4 * int(np.prod(csm.shape[:-2])))
     for start in range(0, pair_array.shape[0], pairs_per_chunk):
         _scatter_pairwise_granger(
@@ -415,72 +415,93 @@ def _estimate_spectral_granger_prediction(
     diagonal_ind = xp.diag_indices(n_signals)
     predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = xp.nan
 
-    return predictive_power
+    return predictive_power, not_minimum_phase
 
 
-def _warn_nan_granger_pairs(
+def _pair_listing(
+    is_flagged: NDArray[np.bool_], names: NDArray[Any] | None
+) -> tuple[int, str, str, str]:
+    """``(n_pairs, listing, unit, indexing)`` naming the flagged source -> target pairs.
+
+    ``is_flagged`` is ``[target, source]``. ``unit`` is "signal" or "group";
+    ``indexing`` says how signals are numbered when they have no names.
+    """
+    targets, sources = np.nonzero(is_flagged)
+    pairs = sorted(zip(sources.tolist(), targets.tolist(), strict=True))
+    if names is None:
+        listing = ", ".join(f"{source} -> {target}" for source, target in pairs)
+        return len(pairs), listing, "signal", "0-based signal indices, "
+    listing = ", ".join(
+        f"{names[source].item()!r} -> {names[target].item()!r}" for source, target in pairs
+    )
+    return len(pairs), listing, "group", ""
+
+
+def _warn_granger_failures(
     result: NDArray[np.floating],
+    not_minimum_phase: NDArray[np.bool_],
     measure: str,
     *,
     requested: NDArray[np.bool_] | None = None,
     names: NDArray[Any] | None = None,
 ) -> None:
-    """Warn once, naming the source -> target pairs whose Granger values failed.
+    """Warn once each about the pairs whose factorization failed or is not minimum phase.
 
     A pair whose factorization is singular or does not converge, or whose
     target has no power, is NaN at every frequency of the affected time
-    window; the factorization marks it NaN without raising. Name those pairs
-    so the user can find the offending channels. Isolated NaN bins (a
-    degenerate bin of an otherwise valid factorization) are not reported here.
+    window; the factorization marks it NaN without raising. A pair whose
+    factor converged but is not minimum phase has finite, wrong values. Name
+    those pairs so the user can find the offending channels. Isolated NaN bins
+    (a degenerate bin of an otherwise valid factorization) are not reported.
 
     Parameters
     ----------
     result : array, shape (..., n_frequencies, n_units, n_units)
         Granger result, ``[..., target, source]``; the diagonal is ignored.
+    not_minimum_phase : host bool array, shape (n_units, n_units)
+        ``[target, source]``, from the measure's kernel.
     measure : str
-        Name of the public measure, used in the message.
+        Name of the public measure, used in the messages.
     requested : bool array, shape (n_units, n_units), optional
         Entries the caller computed; unrequested entries are NaN by design.
     names : array, shape (n_units,), optional
         Group labels; signals are named by their 0-based index otherwise.
     """
     n_units = result.shape[-1]
+    off_diagonal = ~np.eye(n_units, dtype=bool)
     # NaN at every frequency in at least one time window.
     failed = xp.all(xp.isnan(result), axis=-3).reshape(-1, n_units, n_units)
-    is_failed = to_numpy(xp.any(failed, axis=0)) & ~np.eye(n_units, dtype=bool)
+    is_failed = to_numpy(xp.any(failed, axis=0)) & off_diagonal
     if requested is not None:
         is_failed &= requested
-    if not is_failed.any():
-        return
-    targets, sources = np.nonzero(is_failed)
-    if names is None:
-        listing = ", ".join(
-            f"{source} -> {target}"
-            for source, target in sorted(zip(sources, targets, strict=True))
+    if is_failed.any():
+        n_pairs, listing, unit, indexing = _pair_listing(is_failed, names)
+        warnings.warn(
+            f"{measure}{NAN_PAIRS_WARNING_AFTER_MEASURE} for {n_pairs} source -> target "
+            f"{unit} pair(s): {listing} ({indexing}in at least one time window). The "
+            "spectral factorization for those pairs was singular or did not "
+            "converge, or the target has no power; this usually means duplicated, "
+            "linearly dependent, or dead (zero-power) channels, or too few "
+            "observations (trials x tapers) for the spectrum to have full rank, so "
+            "check those channels and the number of observations. If the channels "
+            "are valid but highly correlated, a larger "
+            "minimum_phase_max_iterations (an argument of Connectivity and of the wrappers) may let the "
+            "factorization converge.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
         )
-        unit = "signal"
-        indexing = "0-based signal indices, "
-    else:
-        listing = ", ".join(
-            f"{names[source].item()!r} -> {names[target].item()!r}"
-            for source, target in sorted(zip(sources, targets, strict=True))
+    is_not_minimum_phase = not_minimum_phase & off_diagonal
+    if is_not_minimum_phase.any():
+        n_pairs, listing, unit, indexing = _pair_listing(is_not_minimum_phase, names)
+        warnings.warn(
+            f"{measure}: "
+            + _not_minimum_phase_message(
+                f"{n_pairs} source -> target {unit} pair(s): {listing} ({indexing}in at "
+                "least one time window)"
+            ),
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
         )
-        unit = "group"
-        indexing = ""
-    warnings.warn(
-        f"{measure}{NAN_PAIRS_WARNING_AFTER_MEASURE} for {len(targets)} source -> target "
-        f"{unit} pair(s): {listing} ({indexing}in at least one time window). The "
-        "spectral factorization for those pairs was singular or did not "
-        "converge, or the target has no power; this usually means duplicated, "
-        "linearly dependent, or dead (zero-power) channels, or too few "
-        "observations (trials x tapers) for the spectrum to have full rank, so "
-        "check those channels and the number of observations. If the channels "
-        "are valid but highly correlated, a larger "
-        "minimum_phase_max_iterations (an argument of Connectivity and of the wrappers) may let the "
-        "factorization converge.",
-        UserWarning,
-        stacklevel=stacklevel_outside_package(),
-    )
 
 
 def _mark_pairs(
@@ -498,49 +519,8 @@ def _mark_pairs(
     flagged : array, shape (..., n_pairs)
         Per time window and pair, whether its factor is not minimum phase.
     """
-    any_window = to_numpy(xp.any(flagged.reshape(-1, len(pairs)), axis=0))
-    for first, second in pairs[any_window]:
-        not_minimum_phase[first, second] = not_minimum_phase[second, first] = True
-
-
-def _warn_not_minimum_phase_pairs(
-    not_minimum_phase: NDArray[np.bool_],
-    measure: str,
-    *,
-    names: NDArray[Any] | None = None,
-) -> None:
-    """Warn once, naming the source -> target pairs whose factor is not minimum phase.
-
-    Parameters
-    ----------
-    not_minimum_phase : host bool array, shape (n_units, n_units)
-        ``[target, source]``, as the kernels' results; the diagonal is ignored.
-    measure : str
-        Name of the public measure, used in the message.
-    names : array, shape (n_units,), optional
-        Group labels; signals are named by their 0-based index otherwise.
-    """
-    flagged = not_minimum_phase & ~np.eye(not_minimum_phase.shape[0], dtype=bool)
-    if not flagged.any():
-        return
-    targets, sources = np.nonzero(flagged)
-    pairs = sorted(zip(sources.tolist(), targets.tolist(), strict=True))
-    if names is None:
-        listing = ", ".join(f"{source} -> {target}" for source, target in pairs)
-        unit = "signal pair(s) (0-based signal indices)"
-    else:
-        listing = ", ".join(
-            f"{names[source].item()!r} -> {names[target].item()!r}" for source, target in pairs
-        )
-        unit = "group pair(s)"
-    warnings.warn(
-        f"{measure}: "
-        + _not_minimum_phase_message(
-            f"{len(pairs)} source -> target {unit} {listing}, in at least one time window"
-        ),
-        UserWarning,
-        stacklevel=stacklevel_outside_package(),
-    )
+    first, second = pairs[to_numpy(xp.any(flagged.reshape(-1, len(pairs)), axis=0))].T
+    not_minimum_phase[first, second] = not_minimum_phase[second, first] = True
 
 
 def _factorize_spectrum(
@@ -549,23 +529,19 @@ def _factorize_spectrum(
     minimum_phase_tolerance: float,
     minimum_phase_max_iterations: int,
 ) -> NDArray[np.complexfloating]:
-    """Wilson minimum-phase factor of a two-sided cross-spectrum, with warnings.
+    """Wilson minimum-phase factor of a two-sided cross-spectrum, with its warnings.
 
-    The full model cached on :class:`Connectivity` is factored here, and the
-    reduced and pairwise models by :func:`_var_model_from_spectrum`; both
-    call :func:`_minimum_phase_factor_and_flags` and go through
+    The full models (forward and time-reversed) are factored here, and the
+    reduced, pairwise, and block models by :func:`_var_model_from_spectrum`,
+    whose callers name the failed signal pairs instead; both go through
     :func:`_var_model_from_factor`, so they share one binding of the
-    factorization and of the transfer-function and noise-covariance
-    estimators.
+    transfer-function and noise-covariance estimators.
     """
-    factor, not_minimum_phase = _minimum_phase_factor_and_flags(
+    return minimum_phase_decomposition(
         csm,
-        minimum_phase_tolerance,
-        minimum_phase_max_iterations,
-        warn_on_failure=True,
+        tolerance=minimum_phase_tolerance,
+        max_iterations=minimum_phase_max_iterations,
     )
-    _warn_not_minimum_phase(not_minimum_phase)
-    return factor
 
 
 def _var_model_from_factor(
@@ -613,14 +589,11 @@ def _var_model_from_spectrum(
     not_minimum_phase : array, shape ``csm.shape[:-3]``
         Sub-spectra whose converged factor is not minimum phase.
     """
-    factor, not_minimum_phase = _minimum_phase_factor_and_flags(
-        csm,
-        minimum_phase_tolerance,
-        minimum_phase_max_iterations,
-        warn_on_failure=False,
+    factorization = _minimum_phase_factor_and_flags(
+        csm, minimum_phase_tolerance, minimum_phase_max_iterations
     )
-    transfer_function, noise_covariance = _var_model_from_factor(factor)
-    return transfer_function, noise_covariance, not_minimum_phase
+    transfer_function, noise_covariance = _var_model_from_factor(factorization.factor)
+    return transfer_function, noise_covariance, factorization.not_minimum_phase
 
 
 def _estimate_conditional_spectral_granger_prediction(
@@ -726,8 +699,7 @@ def _estimate_all_conditional_spectral_granger(
     *,
     minimum_phase_tolerance: float,
     minimum_phase_max_iterations: int,
-    not_minimum_phase: NDArray[np.bool_] | None = None,
-) -> NDArray[np.floating]:
+) -> tuple[NDArray[np.floating], NDArray[np.bool_]]:
     """Conditional spectral Granger for every ordered pair of three or more signals.
 
     Parameters
@@ -738,15 +710,15 @@ def _estimate_all_conditional_spectral_granger(
         Transfer function of the full model of every signal.
     full_covariance : array, shape (..., n_signals, n_signals)
         Noise covariance of the full model.
-    not_minimum_phase : host bool array, shape (n_signals, n_signals), optional
-        ``[target, source]`` set for every target of a source whose reduced
-        model is not minimum phase; updated in place.
 
     Returns
     -------
     conditional_granger : array, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
         ``[..., target, source]`` is ``source -> target`` conditioned on the
         other signals; the diagonal is NaN.
+    not_minimum_phase : host bool array, shape (n_signals, n_signals)
+        ``[target, source]``, True for every target of a source whose reduced
+        model is not minimum phase.
     """
     n_signals = spectrum.shape[-1]
     n_nonnegative = spectrum.shape[-3] // 2 + 1
@@ -756,6 +728,7 @@ def _estimate_all_conditional_spectral_granger(
         dtype=_granger_result_dtype(spectrum),
     )
     all_indices = np.arange(n_signals)
+    not_minimum_phase = np.zeros((n_signals, n_signals), dtype=bool)
     degenerate = xp.asarray(False)
     for source in range(n_signals):
         reduced_indices = all_indices[all_indices != source]
@@ -767,8 +740,7 @@ def _estimate_all_conditional_spectral_granger(
             minimum_phase_tolerance=minimum_phase_tolerance,
             minimum_phase_max_iterations=minimum_phase_max_iterations,
         )
-        if not_minimum_phase is not None and bool(xp.any(reduced_not_minimum_phase)):
-            not_minimum_phase[reduced_indices, source] = True
+        not_minimum_phase[reduced_indices, source] = bool(xp.any(reduced_not_minimum_phase))
         reduced_inverse_transfer = _diagonally_loaded_inverse(reduced_transfer)
         for target in range(n_signals):
             if target == source:
@@ -794,7 +766,7 @@ def _estimate_all_conditional_spectral_granger(
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
-    return result
+    return result, not_minimum_phase
 
 
 def _estimate_blockwise_spectral_granger(
@@ -803,8 +775,7 @@ def _estimate_blockwise_spectral_granger(
     *,
     minimum_phase_tolerance: float,
     minimum_phase_max_iterations: int,
-    not_minimum_phase: NDArray[np.bool_] | None = None,
-) -> NDArray[np.floating]:
+) -> tuple[NDArray[np.floating], NDArray[np.bool_]]:
     """Block spectral Granger between every pair of signal groups.
 
     Parameters
@@ -813,14 +784,14 @@ def _estimate_blockwise_spectral_granger(
         Two-sided cross-spectral matrix in standard FFT order.
     group_indices : sequence of int arrays
         Signal indices of each group.
-    not_minimum_phase : host bool array, shape (n_groups, n_groups), optional
-        Set (both directions) for each group pair whose factor is not
-        minimum phase; updated in place.
 
     Returns
     -------
     block_granger : array, shape (..., n_nonnegative_frequencies, n_groups, n_groups)
         ``[..., target, source]`` is ``source -> target``; the diagonal is NaN.
+    not_minimum_phase : host bool array, shape (n_groups, n_groups)
+        True (both directions) for each group pair whose factor is not
+        minimum phase in some time window.
     """
     n_groups = len(group_indices)
     n_nonnegative = spectrum.shape[-3] // 2 + 1
@@ -829,6 +800,7 @@ def _estimate_blockwise_spectral_granger(
         xp.nan,
         dtype=_granger_result_dtype(spectrum),
     )
+    not_minimum_phase = np.zeros((n_groups, n_groups), dtype=bool)
     # One factorization per unordered group pair supplies both directions.
     # Group pairs with the same block sizes are factored together (one per call
     # on the CPU, bounded chunks on the GPU; see _pairs_per_wilson_batch).
@@ -850,16 +822,13 @@ def _estimate_blockwise_spectral_granger(
                     minimum_phase_max_iterations=minimum_phase_max_iterations,
                 )
             )
-            if not_minimum_phase is not None:
-                _mark_pairs(
-                    not_minimum_phase,
-                    np.stack([firsts, seconds], axis=1),
-                    pair_not_minimum_phase,
-                )
+            _mark_pairs(
+                not_minimum_phase, np.stack([firsts, seconds], axis=1), pair_not_minimum_phase
+            )
             firsts_device, seconds_device = xp.asarray(firsts), xp.asarray(seconds)
             result[..., firsts_device, seconds_device] = xp.moveaxis(first_from_second, -2, -1)
             result[..., seconds_device, firsts_device] = xp.moveaxis(second_from_first, -2, -1)
-    return result
+    return result, not_minimum_phase
 
 
 def _estimate_block_spectral_granger_prediction(
@@ -1015,15 +984,14 @@ def _estimate_subset_spectral_granger_prediction(
     n_signals: int,
     minimum_phase_tolerance: float = 1e-8,
     minimum_phase_max_iterations: int = 500,
-    not_minimum_phase: NDArray[np.bool_] | None = None,
-) -> NDArray[np.floating]:
+) -> tuple[NDArray[np.floating], NDArray[np.bool_]]:
     """Estimate selected pairwise Granger values from compact 2-by-2 spectra.
 
     ``pair_csm`` has shape ``(..., n_pairs, n_frequencies, 2, 2)``. Keeping the
     pair axis as a batch dimension avoids allocating a full signal-by-signal CSM
     with uninitialized entries merely to consume its requested 2-by-2 slices.
-    ``not_minimum_phase`` (host bool, ``(n_signals, n_signals)``), if given,
-    is set in place for the pairs whose factor is not minimum phase.
+    Also returns a host bool ``(n_signals, n_signals)`` matrix, True for the
+    pairs whose factor is not minimum phase in some time window.
     """
     pair_indices = xp.asarray(pairs, dtype=int)
     one_sided_power = total_power[..., : total_power.shape[-2] // 2 + 1, :]
@@ -1046,12 +1014,12 @@ def _estimate_subset_spectral_granger_prediction(
         for start in range(0, n_pairs, pairs_per_chunk)
     ]
     pair_predictive_power = xp.concatenate([power for power, _ in chunks], axis=-4)
-    if not_minimum_phase is not None:
-        _mark_pairs(
-            not_minimum_phase,
-            np.asarray(to_numpy(pairs)),
-            xp.concatenate([flags for _, flags in chunks], axis=-1),
-        )
+    not_minimum_phase = np.zeros((n_signals, n_signals), dtype=bool)
+    _mark_pairs(
+        not_minimum_phase,
+        to_numpy(pairs),
+        xp.concatenate([flags for _, flags in chunks], axis=-1),
+    )
 
     # A pair requested more than once, in either order, writes the same
     # entries; keep its last occurrence, which a pair-by-pair write would leave.
@@ -1071,4 +1039,4 @@ def _estimate_subset_spectral_granger_prediction(
     )
     diagonal_indices = xp.diag_indices(n_signals)
     predictive_power[..., diagonal_indices[0], diagonal_indices[1]] = xp.nan
-    return predictive_power
+    return predictive_power, not_minimum_phase

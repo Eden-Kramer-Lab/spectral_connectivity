@@ -389,8 +389,9 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_sign
     Wilson iteration for the entire batch (all sub-spectra returned NaN, with a
     warning implying the whole dataset was rank-deficient). The healthy windows
     must now converge to the factors they get on their own; only the bad window
-    is NaN, and the warning reports the correct count. ``_warn_on_failure=False``
-    (used by spectral Granger) returns the same factor without the warning.
+    is NaN, and the warning reports the correct count. The core the spectral
+    Granger measures use returns the same factor without the warning, and
+    marks the window unconverged and singular.
     """
     cross_spectral_matrix = to_device(_spectra_with_one_duplicated_channel(real_signals))
     assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
@@ -398,9 +399,14 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_sign
     with _ignoring_cholesky_start_warning():
         with pytest.warns(UserWarning, match="did not converge for 1 of 3"):
             factor = to_host(minimum_phase_decomposition(cross_spectral_matrix))
-        silent = to_host(
-            minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False)
+        warnings.simplefilter("error", UserWarning)
+        warnings.filterwarnings("ignore", message=mpd_module.CHOLESKY_FALLBACK_WARNING_START)
+        factorization = mpd_module._minimum_phase_factor_and_flags(
+            cross_spectral_matrix, 1e-8, 500
         )
+    silent = to_host(factorization.factor)
+    np.testing.assert_array_equal(to_host(factorization.unconverged), [False, True, False])
+    np.testing.assert_array_equal(to_host(factorization.singular), [False, True, False])
     assert factor.shape == cross_spectral_matrix.shape
     assert np.isnan(factor[1]).all()  # rank-deficient window isolated
     healthy = to_host(minimum_phase_decomposition(cross_spectral_matrix[[0, 2]]))

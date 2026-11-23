@@ -62,7 +62,7 @@ def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
         (
             "subset_pairwise_spectral_granger_prediction",
             {"pairs": [(0, 2)]},
-            "2 source -> target signal pair(s) (0-based signal indices) 0 -> 2, 2 -> 0",
+            "2 source -> target signal pair(s): 0 -> 2, 2 -> 0 (0-based signal indices",
         ),
         ("conditional_spectral_granger_prediction", {}, "0 -> 1, 0 -> 2, 1 -> 0"),
         (
@@ -98,8 +98,10 @@ def test_granger_measures_name_the_pairs_whose_factor_is_not_minimum_phase(
     original = _granger._minimum_phase_factor_and_flags
 
     def flag_every_sub_spectrum(*args, **kwargs):
-        factor, flags = original(*args, **kwargs)
-        return factor, xp.ones_like(flags)
+        factorization = original(*args, **kwargs)
+        return factorization._replace(
+            not_minimum_phase=xp.ones_like(factorization.not_minimum_phase)
+        )
 
     monkeypatch.setattr(_granger, "_minimum_phase_factor_and_flags", flag_every_sub_spectrum)
     with warnings.catch_warnings(record=True) as caught:
