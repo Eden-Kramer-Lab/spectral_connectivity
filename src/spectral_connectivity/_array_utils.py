@@ -125,20 +125,22 @@ def _diagonally_loaded_inverse(
 ) -> NDArray[_NumberT]:
     """Inverse of a batched matrix with each diagonal entry loaded by its own size.
 
-    Solves ``(M + λ E) X = I`` with ``E = diag(|M_ii|)`` and ``λ =
-    regularization``, per batched matrix (over the last two axes). Loading each
-    signal in proportion to its own diagonal entry makes the inverse covariant
-    under rescaling the signals: for positive diagonal ``D1`` and ``D2`` the
-    inverse of ``D1 M D2`` is ``D2⁻¹ X D1⁻¹`` when no diagonal entry is zero. That holds for the factor's
-    lag-0 coefficient (rows scaled), the transfer function (``D H D⁻¹``) and
-    the noise covariance (``D Σ D``) alike, so the directed measures read from
-    them do not depend on the signals' relative scales. A loading of the
+    Solves ``(M + λ E) X = I`` with ``E = diag(|M_ii|)`` and
+    ``λ = regularization``, per batched matrix (over the last two axes).
+    Loading each signal in proportion to its own diagonal entry makes the
+    inverse covariant under rescaling the signals: for positive diagonal ``D1``
+    and ``D2``, and no zero diagonal entry, the inverse of ``D1 M D2`` is
+    ``D2⁻¹ X D1⁻¹``. That covers the factor's lag-0 coefficient (rows scaled),
+    the transfer function (``D H D⁻¹``), and the noise covariance
+    (``D Σ D``), so the directed measures read from their inverses are
+    covariant (DTF, PDC, dDTF) or invariant (the spectral Granger family,
+    directed coherence, gPDC) under rescaling the signals. A loading of the
     matrix's RMS magnitude, as in :func:`_regularized_inverse`, is covariant
     only under a common scale: it perturbs a signal far weaker than the others
     by far more than ``λ`` of its own size. A diagonal entry that is exactly
     zero (a signal with no power) is loaded by ``λ`` times the RMS magnitude
-    of the matrix instead, which keeps the inverse finite but is
-    not covariant.
+    of the matrix instead, which keeps the inverse finite but is not
+    covariant.
 
     Parameters
     ----------

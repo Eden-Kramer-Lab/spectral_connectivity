@@ -25,6 +25,7 @@ from spectral_connectivity._array_utils import (
     _conjugate_transpose,
     _diagonally_loaded_inverse,
     _divide_where,
+    _regularized_inverse,
     _squared_magnitude,
 )
 from spectral_connectivity._backend import ON_GPU, xp
@@ -959,7 +960,7 @@ def _block_spectral_granger_from_model(
     covariance_yx = covariance[..., n_target:, :n_target]
     covariance_yy = covariance[..., n_target:, n_target:]
     conditional_source_covariance = covariance_yy - xp.matmul(
-        xp.matmul(covariance_yx, _diagonally_loaded_inverse(covariance_xx)),
+        xp.matmul(covariance_yx, _regularized_inverse(covariance_xx)),
         covariance_xy,
     )
 

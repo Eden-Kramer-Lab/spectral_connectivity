@@ -987,22 +987,23 @@ def integrating_chain_oracle():
 
 @pytest.mark.parametrize(
     "scales",
-    [(1.0, 1.0, 1.0), (0.1, 1.0, 10.0), (1e-3, 1.0, 1e3), (1e3, 1.0, 1e-3)],
-    ids=["as_simulated", "rescaled", "rescaled_1e3", "reversed_1e3"],
+    [(1.0, 1.0, 1.0), (0.1, 1.0, 10.0), (1e-3, 1.0, 1e3), (1e3, 1.0, 1e-3), (1e-6, 1.0, 1e6)],
+    ids=["as_simulated", "rescaled", "rescaled_1e3", "reversed_1e3", "rescaled_1e6"],
 )
 @_BOTH_FACTORIZATION_PATHS
 def test_directed_measures_of_signals_of_very_different_power_match_oracle(
     integrating_chain_oracle, scales, conjugate_symmetric
 ):
     """Signals whose powers differ by orders of magnitude, as they do in the
-    integrating chain and more so once rescaled (mean powers from 5e-5 to
-    3e12), give the measures as accurately as signals of equal power.
+    integrating chain and more so once rescaled (mean powers from 5e-11 to
+    3e18), give the measures as accurately as signals of equal power.
     Rescaling signal ``i`` by ``d_i`` leaves spectral Granger unchanged and
     scales the transfer function to ``D H D^-1`` and its inverse to
-    ``D A D^-1``, which give the DTF and PDC of the rescaled model. Unscaled,
-    the factorization missed every one of these measures by more than 0.5;
-    with a regularization of the inverses that ignored the signals' scales,
-    pairwise Granger missed by 4e-4 and PDC by 0.9 at the 1e3 rescaling."""
+    ``D A D^-1``, which give the DTF, PDC, and dDTF of the rescaled model.
+    Unscaled, the factorization missed every one of these measures by more
+    than 0.5; with inverses loaded by the matrix's RMS entry instead of each
+    diagonal entry, pairwise Granger missed by 4e-4 and PDC by 0.9 at the 1e3
+    rescaling, and dDTF by 6e-5 at 1e6."""
     scale = np.diag(scales)
     coefficients = scale @ _INTEGRATING_CHAIN_COEFFICIENTS @ np.linalg.inv(scale)
     noise_covariance = scale @ scale
@@ -1023,7 +1024,11 @@ def test_directed_measures_of_signals_of_very_different_power_match_oracle(
             )
         transfer_function_measures = {
             measure: np.asarray(getattr(connectivity, measure)())[0]
-            for measure in ("directed_transfer_function", "partial_directed_coherence")
+            for measure in (
+                "directed_transfer_function",
+                "partial_directed_coherence",
+                "direct_directed_transfer_function",
+            )
         }
     expected = _analytic_directed_measures(A, H, noise_covariance)
     for measure, result in transfer_function_measures.items():
