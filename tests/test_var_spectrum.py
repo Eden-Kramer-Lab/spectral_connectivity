@@ -516,6 +516,10 @@ def test_labeled_results_record_the_model():
     assert result.attrs["nyquist_frequency"] == _SAMPLING_FREQUENCY / 2
     assert result.attrs["n_signals"] == 3
     assert result.attrs["time_coordinate"] == "index"
+    # Pseudo-observations are not samples: no count or independence recorded.
+    assert result.attrs["is_exact_spectrum"] == 1
+    assert "n_observations" not in result.attrs
+    assert "observations_are_independent" not in result.attrs
     assert result.time.values.tolist() == [0]
     assert "units" not in result.time.attrs
     assert result.frequency.attrs["units"] == "Hz"

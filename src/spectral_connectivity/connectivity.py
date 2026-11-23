@@ -2501,7 +2501,13 @@ class Connectivity:
             This is a raw count, not an effective number of independent
             observations: it ignores ``observation_weights`` and is not reduced
             when the transform's observations are correlated (see
-            ``observations_are_independent``).
+            ``observations_are_independent``). For an exact spectrum
+            (:attr:`is_exact_spectrum`, e.g. a
+            :class:`~spectral_connectivity.transforms.VARSpectrum`) it counts
+            the columns of one factor of the cross-spectral matrix
+            (``n_signals`` per window), which are not samples: it is no degrees
+            of freedom for a significance test or confidence interval, and the
+            labeled results do not record it.
 
         """
         return int(

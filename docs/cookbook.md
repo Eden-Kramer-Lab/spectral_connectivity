@@ -728,12 +728,13 @@ facts needed to interpret it. Settings use one JSON record:
 | `output_schema_version` | `1`: the version of the layout this table describes. |
 | `package`, `package_version` | `spectral_connectivity` and the installed version that computed the result. |
 | `input_attrs_json` | The attributes of an input `xarray.DataArray` (e.g. subject or session metadata), as one canonical JSON record, so arbitrary keys keep their names; an array value of more than 100 elements is recorded as its shape and dtype. Present only when the input had attributes. |
-| `transform` | `multitaper`, `stft`, `welch`, `morlet`, or `external_fourier`. |
+| `transform` | `multitaper`, `stft`, `welch`, `morlet`, `var_spectrum`, or `external_fourier`. |
 | `sampling_frequency` | Physical sampling rate in Hz, included only when known. |
 | `n_trials`, `n_signals` | Known trial and signal counts; an arbitrary external observation axis is not labeled as trials. |
-| `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. |
+| `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. Not recorded for an exact spectrum. |
 | `expectation_type` | Axes averaged to form each spectral estimate. |
-| `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. |
+| `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. `observations_are_independent` is not recorded for an exact spectrum. |
+| `is_exact_spectrum` | 1 when the coefficients are one factor of an exact cross-spectral matrix rather than samples (`VARSpectrum`): the values are a model's population values, and the result records no observation count or independence. 0 otherwise. |
 | `backend` | `cpu` or `gpu`, reflecting the imported backend. |
 | `transform_parameters_json` | Remaining settings in `estimator` and `execution` records; optional settings use JSON `null`. |
 | `spectral_bandwidth`, `spectral_bandwidth_definition`, `spectral_bandwidth_units` | Qualified estimator bandwidth, when defined. |

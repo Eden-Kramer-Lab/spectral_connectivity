@@ -193,10 +193,16 @@ def _shared_provenance_attrs(
         backend="gpu" if ON_GPU else "cpu",
         expectation_type=connectivity.expectation_type,
         n_signals=connectivity.n_signals,
-        n_observations=connectivity.n_observations,
-        observations_are_independent=int(connectivity.observations_are_independent),
         time_bins_are_independent=int(connectivity.time_bins_are_independent),
+        is_exact_spectrum=int(connectivity.is_exact_spectrum),
     )
+    if not connectivity.is_exact_spectrum:
+        # An exact spectrum's observations are the columns of one factor of it,
+        # not samples: neither their count nor their independence is a fact.
+        attrs.update(
+            n_observations=connectivity.n_observations,
+            observations_are_independent=int(connectivity.observations_are_independent),
+        )
     estimator = {
         key: value
         for key, value in transform_metadata.items()
