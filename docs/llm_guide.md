@@ -216,11 +216,11 @@ interval includes the variability between trials:
 For significance, `Connectivity.surrogate_test(method, kind=...)` compares the
 measure with its values on surrogate data. `kind` sets the null hypothesis:
 
-| Question | `kind` | A stimulus-locked response common to the signals |
-| --- | --- | --- |
-| Do the signals covary from trial to trial? (2+ trials) | `"trial_shuffle"` | stays in the null |
-| Are the signals independent at all? (one trial is enough) | `"phase_rotation"` | is rejected |
-| Is there more than zero-lag mixing (volume conduction)? | `"conjugation"` | is rejected if lagged |
+| Question | `kind` | Needs | A shared stimulus-locked response |
+| --- | --- | --- | --- |
+| Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
+| Are the signals independent at all? | `"phase_rotation"` | the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ independent observations | is rejected if lagged |
 
 Report `fwer_p_value` (family-wise over every frequency and pair by default);
 `p_value` is uncorrected:

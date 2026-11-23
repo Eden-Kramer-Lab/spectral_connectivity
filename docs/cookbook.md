@@ -361,11 +361,11 @@ max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * (b^H S_tt b)),
 built to satisfy a null hypothesis and returns Monte Carlo p-values. `kind`
 sets the null, so choose it for the question:
 
-| Question | `kind` | Needs | A stimulus-locked response common to the signals |
+| Question | `kind` | Needs | A shared stimulus-locked response |
 | --- | --- | --- | --- |
-| Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null (not counted) |
-| Are the signals independent at all? | `"phase_rotation"` | the half bandwidth; one trial is enough | is rejected |
-| Is there more than zero-lag mixing (volume conduction)? | `"conjugation"` | 2+ independent observations | is rejected if it reaches the signals at different times |
+| Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
+| Are the signals independent at all? | `"phase_rotation"` | the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ independent observations | is rejected if lagged |
 
 - `"trial_shuffle"` shuffles each signal's trials, keeping each trial whole.
   The expectation must average trials.

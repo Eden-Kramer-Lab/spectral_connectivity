@@ -2924,16 +2924,16 @@ class Connectivity:
 
         Choose ``kind`` for the question:
 
-        ===========================  ====================  ===============  ==================
-        Question                     ``kind``              Needs            Evoked response
-        ===========================  ====================  ===============  ==================
-        Covary from trial to trial?  ``"trial_shuffle"``   2+ trials        in the null
-        Independent at all?          ``"phase_rotation"``  half bandwidth   rejected
-        More than zero-lag mixing?   ``"conjugation"``     2+ observations  rejected if lagged
-        ===========================  ====================  ===============  ==================
+        ==========================================  ====================  ===========================  =================================
+        Question                                    ``kind``              Needs                        A shared stimulus-locked response
+        ==========================================  ====================  ===========================  =================================
+        Do the signals covary from trial to trial?  ``"trial_shuffle"``   2+ trials                    stays in the null
+        Are the signals independent at all?         ``"phase_rotation"``  the half bandwidth           is rejected
+        Is there more than zero-lag mixing?         ``"conjugation"``     2+ independent observations  is rejected if lagged
+        ==========================================  ====================  ===========================  =================================
 
-        "Evoked response" is a stimulus-locked response common to the signals
-        and the same in every trial (see Notes).
+        A shared stimulus-locked response is one common to the signals and the
+        same in every trial (see Notes).
 
         Parameters
         ----------
@@ -3070,10 +3070,9 @@ class Connectivity:
         part in a million) of the estimate, and a surrogate the measure
         returns NaN for counts as exceeding it.
 
-        **Which p-value to report.** ``p_value`` is uncorrected: it is the
-        test of one element chosen before looking at the data (one pair at
-        one frequency). To say *where* the measure is significant, among
-        every frequency and pair tested, report ``fwer_p_value``.
+        **Which p-value to report.** ``fwer_p_value``, to say where the
+        measure is significant; ``p_value`` is uncorrected (see
+        :class:`~spectral_connectivity.statistics.SurrogateTestResult`).
 
         **Independent observations.** ``"phase_rotation"`` and
         ``"conjugation"`` draw one phase or flip for each independent
@@ -3211,17 +3210,9 @@ class Connectivity:
         >>> bool(significant[0, 40, 0, 1]), bool(significant[..., [0, 1], [2, 2]].any())
         (True, False)
 
-        Phase rotation needs the transform's half bandwidth:
-
-        >>> rotated = connectivity.surrogate_test(
-        ...     "magnitude_squared_coherence",
-        ...     kind="phase_rotation",
-        ...     half_bandwidth=multitaper.frequency_resolution / 2,
-        ...     n_surrogates=199,
-        ...     random_state=0,
-        ... )
-        >>> bool(np.isnan(rotated.p_value[0, :2, 0, 1]).all())  # within 2 Hz of 0 Hz
-        True
+        ``kind="phase_rotation"`` takes the half bandwidth that
+        :meth:`from_transform` recorded (here 2 Hz); the cookbook recipe "Test
+        against surrogate data" shows more.
         """
         if kind not in _SURROGATE_KINDS:
             msg = (
