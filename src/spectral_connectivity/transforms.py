@@ -3763,16 +3763,18 @@ class VARSpectrum:
     need more. That grid also resolves the sharpest spectral peaks: a pole at
     radius ``r`` near 1 gives a peak about ``(1 - r) * sampling_frequency /
     (2 pi)`` Hz wide on each side, about 7 bins or more for ``r <= rho``.
-    On that grid the error comes from the Wilson factorization itself: its
-    tolerance (the ``minimum_phase_tolerance`` of :class:`Connectivity`, 1e-8
-    by default) for well-scaled models, and more where it fails. For signals
-    whose powers differ by orders of magnitude and poles very near the unit
-    circle it can converge, without a warning, to a factor that reproduces
-    the spectrum but is not its minimum-phase factor: in a chain 0 -> 1 -> 2
-    with every pole at 0.99, pairwise spectral Granger prediction of the pair
-    (0, 2) came out up to 4.6 from the model's value, and no longer grid
-    removes that. The same limit applies to estimates of data with such a
-    spectrum. A grid that is a multiple of another transform's FFT length
+    On that grid the rest of the error is the Wilson factorization's. Against
+    the state-space oracle, pairwise spectral Granger prediction of dense
+    models of 3 and 5 signals was off by 1.4e-9 to 2.2e-7 (values up to 4.6)
+    at the default ``minimum_phase_tolerance`` of :class:`Connectivity`
+    (1e-8), and by at most 1.1e-9 at 1e-12; the transfer-function measures
+    matched their closed forms to 7e-11. Where the spectrum is nearly
+    singular the floor is float64 rounding instead, relative error near
+    ``eps`` times the condition number of the spectral matrix: in a chain
+    0 -> 1 -> 2 whose signals all have a pole at 0.99 (their powers differ by
+    five orders of magnitude), 3.2e-7 at 0 Hz, where the value is 12 and the
+    condition number 6.4e7, unchanged by a longer grid or a tighter
+    tolerance. A grid that is a multiple of another transform's FFT length
     contains its frequencies.
 
     Examples

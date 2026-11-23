@@ -745,12 +745,10 @@ Give `coefficients` a leading `n_time_windows` axis for a time-varying model
 shortest one that does not limit the directed measures' accuracy
 (`VARSpectrum.minimum_n_fft_samples`), which grows as the model's poles near
 the unit circle. A shorter `n_fft_samples` warns: power and the coherence
-family stay exact on any grid, the directed measures do not. The directed
-measures also inherit the Wilson factorization's limits: for a model whose
-signals differ in power by orders of magnitude, with poles very near the unit
-circle (a chain of three signals with poles at 0.99, say), it can converge to a
-wrong factor without a warning, leaving pairwise Granger far from the model's
-value.
+family stay exact on any grid, the directed measures do not. On the default
+grid the directed measures are exact to the Wilson factorization's tolerance
+(`minimum_phase_tolerance`, 1e-8 by default), and to float64 rounding where
+the spectrum is nearly singular.
 
 ## Result schema and transform bandwidth
 
