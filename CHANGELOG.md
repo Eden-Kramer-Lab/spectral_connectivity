@@ -54,6 +54,23 @@ The migration guide for code written against 2.x is
   the time-reversed data (the transposed cross-spectral matrix), the
   counterparts of `time_reversed_spectral_granger_prediction` for checking
   whether a direction reverses under time reversal (Winkler et al., 2016).
+- `partial_coherence(shrinkage=...)` shrinks each cross-spectral matrix
+  toward its diagonal before inverting it, `(1 - lambda) * S + lambda *
+  diag(S)`, which multiplies every coherency by `1 - lambda`: a fixed
+  `lambda` in [0, 1], or `"auto"`, which estimates it for each time window
+  and frequency from the trials x tapers by the Ledoit-Wolf / Schäfer-Strimmer
+  intensity for shrinkage toward the diagonal, for complex data, with a
+  delta-method variance of each coherency. `Connectivity.partial_coherence_shrinkage()`
+  returns those intensities, for reporting. The default, `None`, does not
+  shrink; the wrappers take it in `connectivity_kwargs`. Against the exact
+  partial coherence of simulated VARs with 8 and 16 signals, `"auto"` lowered
+  the mean squared error to 0.06-0.09 of the unshrunk error with 1.25
+  observations per signal and to 0.28-0.58 with 2.5, and with fewer
+  observations than signals, where the unshrunk estimate is forced toward 1
+  or unrelated to the data, its error was below that of estimating 0. With
+  100 to 400 observations it changed the error by -16% to +34%. With
+  shrinkage, the warning for fewer observations than signals says that the
+  estimate then rests on the intensity.
 - `adjust_for_multiple_comparisons(..., axis=...)`: the axes whose tests form
   one family, as in `scipy.stats.false_discovery_control`, so each slice
   along the other axes (each time window, say) is corrected on its own. The

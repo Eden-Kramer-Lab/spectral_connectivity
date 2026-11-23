@@ -85,7 +85,7 @@ _NONFINITE_COEFFICIENTS_WARNING = "fourier_coefficients contains NaN or Inf valu
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
 # jackknife validation cannot drift apart.
-_NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife"})
+_NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife", "partial_coherence_shrinkage"})
 # Measure names released in 2.x and replaced in 3.0, mapped to the canonical
 # name. Each still works through 3.x with a DeprecationWarning and is removed
 # in 4.0; the canonical measure is the one registered and listed.
@@ -262,6 +262,21 @@ def _validated_regularization(value: Any) -> float:
     if not np.isfinite(regularization) or regularization < 0:
         raise ValueError(message)
     return regularization
+
+
+def _validated_shrinkage(value: Any) -> float | Literal["auto"] | None:
+    """Return ``None``, ``"auto"``, or a shrinkage intensity in [0, 1]."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value == "auto":
+        return "auto"
+    message = f"shrinkage must be None, 'auto', or a number in [0, 1], got {value!r}."
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise ValueError(message)
+    intensity = float(value)
+    if not 0.0 <= intensity <= 1.0:  # also rejects NaN
+        raise ValueError(message)
+    return intensity
 
 
 def _validated_rank(rank: int | None) -> int | None:
@@ -3200,6 +3215,7 @@ class Connectivity:
         self,
         *,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+        shrinkage: float | Literal["auto"] | None = None,
     ) -> NDArray[np.floating]:
         """Return magnitude-squared coherence conditional on all other signals.
 
@@ -3217,11 +3233,31 @@ class Connectivity:
             (a signal with zero power by ``regularization * rms(abs(S))``), so
             the result does not depend on the signals' scales. Increase this
             value for statistically rank-deficient or ill-conditioned spectra.
+        shrinkage : {None, "auto"} or float, default=None
+            Shrink each time-frequency cross-spectral matrix toward its
+            diagonal before inversion, ``(1 - lambda) * S + lambda * diag(S)``:
+            every coherency is multiplied by ``1 - lambda`` and the powers are
+            kept, so the result does not depend on the signals' scales.
+            ``None`` does not shrink. A number in ``[0, 1]`` is ``lambda`` for
+            every bin: 0 does not shrink, and 1 makes every partial coherence 0.
+            ``"auto"`` estimates ``lambda`` for each time window and frequency
+            from the averaged observations (see Notes); use
+            :meth:`partial_coherence_shrinkage` to report it. Shrinkage lowers
+            the error of the estimate when the observations (trials x tapers)
+            are few for the number of signals, at the cost of a bias toward 0.
 
         Returns
         -------
         partial_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+
+        Raises
+        ------
+        ValueError
+            If ``regularization`` is negative or not finite, if ``shrinkage``
+            is not ``None``, ``"auto"``, or a number in ``[0, 1]``, or, for
+            ``shrinkage="auto"``, if there is a single observation or the
+            observation weights are not uniform.
 
         Notes
         -----
@@ -3229,13 +3265,65 @@ class Connectivity:
         signal's partial coherence with itself, which is 1.
         This undirected measure is distinct from partial directed coherence.
         Regularization stabilizes inversion but also changes the estimand, so
-        analyses should report a non-default value.
+        analyses should report a non-default value. So does shrinkage: report
+        its value, or the intensities ``"auto"`` chose.
 
         The averaged trials x tapers are the observations. With fewer
         observations than signals the cross-spectral matrix is rank-deficient
         and its (regularized) inverse is dominated by the null space; with
         exactly one null direction every partial coherence is forced to 1 for
-        any data. This case warns.
+        any data. This case warns, with shrinkage too: shrinkage makes the
+        matrix invertible, but the estimate then rests on the intensity. A
+        small one leaves it dominated by the null space; as the intensity
+        approaches 1, partial coherence approaches ``(1 - lambda)**2`` times
+        the coherence, which no longer conditions on the other signals.
+
+        **Shrinkage intensity.** With ``n`` observations ``x_k`` (one trial x
+        taper eigencoefficient vector each) of a time window and frequency,
+        ``S = (1/n) sum_k x_k x_k^H`` and the coherency is
+        ``r_ij = S_ij / sqrt(S_ii S_jj)``. ``"auto"`` takes the intensity that
+        minimizes the expected squared error of the shrunk coherencies,
+        ``sum_{i != j} E|(1 - lambda) r_ij - rho_ij|^2`` for true coherencies
+        ``rho``, with ``E r = rho`` to first order: the shrinkage of
+        Ledoit & Wolf [1]_ toward the diagonal on the correlation scale
+        ("target D" of Schäfer & Strimmer [2]_), for complex data,
+
+            lambda = sum_{i != j} var(r_ij) / sum_{i != j} |r_ij|^2,
+
+        clipped to ``[0, 1]``. ``var(r_ij)`` estimates ``E|r_ij - rho_ij|^2``
+        by the delta method,
+
+            var(r_ij) = sum_k |w_kij - (r_ij / 2) (u_ki + u_kj)|^2 / (n (n - 1)),
+
+        with ``w_kij = x_ki conj(x_kj) / sqrt(S_ii S_jj)`` and
+        ``u_ki = |x_ki|^2 / S_ii``. The ``u`` terms account for the estimated
+        powers that normalize ``r``. Schäfer & Strimmer leave them out, which
+        for complex Gaussian data estimates ``1/n`` whatever the coherence,
+        where the variance is ``(1 - |rho|^2) (1 - |rho|^2 / 2) / n``: it
+        overstates the intensity where coherence is high. ``lambda``
+        decreases as ``1/n``, so with many observations the result approaches
+        the unshrunk one. ``"auto"`` makes two more passes over the
+        coefficients, each as costly as computing the cross-spectral matrix.
+
+        In simulations of VARs with 8 and 16 signals (complex Gaussian
+        observations with the model's exact spectrum), ``"auto"`` lowered the
+        mean squared error against the model's partial coherence to 0.06-0.09
+        of the unshrunk error with 1.25 observations per signal and to
+        0.28-0.58 with 2.5; with fewer observations than signals its error was
+        below that of estimating 0 for every pair. With 100 to 400
+        observations it changed the error by -16% to +34% (by at most 2.4e-4):
+        the intensity minimizes the error of the coherencies, not of their
+        inverse.
+
+        References
+        ----------
+        .. [1] Ledoit O, Wolf M (2004) A well-conditioned estimator for
+               large-dimensional covariance matrices. Journal of Multivariate
+               Analysis 88(2):365-411.
+        .. [2] Schäfer J, Strimmer K (2005) A shrinkage approach to large-scale
+               covariance matrix estimation and implications for functional
+               genomics. Statistical Applications in Genetics and Molecular
+               Biology 4(1):32.
 
         Examples
         --------
@@ -3259,6 +3347,17 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         regularization = _validated_regularization(regularization)
+        shrinkage = _validated_shrinkage(shrinkage)
+        # Drop negative frequencies before the per-bin inversion, not after.
+        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
+        # Before any warning: "auto" raises for a single observation.
+        intensity = (
+            self._partial_coherence_shrinkage_intensity(cross_spectral_density)[
+                ..., xp.newaxis, xp.newaxis
+            ]
+            if shrinkage == "auto"
+            else shrinkage
+        )
         self._warn_single_observation_degenerate(
             "partial_coherence",
             "the cross-spectral matrix has rank one and its inverse is fixed by "
@@ -3270,21 +3369,36 @@ class Connectivity:
         # its null space: with one null direction the normalized off-diagonal
         # precision has unit magnitude for every pair, and with more it is still
         # unrelated to the data. (A single observation already warned above.)
+        # Shrinkage makes the matrix invertible, but the estimate then rests on
+        # the intensity.
         if 2 <= n_observations < self.n_signals:
-            warnings.warn(
+            few = (
                 f"partial_coherence uses {n_observations} observations (the "
                 f"averaged trials x tapers), fewer than the {self.n_signals} "
-                "signals, so the cross-spectral matrix is rank-deficient and its "
-                "inverse is dominated by the null space: the estimate is forced "
-                "to 1 for every pair (one missing observation) or is otherwise "
-                "unrelated to the data. Provide more trials or tapers than "
+                "signals, so the cross-spectral matrix is rank-deficient"
+            )
+            if shrinkage is None or shrinkage == 0:
+                consequence = (
+                    " and its inverse is dominated by the null space: the "
+                    "estimate is forced to 1 for every pair (one missing "
+                    "observation) or is otherwise unrelated to the data."
+                )
+            else:
+                consequence = (
+                    ". Only the shrinkage toward its diagonal makes it "
+                    "invertible, so the estimate rests on the shrinkage "
+                    "intensity: a small one leaves it dominated by the null "
+                    "space, and the closer it is to 1, the closer the estimate is "
+                    "to (1 - intensity)**2 times the coherence, which does not "
+                    "condition on the other signals."
+                )
+            warnings.warn(
+                f"{few}{consequence} Provide more trials or tapers than "
                 "signals, or analyze fewer signals.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
 
-        # Drop negative frequencies before the per-bin inversion, not after.
-        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
         matrix_rms = xp.sqrt(
             xp.mean(
                 xp.real(xp.conj(cross_spectral_density) * cross_spectral_density),
@@ -3300,6 +3414,13 @@ class Connectivity:
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
+        if intensity is not None:
+            diagonal_part = cross_spectral_density * xp.eye(
+                self.n_signals, dtype=cross_spectral_density.real.dtype
+            )
+            cross_spectral_density = (
+                1 - intensity
+            ) * cross_spectral_density + intensity * diagonal_part
         identity = xp.eye(self.n_signals, dtype=cross_spectral_density.dtype)
         safe_spectrum = xp.where(zero_power, identity, cross_spectral_density)
         precision = _regularized_inverse(
@@ -3322,6 +3443,161 @@ class Connectivity:
         diagonal = xp.arange(self.n_signals)
         result[..., diagonal, diagonal] = xp.nan
         return result
+
+    @_asnumpy
+    def partial_coherence_shrinkage(self) -> NDArray[np.floating]:
+        """Return the shrinkage intensity of ``partial_coherence(shrinkage="auto")``.
+
+        Returns
+        -------
+        intensity : array
+            Shape ``(..., n_nonnegative_frequencies)``: for each time window
+            (the observation axes the expectation keeps) and frequency, the
+            ``lambda`` in ``[0, 1]`` by which ``partial_coherence`` shrinks
+            every coherency, ``r -> (1 - lambda) * r``. NaN where the
+            cross-spectral matrix has zero power, or where zero observation
+            weights leave fewer than two observations.
+
+        Raises
+        ------
+        ValueError
+            If there is a single observation, or the observation weights are
+            not uniform.
+
+        Notes
+        -----
+        The estimator is in the Notes of :meth:`partial_coherence`. Values
+        near 0 mean the coherencies are estimated precisely enough to be
+        kept; values near 1 mean they are indistinguishable from sampling
+        noise. It decreases as ``1 / n_observations`` where the signals are
+        coherent. For independent signals the optimum is 1, and the estimate
+        averaged 0.74-0.96 in simulations (2 to 16 signals, 6 to 100
+        observations). It treats the observations as independent, and warns
+        when the transform reports them correlated.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity
+        >>> rng = np.random.default_rng(0)
+        >>> def coefficients(n_trials):  # 3 tapers, 8 FFT bins, 6 signals
+        ...     shape = (1, n_trials, 3, 8, 6)
+        ...     values = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        ...     values[..., 1:] += values[..., :1]  # every signal shares signal 0
+        ...     return values
+        >>> few = Connectivity(coefficients(4)).partial_coherence_shrinkage()
+        >>> few.shape  # (n_time_windows, n_nonnegative_frequencies)
+        (1, 5)
+        >>> # Ten times the trials: the intensity falls about tenfold.
+        >>> many = Connectivity(coefficients(40)).partial_coherence_shrinkage()
+        >>> bool(np.all(many < few / 3))
+        True
+        """
+        self._validate_multiple_signals()
+        return self._partial_coherence_shrinkage_intensity(
+            self._nonnegative_cross_spectral_matrix()
+        )
+
+    def _partial_coherence_shrinkage_intensity(
+        self, cross_spectral_density: BackendArray
+    ) -> BackendArray:
+        """``lambda`` of ``partial_coherence(shrinkage="auto")`` for each bin.
+
+        ``cross_spectral_density`` is the expected cross-spectral matrix at the
+        non-negative frequencies, ``(..., n_nonnegative_frequencies,
+        n_signals, n_signals)``; returns ``(..., n_nonnegative_frequencies)``.
+        The estimator is in the Notes of :meth:`partial_coherence`. With zero
+        observation weights each bin counts the observations it keeps.
+        """
+        measure = 'partial_coherence(shrinkage="auto")'
+        if self.n_observations < 2:
+            msg = (
+                f"{measure} requires at least 2 observations (n_observations == "
+                f"n_trials * n_tapers), but got {self.n_observations}. Its "
+                "intensity estimates each coherency's variance across the "
+                "observations, which is undefined for one. Use more trials or "
+                "tapers, or a fixed shrinkage between 0 and 1."
+            )
+            raise ValueError(msg)
+        self._require_uniform_observation_weights(
+            measure,
+            "Its intensity estimates each coherency's variance from equally "
+            "weighted independent observations; use a fixed shrinkage instead.",
+        )
+        self._warn_correlated_observations(
+            measure,
+            "Its intensity estimates each coherency's sampling variance from "
+            "the observations as independent samples",
+        )
+        power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
+        root_power = xp.sqrt(power)
+        has_power = root_power > 0  # False for NaN (a bin no observation weights)
+        # Each observation over its signal's root power in its bin: x / sqrt(S_ii).
+        averaged = self._expectation_axes
+        normalized = _divide_where(
+            self._nonnegative_fourier_coefficients(),
+            xp.expand_dims(root_power, averaged),
+            xp.expand_dims(has_power, averaged),
+            0.0,
+        )
+        relative_power = xp.real(normalized * xp.conj(normalized))  # u
+        pair_has_power = has_power[..., :, xp.newaxis] & has_power[..., xp.newaxis, :]
+        coherency = _divide_where(
+            cross_spectral_density,
+            root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :],
+            pair_has_power,
+            0.0,
+        )
+        # Means over the observations of u_i u_j and of u_i w_ij.
+        power_products = xp.real(self._reduced_cross_spectral_matrix(relative_power))
+        weighted_coherency = self._reduced_cross_spectral_matrix(
+            relative_power * normalized, conjugated_coefficients=normalized
+        )
+        product_diagonal = xp.diagonal(power_products, axis1=-2, axis2=-1)
+        squared_coherency = _squared_magnitude(coherency)
+        # mean_k |w_kij - (r_ij / 2) (u_ki + u_kj)|^2, expanded.
+        mean_squared_influence = (
+            power_products
+            - xp.real(
+                xp.conj(coherency)
+                * (weighted_coherency + _conjugate_transpose(weighted_coherency))
+            )
+            + squared_coherency
+            / 4
+            * (
+                product_diagonal[..., :, xp.newaxis]
+                + product_diagonal[..., xp.newaxis, :]
+                + 2 * power_products
+            )
+        )
+        off_diagonal = 1 - xp.eye(self.n_signals, dtype=power.dtype)
+        counts = self._observation_counts_per_bin(power.shape[-2])
+        variance_sum = xp.sum(mean_squared_influence * off_diagonal, axis=(-2, -1)) / (
+            xp.maximum(counts, 2) - 1
+        )
+        coherence_sum = xp.sum(squared_coherency * off_diagonal, axis=(-2, -1))
+        # Every coherency exactly 0: nothing to keep, and any intensity gives
+        # the same partial coherence.
+        intensity = xp.clip(
+            _divide_where(variance_sum, coherence_sum, coherence_sum > 0, 1.0), 0.0, 1.0
+        )
+        # Also NaN where non-finite coefficients reach the powers.
+        undefined = (
+            (counts < 2) | ~xp.any(has_power, axis=-1) | ~xp.all(xp.isfinite(power), axis=-1)
+        )
+        return xp.where(undefined, xp.nan, intensity)
+
+    def _observation_counts_per_bin(self, n_frequencies: int) -> int | BackendArray:
+        """The observations with nonzero weight in each reduced bin of the
+        first ``n_frequencies`` frequencies, ``(..., n_frequencies)``;
+        :attr:`n_observations` without observation weights."""
+        if self._observation_weights is None:
+            return self.n_observations
+        counts: BackendArray = xp.count_nonzero(
+            self._observation_weights[..., :n_frequencies, 0] > 0,
+            axis=self._expectation_axes,
+        )
+        return counts
 
     def _validated_group_indices(
         self, group_labels: NDArray[Any]

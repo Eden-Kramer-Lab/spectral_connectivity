@@ -443,7 +443,8 @@ def test_partial_coherence_matches_inverse_spectral_matrix_definition():
     assert np.nanmax(np.abs(actual - uniform)) > 0.1
 
 
-def test_partial_coherence_is_invariant_under_rescaling_the_signals():
+@pytest.mark.parametrize("shrinkage", [None, 0.3, "auto"])
+def test_partial_coherence_is_invariant_under_rescaling_the_signals(shrinkage):
     """Rescaling the signals by 1e-6 to 1e6 (powers 1e-12 to 1e12), with
     arbitrary phases, leaves partial coherence unchanged to rounding."""
     rng = np.random.default_rng(104)
@@ -451,8 +452,8 @@ def test_partial_coherence_is_invariant_under_rescaling_the_signals():
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     coefficients = coefficients @ (np.eye(6) + 0.5 * rng.standard_normal((6, 6)))
     scales = 10.0 ** np.linspace(-6, 6, 6) * np.exp(1j * rng.uniform(-np.pi, np.pi, 6))
-    original = Connectivity(coefficients).partial_coherence()
-    rescaled = Connectivity(coefficients * scales).partial_coherence()
+    original = Connectivity(coefficients).partial_coherence(shrinkage=shrinkage)
+    rescaled = Connectivity(coefficients * scales).partial_coherence(shrinkage=shrinkage)
     np.testing.assert_allclose(rescaled, original, rtol=0, atol=1e-12, equal_nan=True)
 
 
