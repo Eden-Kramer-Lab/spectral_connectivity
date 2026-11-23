@@ -53,6 +53,18 @@ The migration guide for code written against 2.x is
   `multitaper_connectivity` takes it in `transform_kwargs`. New
   `artifact_samples`, `valid_windows` (`True` at the kept trial windows), and
   `observation_weights` properties of both transforms.
+- `Multitaper(artifact_handling="missing_data_tapers")` estimates a trial
+  window containing artifact samples from its valid samples, rather than
+  dropping it (`"drop"`, the default): its tapers are the missing-data
+  Slepian sequences of its gaps (Bronez 1988; Chave 2019), of which those
+  concentrated above 0.9 are kept (the others get observation weight 0, so
+  `n_valid_observations` counts them), and a window keeping fewer than 2 is
+  dropped. Windows without artifacts are unchanged. `taper_weighting="eigen"`
+  and `"adaptive"` use each window's own concentrations. It needs
+  `artifact_samples` and generated, low-bias DPSS tapers;
+  `ShortTimeFourierTransform` takes only `artifact_handling="drop"`.
+  Provenance records `artifact_handling` and
+  `n_missing_data_taper_trial_windows`.
 - `Connectivity.n_valid_observations`: the observations each bin (time window
   and frequency, by default) averages; `n_observations` stays the raw count.
   Where zero observation weights drop observations, the debiased squared

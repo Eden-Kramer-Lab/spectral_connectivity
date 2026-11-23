@@ -174,7 +174,8 @@ Prefer the wrapper's labeled results so you never index these by hand.
   is `True` at the artifacts, the samples to leave out (invert a mask of
   valid samples with `~`). A trial's
   window touching an artifact is dropped whole, so use windows that fit
-  between artifacts. The outputs mark what is kept: `Multitaper.valid_windows`,
+  between artifacts, or add `"artifact_handling": "missing_data_tapers"` to
+  estimate such a window from its valid samples instead. The outputs mark what is kept: `Multitaper.valid_windows`,
   and `Connectivity.n_valid_observations`, the per-bin counts to give the
   statistics functions instead of `n_observations`. See the
   [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
