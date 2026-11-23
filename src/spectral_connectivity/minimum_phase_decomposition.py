@@ -760,23 +760,18 @@ def minimum_phase_decomposition(
     upper-triangular ``U`` with ``U Uᵀ = R0`` for the zero-lag matrix ``R0``
     (the reverse Cholesky factor), so the factorization is covariant under
     rescaling the signals: for a positive diagonal ``D`` the factor of
-    ``D S D`` is ``D G``, up to rounding and the convergence tolerance. The
-    transposed Cholesky factor ``chol(R0)ᵀ``, which satisfies ``Uᵀ U = R0``
-    instead, is the start of FieldTrip's ``sfactorization_wilson.m`` (MATLAB's
-    ``chol``) and of this function before 3.0; it is not covariant. As
-    preconditioning, each sub-spectrum is also factored with its signals
-    scaled to unit mean power: the iteration factors ``D S D``, with ``D_ii``
-    one over the square root of the mean of ``S_ii`` over frequency, and
-    returns ``D⁻¹ G'`` for its factor ``G'``. A signal with zero or
-    non-finite power keeps a scale of 1.
+    ``D S D`` is ``D G``, up to rounding and the convergence tolerance.
+    FieldTrip's ``sfactorization_wilson.m`` starts from MATLAB's ``chol``,
+    the transposed Cholesky factor with ``Uᵀ U = R0``, which is not covariant.
+    As preconditioning, the iteration factors ``D S D`` with ``D_ii`` one
+    over the square root of the mean of ``S_ii`` over frequency, and returns
+    ``D⁻¹ G'`` for its factor ``G'``; a signal with zero or non-finite power
+    keeps a scale of 1.
 
-    Each converged factor is then checked, on a best-effort basis, for being
-    minimum phase: a sub-spectrum whose ``det G(e^{iω})`` winds around zero,
-    counted where its phase turns by less than ``π / 2`` between bins, gives
-    a ``UserWarning`` (a spectral Granger measure warns once per call, naming
-    the signal pairs), and its factor is returned as computed. A factor that
-    fails to be minimum phase without its determinant winding countably
-    passes the check. It costs less than one iteration.
+    A converged factor whose ``det G(e^{iω})`` winds around zero, counted
+    where its phase turns by less than ``π / 2`` between bins, is not minimum
+    phase and gives a ``UserWarning``; its factor is returned as computed.
+    The check is best effort and costs less than one iteration.
 
     Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
     computed once, which lets sub-spectra with near-collinear channels converge.
@@ -817,19 +812,10 @@ def minimum_phase_decomposition(
 
     .. versionchanged:: 3.0
        The iteration starts from ``U`` with ``U Uᵀ = R0`` instead of
-       ``chol(R0)ᵀ``, and the signals are scaled to unit mean power. From the
-       old start the iteration could converge, with no warning and ``G Gᴴ``
-       within 1e-9 of ``S``, to a factor that is not minimum phase, and every
-       directed measure was then wrong: for 9 of 400 random dense VARs (2-6
-       signals of comparable power, companion-matrix radius 0.8-0.99, exact
-       spectra; all 9 at 0.99), DTF and PDC missed their true values by
-       0.3-0.8, and for a chain of three nearly integrating signals (mean
-       powers 50, 1e4 and 3e6) pairwise spectral Granger missed by up to 6.5
-       and differed between the raw and the standardized signals. Without the
-       scaling, the covariant start still missed conditional Granger by 1e-4
-       for that chain with its signals rescaled by 0.1, 1 and 10, and
-       conditional Granger by 4e-3 and PDC by 0.4 with them rescaled by 1e-3,
-       1 and 1e3.
+       ``chol(R0)ᵀ``, the signals are scaled to unit mean power, and a
+       factor that is not minimum phase gives a warning. From the old start
+       the iteration could converge, without a warning, to a factor that is
+       not minimum phase; see the changelog for the measured errors.
 
     References
     ----------

@@ -957,10 +957,7 @@ def test_pairwise_granger_is_defined_on_a_grid_the_spectrum_wraps_around(n_fft):
 
 
 # A chain 0 -> 1 -> 2 of nearly integrating signals (each an AR(1) at 0.99):
-# every coupling integrates its input, so the mean powers are 50, 1e4 and
-# 3e6. The Wilson iteration once converged here, with no warning and a factor
-# reproducing the spectrum, to a spectral factor that is not minimum phase,
-# and every directed measure came out wrong.
+# every coupling integrates its input, so the mean powers are 50, 1e4 and 3e6.
 _INTEGRATING_CHAIN_COEFFICIENTS = 0.99 * np.eye(3)[np.newaxis] + np.array(
     [[[0.0, 0.0, 0.0], [0.2, 0.0, 0.0], [0.0, 0.2, 0.0]]]
 )
@@ -999,11 +996,7 @@ def test_directed_measures_of_signals_of_very_different_power_match_oracle(
     3e18), give the measures as accurately as signals of equal power.
     Rescaling signal ``i`` by ``d_i`` leaves spectral Granger unchanged and
     scales the transfer function to ``D H D^-1`` and its inverse to
-    ``D A D^-1``, which give the DTF, PDC, and dDTF of the rescaled model.
-    Unscaled, the factorization missed every one of these measures by more
-    than 0.5; with inverses loaded by the matrix's RMS entry instead of each
-    diagonal entry, pairwise Granger missed by 4e-4 and PDC by 0.9 at the 1e3
-    rescaling, and dDTF by 6e-5 at 1e6."""
+    ``D A D^-1``, which give the DTF, PDC, and dDTF of the rescaled model."""
     scale = np.diag(scales)
     coefficients = scale @ _INTEGRATING_CHAIN_COEFFICIENTS @ np.linalg.inv(scale)
     noise_covariance = scale @ scale
@@ -1078,14 +1071,9 @@ def test_blockwise_granger_of_blocks_of_signals_of_very_different_power_matches_
     )
 
 
-# Dense VARs of signals of comparable power (mean powers within a factor of 16)
-# whose factorization once converged, with no warning and a factor reproducing
-# the spectrum, to a factor that is not minimum phase: its determinant wound
-# once around zero, and DTF and PDC missed their true values by 0.3-0.8. The
-# start of the iteration then satisfied ``U^T U = R0`` instead of ``U U^T = R0``
-# for the zero-lag matrix ``R0``, which is not covariant under rescaling the
-# signals; the second model, rescaled, was factored correctly before the
-# signals were scaled to unit power and wrongly after.
+# Dense VARs of signals of comparable power that a start which is not
+# covariant under rescaling the signals factored to a factor that is not
+# minimum phase (the second only once the signals were scaled to unit power).
 _DENSE_VARS_ONCE_FACTORED_WRONGLY = pytest.mark.parametrize(
     ("model", "scales"),
     [

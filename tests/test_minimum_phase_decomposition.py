@@ -963,10 +963,7 @@ def test_a_zero_power_signal_keeps_a_unit_scale_and_its_window_converges(real_si
     from the deterministic fallback (with its warning) and, on both paths,
     converges to a factor that reproduces the spectrum, with the dead
     signal's row about 1e-8 of the others; the measures then handle the dead
-    signal (spectral Granger returns NaN for a target with no power). Before
-    the covariant start and the scaling, the two-sided path did not converge
-    for this window and returned it as NaN with a warning, while the
-    half-spectrum path converged as now."""
+    signal (spectral Granger returns NaN for a target with no power)."""
     signals = _lagged_signals(
         32, np.random.default_rng(2), dtype=float if real_signals else complex, n_signals=2
     )

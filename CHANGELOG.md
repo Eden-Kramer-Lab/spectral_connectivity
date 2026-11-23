@@ -1197,58 +1197,35 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   in volts) in the cases run, and by more below that. Recompute directed
   results from small-amplitude data.
 - The Wilson factorization behind every directed measure starts from a
-  factor that is covariant under rescaling the signals, so for a positive
-  diagonal `D` the factor of `D S D` is `D G` (to rounding and the
-  convergence tolerance). Every factor `G` with `G Gᴴ = S` is a fixed point
-  of the iteration, and the start decides which one it reaches: the
-  transposed Cholesky factor of the zero-lag matrix `R0`, which satisfies
-  `Uᵀ U = R0` instead of `U Uᵀ = R0`, could lead, with no warning and
-  `G Gᴴ` within 1e-9 of `S`, to a factor that is not minimum phase (its
-  determinant winds around zero), and every measure read from its transfer
-  function and noise covariance was then wrong. On exact spectra of 400
-  random dense VARs (2-6 signals of comparable power, companion radius
-  0.8-0.99) 9 failed, all at radius 0.99, with DTF and PDC 0.3-0.8 from
-  their true values; now none does (the largest error is 5e-9). For a chain
-  `0 -> 1 -> 2` of nearly integrating signals (a VAR(1) with 0.99 on the
-  diagonal and couplings of 0.2, mean powers 50, 1e4 and 3e6), the exact
-  spectrum on an 8192-point grid gave pairwise spectral Granger up to 6.5
-  from its true value, conditional Granger up to 3.4, and DTF and PDC up to
-  0.8; they are now within 3e-7. From multitaper estimates of that model
-  (8192 samples, 20 trials, NW 2), pairwise spectral Granger of the raw and
-  the standardized signals differed by up to 3.7, and `2 -> 0`, which is 0
-  in the model, peaked at 0.44 raw and 0.09 standardized; the two now agree
-  to 1e-12. As preconditioning, each signal is also scaled to unit mean power
-  for the iteration; without it the chain with its signals rescaled by
-  1e-3, 1, 1e3 still missed conditional Granger by 4e-3 and PDC by 0.4. The
-  inverses of the factor's lag-0 coefficient (for the transfer function), of
-  the transfer function (PDC, gPDC, dDTF), of the reduced transfer function
-  (conditional Granger), and of the noise covariance (dDTF, blockwise Granger) load each
-  diagonal entry by 1e-12 of its own size instead of 1e-12 of the matrix's
-  RMS entry, which perturbed a signal far weaker than the others by far
-  more: for the chain rescaled to mean powers from 5e-5 to 3e12, pairwise
-  Granger was 4e-4 and PDC 0.9 from their true values, and for powers from
-  5e-11 to 3e18 dDTF was 6e-5; now 3e-7, 8e-15 and 1e-13. The spectral
-  Granger family, directed coherence, and gPDC are therefore invariant under
-  rescaling the signals, and DTF, PDC, and dDTF covariant (they are those of
-  the rescaled model). 2.x started from the same transposed Cholesky factor
-  and has the same defect (raw and standardized pairwise Granger of the
-  chain differed by up to 4.3 there). Recompute directed results. For the
-  regression examples, whose signals have comparable power, spectral
-  Granger, conditional Granger, DTF, PDC, and gPDC moved by at most 7e-3
-  at any frequency, under a sixth of their RMS error against the generating
-  models (0.02-0.08), which is unchanged to 0.1%: the factor of a spectrum
-  estimated on a finite grid is not unique, and the new start reaches a
-  slightly different one. The factorization also warns, on a best-effort
-  basis, when a converged factor's determinant winds around zero (counted
-  where its phase turns by less than `π/2` between bins), naming the signal
-  pairs for the spectral Granger measures, once per call. It flagged all 9
-  failures of the old start in the 400-VAR sweep, nothing across the test
-  suite or 720 windows of multitaper estimates of random VARs with 1x-4x
-  zero-padding, and one signal pair in one of the 1199 windows of white
-  noise with 3 observations and 100 frequency bins in the benchmark, whose
-  determinant winds twice around zero from the old start as well; a factor
-  that fails to be minimum phase without its determinant winding countably
-  is not caught. It costs less than one iteration.
+  factor covariant under rescaling the signals (`U` with `U Uᵀ = R0`, not
+  `chol(R0)ᵀ`, for the zero-lag matrix `R0`), so the factor of `D S D` is
+  `D G`. From the old start it could converge, without a warning and with
+  `G Gᴴ` within 1e-9 of `S`, to a factor that is not minimum phase, and every
+  directed measure was then wrong: DTF and PDC were 0.3-0.8 off for 9 of 400
+  random VARs of comparable-power signals (now none; at most 5e-9), and
+  pairwise Granger 6.5 off for a chain of nearly integrating signals (now
+  3e-7). 2.x has the same start and defect. Recompute directed results.
+- As preconditioning, every signal is scaled to unit mean power for the
+  factorization and the factor unscaled afterwards. Pairwise Granger of raw
+  and standardized multitaper estimates of that chain differed by up to 3.7
+  (4.3 in 2.x) and now agree to 1e-12. Signals of comparable power move by
+  much less than their estimation error: at most 7e-3 in the regression
+  examples, under a sixth of their RMS error against the generating models,
+  which is unchanged to 0.1%.
+- The inverses behind the directed measures (of the factor's lag-0
+  coefficient, the transfer function, the reduced transfer function, and
+  the noise covariance or its target block) load each diagonal entry by
+  1e-12 of its own size instead of 1e-12 of the matrix's RMS entry, which
+  perturbed a signal far weaker than the others by far more (PDC 0.9 off for
+  signal powers from 5e-5 to 3e12). The spectral Granger family, directed
+  coherence, and gPDC are now invariant under rescaling the signals, and
+  DTF, PDC, and dDTF covariant.
+- The factorization warns, as a best-effort check, when a converged factor's
+  determinant winds around zero (so the factor is not minimum phase); the
+  spectral Granger measures warn once per call, naming the signal pairs. It
+  caught all 9 failures of the old start and nothing in the test suite or in
+  720 windows of zero-padded multitaper estimates. A factor that fails to be
+  minimum phase without its determinant winding countably is not caught.
 - The Wilson iteration builds each update from a square root of the
   cross-spectrum, so it is Hermitian positive semidefinite by construction.
   Sub-spectra with near-duplicate channels (condition numbers from about 1e10)
