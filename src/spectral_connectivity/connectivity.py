@@ -96,6 +96,12 @@ _NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife", "surrogate_test"})
 # Connectivity.surrogate_test: the surrogate constructions and alternatives it
 # takes, and the measures it refuses by name, with why.
 _SURROGATE_KINDS = ("trial_shuffle", "phase_rotation", "conjugation")
+# The question each kind answers, for the message naming them.
+_SURROGATE_QUESTIONS = {
+    "trial_shuffle": "do the signals covary from trial to trial (several trials)?",
+    "phase_rotation": "are the signals independent at all (one trial suffices)?",
+    "conjugation": "is there more than zero-lag mixing such as volume conduction?",
+}
 _SURROGATE_ALTERNATIVES = ("auto", "greater", "less", "two-sided")
 _SURROGATE_REFUSED_MEASURES = {
     "power": (
@@ -3166,8 +3172,11 @@ class Connectivity:
         if kind not in _SURROGATE_KINDS:
             msg = (
                 f"kind must be one of {', '.join(map(repr, _SURROGATE_KINDS))}, got "
-                f"{kind!r}. Each tests a different null hypothesis; see "
-                "Connectivity.surrogate_test."
+                f"{kind!r}. Each answers a different question: "
+                + "; ".join(
+                    f"{name!r}: {question}" for name, question in _SURROGATE_QUESTIONS.items()
+                )
+                + " See Connectivity.surrogate_test."
             )
             raise ValueError(msg)
         if not is_positive_integer(n_surrogates):
@@ -3202,7 +3211,16 @@ class Connectivity:
             raise ValueError(msg)
         if alternative == "auto":
             alternative = _signed_measure_alternative(method)
-        estimate = _real_array_result(measure(**method_kwargs), method, "surrogate_test")
+        estimate = _real_array_result(
+            measure(**method_kwargs),
+            method,
+            "surrogate_test",
+            complex_hint=(
+                " Test a real measure of it: magnitude_squared_coherence (coupling), "
+                "imaginary_coherence or imaginary_coherency (lagged coupling), or "
+                "phase_locking_value (phase coupling)."
+            ),
+        )
         if estimate.shape[-2:] != (self.n_signals, self.n_signals):
             msg = (
                 "surrogate_test tests relations between pairs of signals, so the "
@@ -3213,7 +3231,13 @@ class Connectivity:
         family_axes = (
             tuple(range(estimate.ndim))
             if fwer_axis is None
-            else _normalized_axes(fwer_axis, estimate.ndim, "fwer_axis")
+            else _normalized_axes(
+                fwer_axis,
+                estimate.ndim,
+                "fwer_axis",
+                f"{method}'s result, {self._result_axes_description(estimate.ndim)} "
+                f"with shape {estimate.shape}",
+            )
         )
         tested = np.isfinite(estimate) & ~np.eye(self.n_signals, dtype=bool)
         if rotation_half_bandwidth is not None:
@@ -3261,6 +3285,16 @@ class Connectivity:
             alternative=alternative,
             fwer_axis=family_axes,
         )
+
+    def _result_axes_description(self, ndim: int) -> str:
+        """The axes of a pairwise result with ``ndim`` axes, e.g. ``(time, frequency, source, target)``."""
+        kept = [("time", "trial", "taper")[axis] for axis in self._kept_observation_axes]
+        trailing = ["source", "target"]
+        if ndim == len(kept) + 3:
+            trailing.insert(0, "frequency")
+        elif ndim != len(kept) + 2:
+            return f"{ndim} axes"
+        return "axes (" + ", ".join(kept + trailing) + ")"
 
     def _rotation_half_bandwidth(self, half_bandwidth: float | None) -> float:
         """The half bandwidth ``kind="phase_rotation"`` masks with, or the error it raises.
@@ -3345,12 +3379,12 @@ class Connectivity:
             # Monte Carlo p-value cannot resolve finer than that.
             if math.lgamma(n_trials + 1) < math.log(n_surrogates):
                 warnings.warn(
-                    f"surrogate_test(kind='trial_shuffle'): {n_trials} trials can be "
-                    f"aligned with another signal's in only {math.factorial(n_trials)} "
-                    f"ways, fewer than n_surrogates={n_surrogates}, so surrogates "
-                    "repeat and no p-value is below about "
-                    f"1 / {math.factorial(n_trials)}. The p-values remain valid. "
-                    "Collect more trials for a finer test.",
+                    f"surrogate_test(kind='trial_shuffle'): only {n_trials} trials, "
+                    f"so one signal's trials can be paired with another's in only "
+                    f"{n_trials}! = {math.factorial(n_trials)} ways (fewer than "
+                    f"n_surrogates={n_surrogates}): p-values cannot go below about "
+                    f"1/{math.factorial(n_trials)}. They remain valid. Use more "
+                    "trials for a finer test.",
                     UserWarning,
                     stacklevel=stacklevel_outside_package(),
                 )
@@ -3389,11 +3423,12 @@ class Connectivity:
             # the measures symmetric under conjugation unchanged.
             n_distinct = 2 ** (n_units - 1)
             warnings.warn(
-                f"surrogate_test(kind='conjugation'): {n_units} independent "
-                f"observations give only {n_distinct} distinct surrogates for a "
-                f"measure unchanged by conjugating every observation, fewer than "
-                f"n_surrogates={n_surrogates}, so surrogates repeat and no p-value is "
-                f"below about 1 / {n_distinct}. The p-values remain valid.",
+                f"surrogate_test(kind='conjugation'): only {n_units} independent "
+                f"observations, so conjugation can make only 2**{n_units - 1} = "
+                f"{n_distinct} distinct surrogates (fewer than n_surrogates="
+                f"{n_surrogates}): p-values cannot go below about 1/{n_distinct}. "
+                "They remain valid. Use more trials, or more tapers per trial, for "
+                "a finer test.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
@@ -7749,7 +7784,12 @@ def _validated_half_bandwidth(half_bandwidth: Any) -> float:
 
 
 def _real_array_result(
-    result: Any, method: str, caller: str, *, structured_hint: str = ""
+    result: Any,
+    method: str,
+    caller: str,
+    *,
+    structured_hint: str = "",
+    complex_hint: str = "",
 ) -> NDArray[np.floating]:
     """``result`` of ``method`` as a real array, or the error ``caller`` raises.
 
@@ -7757,8 +7797,8 @@ def _real_array_result(
     ------
     TypeError
         If the measure returned a tuple, a structured (object) result, or a
-        complex array. ``structured_hint`` is appended to the structured-result
-        message.
+        complex array. ``structured_hint`` and ``complex_hint`` are appended
+        to the structured-result and complex-result messages.
     """
     if isinstance(result, tuple):
         msg = f"{caller} does not support tuple-valued measure {method!r}."
@@ -7771,7 +7811,7 @@ def _real_array_result(
         )
         raise TypeError(msg)
     if np.iscomplexobj(values):
-        msg = f"{caller} requires a real-valued measure; {method!r} is complex."
+        msg = f"{caller} requires a real-valued measure; {method!r} is complex.{complex_hint}"
         raise TypeError(msg)
     return values
 

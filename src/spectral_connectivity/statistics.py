@@ -185,9 +185,15 @@ def _surrogate_statistic(
 
 
 def _normalized_axes(
-    axis: int | tuple[int, ...], ndim: int, name: str = "axis"
+    axis: int | tuple[int, ...],
+    ndim: int,
+    name: str = "axis",
+    array_description: str | None = None,
 ) -> tuple[int, ...]:
-    """``axis`` as distinct non-negative axes of an ``ndim``-dimensional array."""
+    """``axis`` as distinct non-negative axes of an ``ndim``-dimensional array.
+
+    ``array_description`` names the array in the out-of-bounds message.
+    """
     axes = (axis,) if not isinstance(axis, tuple) else axis
     normalized = []
     for value in axes:
@@ -195,7 +201,12 @@ def _normalized_axes(
             msg = f"{name} must be an int, a tuple of ints, or None, got {axis!r}."
             raise TypeError(msg)
         if not -ndim <= value < ndim:
-            msg = f"{name} {value} is out of bounds for a result with {ndim} dimension(s)."
+            described = (
+                f"a result with {ndim} dimension(s)"
+                if array_description is None
+                else f"{array_description} ({ndim} dimension(s))"
+            )
+            msg = f"{name} {value} is out of bounds for {described}."
             raise ValueError(msg)
         normalized.append(int(value) % ndim)
     if len(set(normalized)) != len(normalized):

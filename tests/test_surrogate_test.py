@@ -448,7 +448,11 @@ def small_connectivity():
 @pytest.mark.parametrize(
     ("kwargs", "error", "match"),
     [
-        ({"kind": "shuffle"}, ValueError, "kind must be one of 'trial_shuffle'"),
+        (
+            {"kind": "shuffle"},
+            ValueError,
+            "kind must be one of 'trial_shuffle'.*'conjugation': is there more than zero-lag",
+        ),
         (
             {"kind": "trial_shuffle", "n_surrogates": 0},
             ValueError,
@@ -475,7 +479,10 @@ def small_connectivity():
         (
             {"kind": "conjugation", "fwer_axis": 4},
             ValueError,
-            "fwer_axis 4 is out of bounds",
+            (
+                r"fwer_axis 4 is out of bounds for magnitude_squared_coherence's result, "
+                r"axes \(time, frequency, source, target\)"
+            ),
         ),
         ({"kind": "conjugation", "fwer_axis": (1, 1)}, ValueError, "more than once"),
         ({"kind": "conjugation", "fwer_axis": 1.0}, TypeError, "fwer_axis must be an int"),
@@ -497,7 +504,12 @@ def test_invalid_arguments_are_refused(small_connectivity, kwargs, error, match)
             ValueError,
             "cannot test 'coherence_phase': a phase is circular",
         ),
-        ("coherency", {}, TypeError, "requires a real-valued measure; 'coherency' is complex"),
+        (
+            "coherency",
+            {},
+            TypeError,
+            "'coherency' is complex. Test a real measure of it: magnitude_squared_coherence",
+        ),
         ("canonical_coherence", {"group_labels": [0, 1]}, TypeError, "tuple-valued"),
         (
             "coherence",
@@ -570,11 +582,11 @@ def test_few_distinct_surrogates_warn():
     """3 trials align in 3! = 6 ways; 4 independent observations give 2**3 = 8
     distinct conjugations of a conjugation-symmetric measure."""
     rng = np.random.default_rng(14)
-    with pytest.warns(UserWarning, match="only 6 ways, fewer than n_surrogates=9"):
+    with pytest.warns(UserWarning, match=re.escape("3! = 6 ways (fewer than n_surrogates=9)")):
         Connectivity(_coefficients(rng, (1, 3, 1, 16, 2))).surrogate_test(
             "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=9
         )
-    with pytest.warns(UserWarning, match="give only 8 distinct surrogates"):
+    with pytest.warns(UserWarning, match=re.escape("only 2**3 = 8 distinct surrogates")):
         Connectivity(_coefficients(rng, (1, 4, 1, 16, 2))).surrogate_test(
             "imaginary_coherence", kind="conjugation", n_surrogates=9
         )
