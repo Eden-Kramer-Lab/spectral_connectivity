@@ -656,17 +656,11 @@ def test_line_removal_is_refused(recording, set_first):
     _multitaper(*recording, transform=transform, artifact_handling="drop", **kwargs)
 
 
-def test_a_single_taper_set_is_required_where_a_feature_needs_one(recording, missing_data):
-    with pytest.raises(ValueError, match="harmonic_f_test needs the same DPSS tapers"):
-        missing_data._require_one_taper_set("harmonic_f_test")
-    _multitaper(*recording, artifact_handling="drop")._require_one_taper_set("it")
-
-
 @pytest.mark.skipif(
     not hasattr(Multitaper, "harmonic_f_test"), reason="harmonic_f_test is not merged"
 )
 def test_the_harmonic_f_test_is_refused(missing_data):
-    with pytest.raises(ValueError, match="needs the same DPSS tapers"):
+    with pytest.raises(ValueError, match="one set of DPSS tapers"):
         missing_data.harmonic_f_test()
 
 

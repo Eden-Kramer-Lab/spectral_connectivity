@@ -2299,10 +2299,9 @@ class Multitaper(_WindowedFourierTransform):
     of interest.
 
     With ``artifact_handling="missing_data_tapers"`` the windows with artifacts
-    have tapers of their own, so features that assume one DPSS taper set for
-    every window refuse such a transform: line removal (``line_frequencies``)
-    at construction, and methods that fit or test lines through the tapers
-    call ``_require_one_taper_set``.
+    have tapers of their own, so line removal (``line_frequencies``), which
+    fits the shared DPSS tapers to every sample of a window, is refused at
+    construction.
 
     References
     ----------
@@ -2647,19 +2646,6 @@ class Multitaper(_WindowedFourierTransform):
             "would treat the zero-filled artifact samples as data. Use "
             "artifact_handling='drop' with line_frequencies, or remove the lines "
             "before marking the artifacts."
-        )
-        raise ValueError(msg)
-
-    def _require_one_taper_set(self, feature: str) -> None:
-        """Raise if some trial window has its own missing-data tapers, for a
-        ``feature`` that assumes every window shares the DPSS tapers."""
-        if not self._rescues_windows:
-            return
-        msg = (
-            f"{feature} needs the same DPSS tapers in every window, but "
-            "artifact_handling='missing_data_tapers' gives "
-            f"{self._n_missing_data_trial_windows} trial windows with artifacts "
-            "their own tapers. Use artifact_handling='drop' for it."
         )
         raise ValueError(msg)
 
