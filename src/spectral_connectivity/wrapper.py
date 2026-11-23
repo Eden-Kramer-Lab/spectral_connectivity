@@ -809,7 +809,7 @@ def connectivity_to_xarray(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
-    group_labels, measure_settings, group_methods = _resolve_group_labels(
+    group_labels, measure_settings = _resolve_group_labels(
         methods, measure_settings, group_labels
     )
     group_labels = _group_labels_from_coordinate(
@@ -849,7 +849,6 @@ def connectivity_to_xarray(
         input_attrs=None,
         connectivity_kwargs=measure_settings,
         group_labels=group_labels,
-        group_methods=group_methods,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -888,7 +887,7 @@ def _resolve_group_labels(
     methods: Sequence[str],
     connectivity_kwargs: Mapping[str, Any] | None,
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
-) -> tuple[Sequence[Hashable] | NDArray[Any] | None, dict[str, Any], frozenset[str]]:
+) -> tuple[Sequence[Hashable] | NDArray[Any] | None, dict[str, Any]]:
     """Resolve ``group_labels`` from the argument or ``connectivity_kwargs``.
 
     Needs no signal count, so every wrapper runs it before any spectral work
@@ -910,8 +909,6 @@ def _resolve_group_labels(
         The labels from whichever form supplied them.
     label_free_kwargs : dict
         A copy of ``connectivity_kwargs`` without ``group_labels``.
-    group_methods : frozenset of str
-        The requested measures that take ``group_labels``.
 
     Raises
     ------
@@ -928,8 +925,7 @@ def _resolve_group_labels(
         )
         raise ValueError(msg)
     group_labels = group_labels if group_labels is not None else legacy_labels
-    group_methods = [method for method in methods if _is_group_measure(method)]
-    if group_labels is not None and not group_methods:
+    if group_labels is not None and not any(_is_group_measure(m) for m in methods):
         msg = (
             "group_labels was given, but none of the requested measures compares "
             f"groups of signals: {list(methods)!r}. Request a group measure (see "
@@ -937,7 +933,7 @@ def _resolve_group_labels(
             "list_measures(category='multivariate_components')) or drop group_labels."
         )
         raise ValueError(msg)
-    return group_labels, label_free_kwargs, frozenset(group_methods)
+    return group_labels, label_free_kwargs
 
 
 def _group_labels_from_coordinate(
@@ -1129,7 +1125,6 @@ def _labeled_measures(
     input_attrs: Mapping[Any, Any] | None,
     connectivity_kwargs: Mapping[str, Any],
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
-    group_methods: frozenset[str],
     frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
@@ -1150,7 +1145,7 @@ def _labeled_measures(
     ``methods`` are canonical names; ``output_names`` maps each to the name the
     caller requested, which names its result variable (see
     :func:`_requested_methods`). The already-resolved ``group_labels`` (see
-    :func:`_resolve_group_labels`) reach ``group_methods`` only. ``squeeze`` is
+    :func:`_resolve_group_labels`) reach the group measures only. ``squeeze`` is
     honored only for a single-measure DataArray. A multi-measure batch skips a
     structurally unsupported measure and merges the survivors.
     ``frequency_range`` is passed to the measures that consume an interval and
@@ -1200,7 +1195,7 @@ def _labeled_measures(
         """Keyword arguments for one measure: ``group_labels`` reaches group
         measures only, and ``frequency_range`` the measures that consume it."""
         kwargs = dict(connectivity_kwargs)
-        if method in group_methods:
+        if _is_group_measure(method):
             kwargs["group_labels"] = group_labels
         if frequency_range is not None and method in consuming_methods:
             kwargs["frequency_range"] = frequency_range
@@ -1754,7 +1749,7 @@ def multitaper_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
-    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
+    group_labels, connectivity_kwargs = _resolve_group_labels(
         method, connectivity_kwargs, group_labels
     )
     group_labels = _group_labels_from_coordinate(
@@ -1841,7 +1836,6 @@ def multitaper_connectivity(
             input_attrs=input_attrs,
             connectivity_kwargs=connectivity_kwargs,
             group_labels=group_labels,
-            group_methods=group_methods,
             frequency_range=frequency_range,
             frequency_decimation=frequency_decimation,
             frequency_bands=frequency_bands,
@@ -2110,7 +2104,7 @@ def fourier_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
-    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
+    group_labels, connectivity_kwargs = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels
     )
     group_labels = _group_labels_from_coordinate(
@@ -2249,7 +2243,6 @@ def fourier_connectivity(
         input_attrs=input_attrs,
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
-        group_methods=group_methods,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
