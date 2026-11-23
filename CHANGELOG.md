@@ -54,6 +54,10 @@ The migration guide for code written against 2.x is
   the time-reversed data (the transposed cross-spectral matrix), the
   counterparts of `time_reversed_spectral_granger_prediction` for checking
   whether a direction reverses under time reversal (Winkler et al., 2016).
+- `adjust_for_multiple_comparisons(..., axis=...)`: the axes whose tests form
+  one family, as in `scipy.stats.false_discovery_control`, so each slice
+  along the other axes (each time window, say) is corrected on its own. The
+  default, `axis=None`, still pools every p-value into one family.
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided

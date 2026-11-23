@@ -74,6 +74,126 @@ def test_adjust_for_multiple_comparisons_rejects_unknown_method():
         adjust_for_multiple_comparisons(np.array([0.1]), method="not-a-method")
 
 
+_MULTIPLE_COMPARISONS = {
+    "Benjamini_Hochberg_procedure": Benjamini_Hochberg_procedure,
+    "Bonferroni_correction": Bonferroni_correction,
+}
+
+
+@pytest.fixture
+def p_value_grid():
+    """P-values shaped (3, 4, 5): small values that some families keep, with
+    undefined (NaN) tests scattered through them."""
+    rng = np.random.default_rng(140)
+    p_values = rng.uniform(0, 1, (3, 4, 5)) ** 3
+    p_values[rng.uniform(size=p_values.shape) < 0.1] = np.nan
+    return p_values
+
+
+@pytest.mark.parametrize("method", list(_MULTIPLE_COMPARISONS))
+@pytest.mark.parametrize("axis", [0, -1, (1, 2), (2, 0), (0, 1, 2)], ids=str)
+def test_adjust_for_multiple_comparisons_corrects_each_family_on_its_own(
+    p_value_grid, method, axis
+):
+    """With ``axis``, the tests along those axes form one family: each slice
+    along the other axes gets the one-family correction of its own values."""
+    result = adjust_for_multiple_comparisons(p_value_grid, alpha=0.1, method=method, axis=axis)
+    family_axes = tuple(np.atleast_1d(axis) % p_value_grid.ndim)
+    other_axes = [dim for dim in range(p_value_grid.ndim) if dim not in family_axes]
+    expected = np.zeros(p_value_grid.shape, dtype=bool)
+    for index in np.ndindex(*(p_value_grid.shape[dim] for dim in other_axes)):
+        selection = [slice(None)] * p_value_grid.ndim
+        for dim, position in zip(other_axes, index, strict=True):
+            selection[dim] = position
+        family = p_value_grid[tuple(selection)]
+        # The one-family correction pools the family's axes, so the order in
+        # which ``axis`` lists them cannot matter.
+        expected[tuple(selection)] = _MULTIPLE_COMPARISONS[method](family, alpha=0.1)
+    assert result.shape == p_value_grid.shape
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("method", list(_MULTIPLE_COMPARISONS))
+def test_adjust_for_multiple_comparisons_without_axis_pools_every_test(p_value_grid, method):
+    """``axis=None`` is one family of every p-value, which differs from a
+    family per slice on this grid."""
+    pooled = adjust_for_multiple_comparisons(p_value_grid, alpha=0.1, method=method)
+    np.testing.assert_array_equal(
+        pooled, _MULTIPLE_COMPARISONS[method](p_value_grid.ravel(), alpha=0.1).reshape(3, 4, 5)
+    )
+    per_row = adjust_for_multiple_comparisons(p_value_grid, alpha=0.1, method=method, axis=-1)
+    assert not np.array_equal(pooled, per_row)
+
+
+def test_adjust_for_multiple_comparisons_warns_once_for_undefined_families():
+    """Families with no finite p-value are all-False and reported in one
+    warning at the caller that counts them, however many there are; the other
+    families are corrected as usual."""
+    p_values = np.full((6, 2), np.nan)
+    p_values[0] = [0.001, 0.5]
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = adjust_for_multiple_comparisons(p_values, axis=-1)
+    assert len(record) == 1
+    assert "5 of 6 families (the slices along axis=-1) have no finite p-value" in str(
+        record[0].message
+    )
+    assert record[0].filename == __file__
+    expected = np.zeros((6, 2), dtype=bool)
+    expected[0, 0] = True
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("method", list(_MULTIPLE_COMPARISONS))
+def test_undefined_family_warning_points_at_the_caller(method):
+    """Called directly or through adjust_for_multiple_comparisons, the warning
+    for a family with no finite p-value names the caller's line."""
+    p_values = np.array([np.nan, np.inf])
+    for call in (
+        lambda: _MULTIPLE_COMPARISONS[method](p_values),
+        lambda: adjust_for_multiple_comparisons(p_values, method=method),
+    ):
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            call()
+        assert [w.filename for w in record] == [__file__]
+
+
+@pytest.mark.parametrize(
+    ("axis", "error", "match"),
+    [
+        (2, ValueError, "axis 2 is out of bounds for p_values with 2 dimension"),
+        (-3, ValueError, "axis -3 is out of bounds"),
+        ((0, -2), ValueError, "names the same axis more than once"),
+        (True, TypeError, "axis must be an int, a tuple of ints, or None"),
+        (1.0, TypeError, "axis must be an int, a tuple of ints, or None"),
+        ([0], TypeError, "axis must be an int, a tuple of ints, or None"),
+    ],
+    ids=str,
+)
+def test_adjust_for_multiple_comparisons_rejects_an_invalid_axis(axis, error, match):
+    with pytest.raises(error, match=match):
+        adjust_for_multiple_comparisons(np.full((2, 3), 0.01), axis=axis)
+
+
+def test_adjust_for_multiple_comparisons_validates_alpha_with_no_family():
+    """An array with no families still has its significance level checked."""
+    with pytest.raises(ValueError, match="alpha must be a finite number"):
+        adjust_for_multiple_comparisons(np.zeros((0, 3)), alpha=2, axis=-1)
+
+
+@pytest.mark.parametrize(("shape", "axis"), [((0, 3), -1), ((3, 0), -1), ((0, 3), 0)], ids=str)
+def test_adjust_for_multiple_comparisons_handles_empty_families(shape, axis):
+    """No families, or families of no tests, give an all-False mask of the
+    input's shape without a warning, as the pooled path does."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = adjust_for_multiple_comparisons(np.zeros(shape), axis=axis)
+        pooled = adjust_for_multiple_comparisons(np.zeros(shape))
+    assert result.shape == pooled.shape == shape
+    assert not result.any()
+
+
 def test_get_normal_distribution_p_values():
     # approximate 97.5 percentile of the standard normal distribution
     zscore = 1.95996
