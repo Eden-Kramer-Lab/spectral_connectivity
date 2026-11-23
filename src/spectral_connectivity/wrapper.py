@@ -877,28 +877,6 @@ def connectivity_to_xarray(
     return _with_frequency_grid_metadata(result)
 
 
-def _reject_transform(value: Any, function: str, argument: str, takes: str) -> None:
-    """Raise, naming ``connectivity_to_xarray``, if ``value`` is a spectral transform.
-
-    A transform (an object with ``fft()`` and ``frequencies``, such as
-    ``Multitaper`` or ``VARSpectrum``) passed where data is expected would
-    otherwise fail as a non-numeric array, with advice to convert it.
-    """
-    if hasattr(value, "shape") or not (
-        callable(getattr(value, "fft", None)) and hasattr(value, "frequencies")
-    ):
-        return
-    msg = (
-        f"{function} {takes}, but {argument} is a spectral transform "
-        f"({type(value).__name__}), which already holds the Fourier "
-        "coefficients. For a "
-        "transform, including VARSpectrum, call connectivity_to_xarray(transform, "
-        "method) for a labeled result, once per measure, or "
-        "Connectivity.from_transform(transform) for the arrays."
-    )
-    raise TypeError(msg)
-
-
 def _combine_formatted_results(
     results: Sequence[xr.DataArray | xr.Dataset],
     shared_attrs: Mapping[str, Any],
@@ -1651,12 +1629,6 @@ def multitaper_connectivity(
     .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for Physical
            Applications: Multitaper and Conventional Univariate Techniques.
     """
-    _reject_transform(
-        time_series,
-        "multitaper_connectivity",
-        "time_series",
-        "estimates the spectrum from a time series",
-    )
     transform_settings = _transform_settings(
         transform_kwargs, kwargs, sampling_frequency_given=sampling_frequency is not None
     )
@@ -1996,12 +1968,6 @@ def fourier_connectivity(
         from ``a`` to ``b``. One-sided coefficients support functional
         measures, but measures that need a full two-sided spectrum raise.
     """
-    _reject_transform(
-        fourier_coefficients,
-        "fourier_connectivity",
-        "fourier_coefficients",
-        "takes an array of Fourier coefficients",
-    )
     (
         coefficient_data,
         frequencies,
