@@ -377,11 +377,14 @@ density; the cookbook has a
 [worked example](docs/cookbook.md#plug-in-your-own-transform).
 
 `VARSpectrum` is a transform whose spectrum is that of a vector autoregressive
-model, given by its coefficient matrices and innovation covariance (as
-`simulate_MVAR` takes them, or as statsmodels fits them), and
-`Connectivity.from_var(coefficients, noise_covariance, sampling_frequency=...)`
-builds the `Connectivity` in one call. Every measure of the cross-spectral
-matrix is then the model's exact value, with no estimation error; the measures
+model, given by its coefficient matrices and, optionally, its innovation
+covariance (as `simulate_MVAR` takes them, or as statsmodels fits them).
+`connectivity_to_xarray(VARSpectrum(coefficients, noise_covariance=None,
+sampling_frequency=...), method)` labels one measure of it, and
+`Connectivity.from_var(coefficients, noise_covariance=None,
+sampling_frequency=...)` gives the `Connectivity`. Every measure of the
+cross-spectral matrix is then the model's value, with no estimation error (the
+directed measures to the accuracy of the Wilson factorization); the measures
 computed from individual trials and tapers raise. See the
 [cookbook recipe](docs/cookbook.md#exact-connectivity-of-a-var-model).
 

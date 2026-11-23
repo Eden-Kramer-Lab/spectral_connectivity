@@ -45,7 +45,9 @@ The migration guide for code written against 2.x is
 - `VARSpectrum(coefficients, noise_covariance, sampling_frequency=...)`, a
   transform whose spectrum is exactly that of a vector autoregressive model,
   and `Connectivity.from_var(...)`, the shortcut for
-  `Connectivity.from_transform(VARSpectrum(...))`. Every measure of the
+  `Connectivity.from_transform(VARSpectrum(...))`; `connectivity_to_xarray`
+  labels its results (`multitaper_connectivity` and `fourier_connectivity`
+  now name that route when given a transform). Every measure of the
   cross-spectral matrix (power, the coherence family, partial, canonical and
   global coherence, the phase slope index, and the spectral Granger and
   transfer-function families) is then the model's population value, with no
@@ -68,8 +70,10 @@ The migration guide for code written against 2.x is
   are one factorization of a cross-spectral matrix rather than samples, as
   `VARSpectrum`'s are. The measures computed from each observation or their
   count (the phase-locking and phase-lag families, pairwise phase
-  consistency, `delay`, `group_delay`) and `jackknife` then raise, and
-  `expectation_type` must average the tapers.
+  consistency, `delay`, `group_delay`) and `jackknife` then raise,
+  `observation_weights` are refused, and `expectation_type` must average the
+  tapers. Labeled results record `is_exact_spectrum` (0/1) and, for an exact
+  spectrum, no `n_observations` or `observations_are_independent`.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working

@@ -3648,8 +3648,11 @@ class VARSpectrum:
     <spectral_connectivity.Connectivity.from_transform>` (or
     :meth:`Connectivity.from_var <spectral_connectivity.Connectivity.from_var>`)
     gives the model's population connectivity, with no estimation error, for
-    a fitted or a simulated model. Fitting is left to other packages (see
-    Examples).
+    a fitted or a simulated model, and
+    :func:`~spectral_connectivity.wrapper.connectivity_to_xarray` labels one
+    measure of it per call (:func:`~spectral_connectivity.multitaper_connectivity`
+    estimates from a time series and does not take a transform). Fitting is
+    left to other packages (see Examples).
 
     .. versionadded:: 3.0
 
@@ -3658,9 +3661,13 @@ class VARSpectrum:
     coefficients : array, shape (n_lags, n_signals, n_signals) or (n_time_windows, n_lags, n_signals, n_signals)
         ``coefficients[k - 1]`` is ``A_k``, the influence of the signals ``k``
         samples earlier on ``x(t)``: ``coefficients[k - 1][i, j]`` is the
-        effect of signal ``j`` on signal ``i``. This is the convention of
+        effect of signal ``j`` on signal ``i``, which the directed measures
+        report as ``source=j``, ``target=i`` (``[..., j, i]`` of a
+        ``Connectivity`` array). This is the convention of
         :func:`~spectral_connectivity.simulate.simulate_MVAR` and of the
-        ``coefs`` of a fitted statsmodels ``VARResults``. With a leading
+        ``coefs`` of a fitted statsmodels ``VARResults``. The lag is the first
+        axis: MVGC's MATLAB layout ``A(:, :, k)`` is
+        ``np.moveaxis(A, -1, 0)`` here. With a leading
         ``n_time_windows`` axis, each window is a model of its own (a
         time-varying VAR), and the windows go on the time axis of the results.
         Real values only.
@@ -3789,8 +3796,15 @@ class VARSpectrum:
     >>> round(float(connectivity.frequencies[np.argmax(power[0, :, 0])]), 1)  # Hz
     15.0
 
+    Labeled, for one measure per call:
+
+    >>> from spectral_connectivity.wrapper import connectivity_to_xarray
+    >>> connectivity_to_xarray(var, "power", signal_names=["x"]).dims
+    ('time', 'frequency', 'source')
+
     Statsmodels fits a VAR whose ``coefs`` and ``sigma_u`` are these
-    arguments (statsmodels is not a dependency):
+    arguments (statsmodels is not a dependency; the fitted intercept, which
+    sets the mean, does not enter the spectrum):
 
     >>> from statsmodels.tsa.api import VAR  # doctest: +SKIP
     >>> fitted = VAR(data).fit(maxlags=2)  # data: (n_time_samples, n_signals)  # doctest: +SKIP

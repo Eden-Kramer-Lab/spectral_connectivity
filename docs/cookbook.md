@@ -641,12 +641,16 @@ True
 (VAR) model, `x(t) = sum_k A_k x(t - k) + e(t)`, so every measure of the
 cross-spectral matrix it gives is the model's population value, with no
 estimation error: what an estimate of data simulated from the model should
-find, or the connectivity of a model fitted elsewhere.
-`Connectivity.from_var(...)` is the shortcut for
-`Connectivity.from_transform(VARSpectrum(...))`. `coefficients[k - 1]` is
-`A_k`, whose entry `[i, j]` is the effect of signal `j` on signal `i`, as in
-`simulate_MVAR`; `noise_covariance` is the covariance of `e(t)` (the identity
-by default).
+find, or the connectivity of a model fitted elsewhere. Label its results with
+`connectivity_to_xarray(transform, method)`, one measure per call
+(`multitaper_connectivity` estimates from a time series and does not take a
+transform); `Connectivity.from_var(...)`, the shortcut for
+`Connectivity.from_transform(VARSpectrum(...))`, gives the arrays.
+`coefficients[k - 1]` is `A_k`, with the lag on the first axis (for MVGC's
+MATLAB layout `A(:, :, k)`, pass `np.moveaxis(A, -1, 0)`), and its entry
+`[i, j]` is the effect of signal `j` on signal `i`, as in `simulate_MVAR`: it
+appears in the results as `source=j`, `target=i`. `noise_covariance` is the
+covariance of `e(t)` (the identity by default).
 
 ```python
 >>> from spectral_connectivity import Connectivity, VARSpectrum
@@ -685,6 +689,28 @@ one-second windows agree with it to within their sampling error, 3% per bin:
 
 ```
 
+The same comparison for spectral Granger prediction shows how far an estimate
+of these 200 trials lies from the model's value (0.75 at its peak):
+
+```python
+>>> granger_estimate = multitaper_connectivity(
+...     simulated,
+...     sampling_frequency=500,
+...     method="pairwise_spectral_granger_prediction",
+...     detrend_type=None,
+...     signal_names=["a", "b"],
+... ).isel(time=0)
+>>> true_granger = connectivity_to_xarray(
+...     on_its_grid, "pairwise_spectral_granger_prediction", signal_names=["a", "b"]
+... ).isel(time=0)
+>>> error = abs(granger_estimate - true_granger)
+>>> bool(error.sel(source="a", target="b").max() < 0.1)
+True
+>>> bool(error.sel(source="b", target="a").max() < 0.01)
+True
+
+```
+
 The coefficients that `VARSpectrum.fft()` returns are one factorization of the
 model's spectrum, not samples, so the measures computed from each trial and
 taper or from their count (the phase-locking and phase-lag families, pairwise
@@ -701,12 +727,15 @@ ValueError: phase_locking_value is not defined for an exact spectrum ...
 
 A model fitted by statsmodels (not a dependency of this package) has the same
 convention. `fitted.coefs` is `(n_lags, n_signals, n_signals)` and
-`fitted.sigma_u` the innovation covariance:
+`fitted.sigma_u` the innovation covariance. The fitted intercept is ignored
+(it sets the mean, not the spectrum), and `VARSpectrum` refuses an unstable
+fit, which `fitted.is_stable()` reports beforehand:
 
 ```python
 from statsmodels.tsa.api import VAR
 
 fitted = VAR(simulated[:, 0, :]).fit(maxlags=2)  # one trial: (n_time_samples, n_signals)
+assert fitted.is_stable()
 connectivity = Connectivity.from_var(fitted.coefs, fitted.sigma_u, sampling_frequency=500)
 ```
 

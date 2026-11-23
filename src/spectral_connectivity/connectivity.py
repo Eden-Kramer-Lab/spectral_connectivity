@@ -1645,7 +1645,10 @@ class Connectivity:
         the model's population value, with no estimation error (the directed
         measures to the accuracy of the Wilson factorization), and the
         measures that use individual observations raise (see
-        :class:`~spectral_connectivity.transforms.VARSpectrum`).
+        :class:`~spectral_connectivity.transforms.VARSpectrum`). For labeled
+        results, call
+        :func:`~spectral_connectivity.wrapper.connectivity_to_xarray` with the
+        ``VARSpectrum``, once per measure.
 
         .. versionadded:: 3.0
 
