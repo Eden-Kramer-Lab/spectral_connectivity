@@ -175,6 +175,7 @@ _MEASURE_KWARGS = {
     "maximized_imaginary_coherency_components": {"group_labels": _GROUPS},
     "multivariate_interaction_measure": {"group_labels": _GROUPS},
     "blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
+    "time_reversed_blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
     "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
 }
 
@@ -494,6 +495,9 @@ def zero_drives_one_connectivity(zero_drives_one):
 _BAND = [5.0, 60.0]
 _ORIENTATION_KWARGS = {
     "blockwise_spectral_granger_prediction": {"group_labels": np.array([0, 1, 2])},
+    "time_reversed_blockwise_spectral_granger_prediction": {
+        "group_labels": np.array([0, 1, 2])
+    },
     "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
     "delay": {"frequency_range": _BAND},
     "group_delay": {"frequency_range": _BAND},
@@ -522,6 +526,9 @@ def _in_band(connectivity, result):
 _BAND_MATRICES = {
     # (values, labels)
     "blockwise_spectral_granger_prediction": lambda c, result: _in_band(c, result[0]),
+    "time_reversed_blockwise_spectral_granger_prediction": lambda c, result: _in_band(
+        c, result[0]
+    ),
     # (delay, slope, r_value), already fit over the band
     "group_delay": lambda c, result: result[0],
     # (..., frequency, candidate, n, n): the zero-wrap candidate
@@ -544,10 +551,10 @@ def _zero_one_and_one_zero(connectivity, name):
 def test_directed_measures_place_source_first(zero_drives_one, measure):
     """Signal 0 drives and leads signal 1, so every directed ``Connectivity``
     array holds ``0 -> 1`` at ``[..., 0, 1]``. Time reversal flips the apparent
-    direction, so the time-reversed measure is given reversed data, on which the
-    planted ``0 -> 1`` again lands at ``[..., 0, 1]``."""
+    direction, so the time-reversed measures are given reversed data, on which
+    the planted ``0 -> 1`` again lands at ``[..., 0, 1]``."""
     time_series = zero_drives_one
-    if measure.name == "time_reversed_spectral_granger_prediction":
+    if measure.name.startswith("time_reversed_"):
         time_series = time_series[::-1]
     connectivity = Connectivity.from_transform(
         Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
@@ -617,12 +624,14 @@ _DOCUMENTED_DIAGONALS = {
     "subset_pairwise_spectral_granger_prediction": ("undefined_nan", None, False),
     "conditional_spectral_granger_prediction": ("undefined_nan", None, False),
     "time_reversed_spectral_granger_prediction": ("undefined_nan", None, False),
+    "time_reversed_conditional_spectral_granger_prediction": ("undefined_nan", None, False),
     "directed_transfer_function": ("estimated", None, False),
     "directed_coherence": ("estimated", None, False),
     "partial_directed_coherence": ("estimated", None, False),
     "generalized_partial_directed_coherence": ("estimated", None, False),
     "direct_directed_transfer_function": ("estimated", None, False),
     "blockwise_spectral_granger_prediction": ("undefined_nan", None, False),
+    "time_reversed_blockwise_spectral_granger_prediction": ("undefined_nan", None, False),
     "canonical_coherence": ("masked_nan", None, False),
     "maximized_imaginary_coherency": ("masked_nan", None, False),
     "multivariate_interaction_measure": ("masked_nan", None, False),

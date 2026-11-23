@@ -48,6 +48,12 @@ The migration guide for code written against 2.x is
   precision and the Wilson factorization's tolerance and iteration cap for
   the directed measures. In `connectivity_kwargs` or `transform_kwargs` they
   raise `ValueError` naming the argument to use.
+- `Connectivity.time_reversed_conditional_spectral_granger_prediction()` and
+  `Connectivity.time_reversed_blockwise_spectral_granger_prediction(group_labels)`,
+  also available in the wrappers: conditional and blockwise spectral Granger of
+  the time-reversed data (the transposed cross-spectral matrix), the
+  counterparts of `time_reversed_spectral_granger_prediction` for checking
+  whether a direction reverses under time reversal (Winkler et al., 2016).
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided

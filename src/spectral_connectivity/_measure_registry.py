@@ -483,6 +483,16 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "not reverse suggests instantaneous mixing.",
         diagonal_policy="undefined_nan",
     ),
+    "time_reversed_conditional_spectral_granger_prediction": _wilson_directed_spec(
+        "pairwise",
+        long_name="Time-reversed conditional spectral Granger prediction",
+        units="1",
+        value_range=(0.0, _INFINITY),
+        interpretation="Conditional spectral Granger causality of the time-reversed data. Genuine "
+        "directed influence reverses under time reversal; directionality that does "
+        "not reverse suggests instantaneous mixing.",
+        diagonal_policy="undefined_nan",
+    ),
     # Directed-transfer-function family (opt-in).
     "directed_transfer_function": _wilson_directed_spec(
         "pairwise",
@@ -539,6 +549,16 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, _INFINITY),
         interpretation="Spectral Granger causality between groups of signals set by group_labels, "
         "from source_group to target_group.",
+        diagonal_policy="undefined_nan",
+    ),
+    "time_reversed_blockwise_spectral_granger_prediction": _wilson_directed_spec(
+        "group_pairwise",
+        long_name="Time-reversed blockwise spectral Granger prediction",
+        units="1",
+        value_range=(0.0, _INFINITY),
+        interpretation="Blockwise spectral Granger causality of the time-reversed data, from "
+        "source_group to target_group. Genuine directed influence reverses under time "
+        "reversal; directionality that does not reverse suggests instantaneous mixing.",
         diagonal_policy="undefined_nan",
     ),
     "canonical_coherence": _MeasureSpec(
