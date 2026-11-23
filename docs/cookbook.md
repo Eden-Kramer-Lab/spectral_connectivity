@@ -398,11 +398,9 @@ Which to choose:
 The gapped windows' tapers are less concentrated than the DPSS (down to 0.9
 rather than about 0.95), so their estimates leak more power from strong peaks
 into the rest of the spectrum; see the `artifact_handling` parameter of
-`Multitaper` for measured sizes. Building the transform solves one
-eigenproblem per distinct pattern of artifacts in a trial window, whose cost
-grows as the cube of the window length (about 30 ms per pattern for 1000
-samples, 20 s for 8000); construction warns when the total is estimated above
-10 s. Windows without artifacts are unchanged.
+`Multitaper` for measured sizes. Building the transform finds the tapers of
+each distinct pattern of artifacts in a trial window, about 1.5 ms per pattern
+for 1000 samples. Windows without artifacts are unchanged.
 :::
 
 ## Group measures: canonical coherence between areas

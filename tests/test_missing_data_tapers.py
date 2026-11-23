@@ -12,6 +12,7 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.linalg import eigh as scipy_eigh
 from scipy.signal import detrend as scipy_detrend
 from scipy.signal import lfilter
 from scipy.signal.windows import dpss
@@ -184,6 +185,54 @@ def test_without_gaps_they_are_the_dpss():
     )
     np.testing.assert_allclose(tapers, reference.T, atol=1e-10)
     np.testing.assert_allclose(concentrations, ratios, atol=1e-12)
+
+
+def test_the_dense_fallback_of_a_short_window_is_the_brute_force_solution():
+    """20 valid samples or fewer are solved densely, as ARPACK cannot."""
+    valid = _valid([(5, 4)], n_time=24)
+    tapers, concentrations = _missing_data_slepian_tapers(valid, 2, 3, dpss(24, 2, 3).T)
+    eigenvalues, eigenvectors = _brute_force(valid, 2)
+    np.testing.assert_allclose(concentrations, eigenvalues[:3], atol=1e-12)
+    alignment = np.abs(np.sum(tapers[valid] * eigenvectors[:, :3], axis=0))
+    np.testing.assert_allclose(alignment, 1, atol=1e-10)
+
+
+def test_tapers_of_equal_concentration_do_not_depend_on_the_solver(monkeypatch):
+    """At NW = 8 the leading concentrations nearly coincide, so only their
+    span is defined; that span is rotated to be closest to the DPSS, so
+    the dense solver gives the same tapers, and without gaps they are the
+    DPSS."""
+    from spectral_connectivity import transforms
+
+    n_time, nw, n_tapers = 256, 8, 15
+    reference = dpss(n_time, nw, n_tapers).T
+    valid = _valid([(40, 10), (150, 3)], n_time=n_time)
+    eigenvalues, _ = _brute_force(valid, nw)
+    assert (-np.diff(eigenvalues[:6])).min() < 1e-9  # the first two, 1.3e-10 apart
+    sparse_tapers, sparse_concentrations = _missing_data_slepian_tapers(
+        valid, nw, n_tapers, reference
+    )
+
+    def dense(first_row, indices, k):
+        return scipy_eigh(first_row[np.abs(indices[:, None] - indices[None, :])])
+
+    monkeypatch.setattr(transforms, "_leading_eigenpairs", lambda *a: _top(dense(*a), a[2]))
+    dense_tapers, dense_concentrations = _missing_data_slepian_tapers(
+        valid, nw, n_tapers, reference
+    )
+    np.testing.assert_allclose(sparse_concentrations, dense_concentrations, atol=1e-12)
+    np.testing.assert_allclose(sparse_tapers, dense_tapers, atol=1e-8)
+    monkeypatch.undo()
+    gapless, _ = _missing_data_slepian_tapers(
+        np.ones(n_time, dtype=bool), nw, n_tapers, reference
+    )
+    np.testing.assert_allclose(gapless, reference, atol=1e-8)
+
+
+def _top(eigenpairs, k):
+    """The ``k`` largest of ascending ``eigenpairs``."""
+    eigenvalues, eigenvectors = eigenpairs
+    return eigenvalues[-k:], eigenvectors[:, -k:]
 
 
 def test_the_coefficients_are_those_of_the_brute_force_tapers(recording, missing_data):
@@ -518,26 +567,6 @@ def test_dropping_windows_with_artifacts_warns(recording):
         "Multitaper.n_kept_tapers",
     ):
         assert part in message, part
-
-
-def test_a_long_computation_warns_with_its_estimate(recording, monkeypatch):
-    """The estimate (here forced over the limit) names the eigenproblems, their
-    size, the time, and the remedies; a kernel over the memory limit too."""
-    from spectral_connectivity import transforms
-
-    time_series, artifacts = recording
-    monkeypatch.setattr(transforms, "_MISSING_DATA_TAPER_SECONDS_WARNING", 0.0)
-    with pytest.warns(UserWarning, match="will solve") as record:
-        _multitaper(time_series, artifacts)
-    message = str(record[0].message)
-    # Five patterns; the one with 50 of 64 samples missing needs none. The
-    # others have 60, 58, 42 and 56 valid samples.
-    assert "will solve 4 eigenproblems of about 54 samples (0.27 s) each" in message
-    assert "halving time_window_duration divides each by about 8 and 4" in message
-    monkeypatch.setattr(transforms, "_MISSING_DATA_TAPER_SECONDS_WARNING", 10.0)
-    monkeypatch.setattr(transforms, "_MISSING_DATA_TAPER_KERNEL_BYTES_WARNING", 1e4)
-    with pytest.warns(UserWarning, match=r"a kernel of up to 2\.9e-05 GB"):
-        _multitaper(time_series, artifacts)
 
 
 @pytest.mark.parametrize(

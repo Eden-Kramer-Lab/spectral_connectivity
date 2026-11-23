@@ -20,6 +20,8 @@ from numpy.typing import NDArray
 from scipy.linalg import eigh as scipy_eigh
 from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
+from scipy.sparse.linalg import LinearOperator
+from scipy.sparse.linalg import eigsh as scipy_eigsh
 
 from spectral_connectivity._array_utils import _divide_where
 from spectral_connectivity._backend import (
@@ -2288,16 +2290,10 @@ class Multitaper(_WindowedFourierTransform):
           ``taper_weighting="eigen"`` and ``"adaptive"`` use each window's own
           concentrations (and ``"adaptive"`` the variance of its valid
           samples). Needs generated DPSS tapers, ``is_low_bias=True``, and
-          at least 2 tapers. Construction solves one dense eigenproblem, of
-          the size of the window's valid samples, for each distinct pattern
-          of artifact samples in a trial window, and keeps their tapers. The
-          cost per pattern grows as the cube of the window length: measured
-          on a laptop, about 30 ms per pattern for 1000 samples, 0.2 s for
-          2000, 2 s for 4000, and 20 s (with a 0.5 GB kernel) for 8000, so a
-          window as long as the recording (``time_window_duration=None``) is
-          impractical beyond a few thousand samples. Construction warns,
-          before solving, when the total is estimated above 10 s or one
-          kernel above 1 GB.
+          at least 2 tapers. Construction finds the tapers of each distinct
+          pattern of artifact samples in a trial window (Lanczos iterations
+          on an FFT product with the kernel), about 1.5 ms per pattern for
+          1000 samples and 36 ms for 60000 on a laptop, and keeps them.
 
     Attributes
     ----------
@@ -3041,7 +3037,6 @@ class Multitaper(_WindowedFourierTransform):
             self.time_halfbandwidth_product,
             self.n_tapers,
             to_numpy(self._tapers),
-            self.sampling_frequency,
         )
         assert self._taper_eigenvalues is not None  # checked at construction
         is_kept = n_kept[pattern_index] > 0
@@ -4815,6 +4810,34 @@ def _get_low_bias_tapers(
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
 
 
+def _restricted_toeplitz_operator(
+    first_row: NDArray[np.floating], indices: NDArray[np.intp]
+) -> LinearOperator:
+    """The symmetric Toeplitz matrix ``first_row[|i - j|]`` restricted to the
+    rows and columns ``indices``, as an operator.
+
+    Each product embeds the vector at ``indices`` in a vector of the full
+    length, multiplies by the matrix as a circular convolution by FFT, and
+    reads ``indices`` back: ``O(n log n)`` time and ``O(n)`` memory for a
+    matrix of order ``n = first_row.size``. On the host whatever the backend,
+    as the tapers are computed there, like the DPSS.
+    """
+    n = first_row.size
+    n_fft = int(default_fft_length(2 * n - 1))
+    column = np.zeros(n_fft)
+    column[:n] = first_row
+    column[n_fft - n + 1 :] = first_row[:0:-1]
+    transfer = np.fft.rfft(column)
+
+    def multiply(vector: NDArray[np.floating]) -> NDArray[np.floating]:
+        embedded = np.zeros(n_fft)
+        embedded[indices] = np.ravel(vector)
+        product: NDArray[np.floating] = np.fft.irfft(np.fft.rfft(embedded) * transfer, n_fft)
+        return product[indices]
+
+    return LinearOperator((indices.size, indices.size), matvec=multiply, dtype=np.float64)
+
+
 def _missing_data_slepian_tapers(
     valid: NDArray[np.bool_],
     time_halfbandwidth_product: float,
@@ -4841,8 +4864,8 @@ def _missing_data_slepian_tapers(
     n_tapers : int
         Number of sequences, in decreasing order of concentration.
     orientation : NDArray[float], shape (n_time_samples_per_window, n_tapers)
-        The window's DPSS tapers: each sequence's sign is chosen so its inner
-        product with the DPSS of the same order is not negative.
+        The window's DPSS tapers, which fix each sequence's sign and the
+        basis of sequences of equal concentration (:func:`_aligned_with_dpss`).
 
     Returns
     -------
@@ -4855,40 +4878,92 @@ def _missing_data_slepian_tapers(
     n_time_samples = valid.shape[0]
     (valid_times,) = np.nonzero(valid)
     half_bandwidth = time_halfbandwidth_product / n_time_samples
-    # The kernel depends only on the lag between two samples. The lags are
-    # built in int32 and made absolute in place.
-    lags = np.arange(n_time_samples)
-    sinc = 2 * half_bandwidth * np.sinc(2 * half_bandwidth * lags)
-    times = valid_times.astype(np.int32)
-    lag = np.subtract.outer(times, times)
-    kernel = sinc[np.abs(lag, out=lag)]
-    del lag
-    n_valid = valid_times.size
-    n_computed = min(n_tapers, n_valid)
-    # The kernel is symmetric, so its transpose is the same matrix in the
-    # Fortran order LAPACK can overwrite without a copy.
-    eigenvalues, eigenvectors = scipy_eigh(
-        kernel.T,
-        subset_by_index=[n_valid - n_computed, n_valid - 1],
-        overwrite_a=True,
-        check_finite=False,
-    )
+    # The kernel depends only on the lag between two samples.
+    sinc = 2 * half_bandwidth * np.sinc(2 * half_bandwidth * np.arange(n_time_samples))
+    n_computed = min(n_tapers, valid_times.size)
+    eigenvalues, eigenvectors = _leading_eigenpairs(sinc, valid_times, n_computed)
     order = np.argsort(eigenvalues)[::-1]
+    eigenvalues, eigenvectors = eigenvalues[order], eigenvectors[:, order]
+    eigenvectors = _aligned_with_dpss(
+        eigenvectors, eigenvalues, orientation[valid_times, :n_computed]
+    )
     tapers = np.zeros((n_time_samples, n_tapers))
-    tapers[valid_times, :n_computed] = eigenvectors[:, order]
-    signs = np.sign(np.sum(tapers * orientation, axis=0))
-    tapers *= np.where(signs == 0, 1.0, signs)
+    tapers[valid_times, :n_computed] = eigenvectors
     concentrations = np.zeros(n_tapers)
-    concentrations[:n_computed] = eigenvalues[order]
+    concentrations[:n_computed] = eigenvalues
     return tapers, concentrations
 
 
-# Seconds per cubed valid sample of one missing-data taper eigenproblem, from
-# timings on a laptop (27 ms for 980 samples to 20 s for 7840); machines differ.
-_EIGENPROBLEM_SECONDS_PER_CUBED_SAMPLE = 3.5e-11
-# Warn above this estimated time, or above this size of one kernel.
-_MISSING_DATA_TAPER_SECONDS_WARNING = 10.0
-_MISSING_DATA_TAPER_KERNEL_BYTES_WARNING = 1e9
+def _leading_eigenpairs(
+    first_row: NDArray[np.floating], indices: NDArray[np.intp], k: int
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+    """The ``k`` largest eigenpairs, in no particular order, of the Toeplitz
+    matrix ``first_row[|i - j|]`` restricted to ``indices``.
+
+    Implicitly restarted Lanczos (ARPACK) on the FFT operator of
+    :func:`_restricted_toeplitz_operator`, from a fixed start vector so the
+    result is reproducible. ARPACK needs more Lanczos vectors than
+    eigenpairs and fewer than the matrix order; at or below its default
+    count, ``max(2 k + 1, 20)``, the matrix is solved densely.
+    """
+    n = indices.size
+    if n <= max(2 * k + 1, 20):
+        kernel = first_row[np.abs(indices[:, np.newaxis] - indices[np.newaxis, :])]
+        return scipy_eigh(kernel, subset_by_index=[n - k, n - 1])
+    eigenvalues, eigenvectors = scipy_eigsh(
+        _restricted_toeplitz_operator(first_row, indices),
+        k=k,
+        which="LA",
+        tol=0,
+        # Generic, so no eigenvector is orthogonal to it by symmetry.
+        v0=np.random.default_rng(0).standard_normal(n),
+    )
+    return eigenvalues, eigenvectors
+
+
+# Concentrations closer than this are equal for the purpose of choosing their
+# eigenvectors. The eigenvectors of eigenvalues dlambda apart are determined
+# only to about eps / dlambda, so solvers agree on them to about 2e-10 above
+# this gap; below it any basis of their span is as good (with a large NW the
+# leading concentrations are all within 1e-10 of 1), and the concentrations
+# of such a basis stay within the group's spread.
+_DEGENERATE_CONCENTRATION_GAP = 1e-6
+
+
+def _aligned_with_dpss(
+    eigenvectors: NDArray[np.floating],
+    eigenvalues: NDArray[np.floating],
+    reference: NDArray[np.floating],
+) -> NDArray[np.floating]:
+    """Choose the basis and signs of ``eigenvectors`` closest to the DPSS.
+
+    Eigenvectors whose ``eigenvalues`` (decreasing) are within
+    ``_DEGENERATE_CONCENTRATION_GAP`` of the next form a group whose span
+    alone is defined, the individual vectors depending on the solver. Each
+    group is rotated (orthogonal Procrustes) to be closest to the DPSS of the
+    same orders, ``reference``, restricted to the valid samples; a lone
+    eigenvector gets the sign that agrees with its DPSS. So the tapers do not
+    depend on the eigensolver, and without missing samples they are the DPSS.
+
+    Parameters
+    ----------
+    eigenvectors : NDArray[float], shape (n_valid, k)
+    eigenvalues : NDArray[float], shape (k,)
+    reference : NDArray[float], shape (n_valid, k)
+
+    Returns
+    -------
+    NDArray[float], shape (n_valid, k)
+    """
+    aligned = eigenvectors.copy()
+    starts = np.flatnonzero(
+        np.concatenate([[True], -np.diff(eigenvalues) > _DEGENERATE_CONCENTRATION_GAP])
+    )
+    for start, stop in zip(starts, [*starts[1:], eigenvalues.size], strict=True):
+        group = slice(start, stop)
+        left, _, right = np.linalg.svd(eigenvectors[:, group].T @ reference[:, group])
+        aligned[:, group] = eigenvectors[:, group] @ (left @ right)
+    return aligned
 
 
 def _missing_data_taper_sets(
@@ -4896,13 +4971,11 @@ def _missing_data_taper_sets(
     time_halfbandwidth_product: float,
     n_tapers: int,
     orientation: NDArray[np.floating],
-    sampling_frequency: float,
 ) -> tuple[NDArray[np.intp], NDArray[np.floating], NDArray[np.floating]]:
     """The missing-data tapers each gap pattern keeps, on the host.
 
     A pattern keeps its tapers concentrated above ``MIN_EIGENVALUE_THRESHOLD``
-    if there are at least 2 of them, and none otherwise. Warns first when the
-    eigenproblems are estimated to take long or need much memory.
+    if there are at least 2 of them, and none otherwise.
 
     Parameters
     ----------
@@ -4912,8 +4985,6 @@ def _missing_data_taper_sets(
     n_tapers : int
     orientation : NDArray[float], shape (n_time_samples_per_window, n_tapers)
         The DPSS tapers, for :func:`_missing_data_slepian_tapers`.
-    sampling_frequency : float
-        For the warning's durations.
 
     Returns
     -------
@@ -4930,7 +5001,6 @@ def _missing_data_taper_sets(
     # The concentrations are at most the restricted kernel's trace, 2 W n_valid,
     # in sum, so below twice the threshold two cannot pass: no eigenproblem.
     is_solved = 2 * half_bandwidth * n_valid > 2 * MIN_EIGENVALUE_THRESHOLD
-    _warn_about_missing_data_taper_cost(n_valid[is_solved], sampling_frequency)
     n_kept = np.zeros(n_patterns, dtype=np.intp)
     tapers, concentrations = [], []
     for pattern in np.flatnonzero(is_solved):
@@ -4948,40 +5018,6 @@ def _missing_data_taper_sets(
     if not tapers:
         return n_kept, np.zeros((0, n_time_samples, n_tapers)), np.zeros((0, n_tapers))
     return n_kept, np.stack(tapers), np.stack(concentrations)
-
-
-def _warn_about_missing_data_taper_cost(
-    n_valid: NDArray[np.integer], sampling_frequency: float
-) -> None:
-    """Warn once if the eigenproblems of patterns with ``n_valid`` valid
-    samples are estimated to take over ``_MISSING_DATA_TAPER_SECONDS_WARNING``
-    or one kernel to need over ``_MISSING_DATA_TAPER_KERNEL_BYTES_WARNING``."""
-    if n_valid.size == 0:
-        return
-    seconds = _EIGENPROBLEM_SECONDS_PER_CUBED_SAMPLE * float(
-        np.sum(n_valid.astype(float) ** 3)
-    )
-    kernel_bytes = 8 * float(n_valid.max()) ** 2
-    if (
-        seconds <= _MISSING_DATA_TAPER_SECONDS_WARNING
-        and kernel_bytes <= _MISSING_DATA_TAPER_KERNEL_BYTES_WARNING
-    ):
-        return
-    n_problems = int(n_valid.size)
-    typical = float(np.mean(n_valid))
-    warnings.warn(
-        f"artifact_handling='missing_data_tapers' will solve {n_problems} "
-        f"eigenproblem{'' if n_problems == 1 else 's'} of about {typical:.0f} samples "
-        f"({typical / sampling_frequency:.3g} s){'' if n_problems == 1 else ' each'}, "
-        "one per distinct pattern of "
-        f"artifact samples in a trial window, estimated at {seconds:.0f} s, with a "
-        f"kernel of up to {kernel_bytes / 1e9:.2g} GB. The cost of each grows as the "
-        "cube of the window length, its memory as the square: halving "
-        "time_window_duration divides each by about 8 and 4. Or use "
-        "artifact_handling='drop'.",
-        UserWarning,
-        stacklevel=stacklevel_outside_package(),
-    )
 
 
 def _dropped_gap_summary(artifacts: NDArray[np.bool_]) -> str:
