@@ -1,7 +1,7 @@
 """Observation weights that only keep or drop observations.
 
 Zero weights drop observations (the invalid windows of
-``Multitaper(valid_samples=...)``, the masked edges of a Morlet transform);
+``Multitaper(artifact_samples=...)``, the masked edges of a Morlet transform);
 every other observation keeps one common weight. Each reduced bin is then the
 plain average of the observations it keeps, so every measure, including those
 that count observations, must equal the measure of the coefficients with the

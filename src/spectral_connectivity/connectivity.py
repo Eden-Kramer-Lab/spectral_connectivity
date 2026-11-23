@@ -961,7 +961,7 @@ class Connectivity:
         frequency, 1)``. They are applied to every expectation and shared
         across signals. Transform constructors supply these automatically when
         smoothing uses a non-uniform kernel, masks invalid edge estimates, or
-        (``Multitaper(valid_samples=...)``) drops trial windows with invalid
+        (``Multitaper(artifact_samples=...)``) drops trial windows with artifact
         samples. Weights that only drop observations (0, or one common weight
         in each bin) leave each bin the plain mean of the observations it
         keeps, which the measures that count observations count
@@ -1751,7 +1751,7 @@ class Connectivity:
             f"{measure} does not support non-uniform observation_weights. "
             f"{reason} Non-uniform weights come from a smoothing_kernel other "
             "than 'boxcar'; weights that only drop observations (0 or one common "
-            "weight in each bin, as valid_samples and edge_mode='nan' give) are "
+            "weight in each bin, as artifact_samples and edge_mode='nan' give) are "
             "supported. Use smoothing_kernel='boxcar'."
         )
         raise ValueError(msg)
@@ -2386,7 +2386,7 @@ class Connectivity:
         True when, in every reduced bin, the observations with nonzero weight
         share one weight, so the weighted expectation there is the plain mean
         of the observations it keeps: equal weights, or the 0/1 weights of
-        ``Multitaper(valid_samples=...)`` and of a boxcar ``MorletWavelet``
+        ``Multitaper(artifact_samples=...)`` and of a boxcar ``MorletWavelet``
         with ``edge_mode="nan"``. The measures that count observations then
         count each bin's kept ones (:attr:`n_valid_observations`). False when
         the weights also reweight the observations they keep (a smoothing
@@ -2483,11 +2483,11 @@ class Connectivity:
             This is a raw count, not an effective number of independent
             observations: it ignores ``observation_weights`` (including the
             observations zero weights drop, such as the windows
-            ``Multitaper(valid_samples=...)`` marks invalid; see
+            ``Multitaper(artifact_samples=...)`` drops; see
             :attr:`n_valid_observations`) and is not reduced when the
             transform's observations are correlated (see
             ``observations_are_independent``). Use
-            :attr:`n_valid_observations` when ``valid_samples`` or edge masking
+            :attr:`n_valid_observations` when ``artifact_samples`` or edge masking
             drops observations.
 
         """
@@ -2504,7 +2504,7 @@ class Connectivity:
         The observations with nonzero ``observation_weights`` among those the
         expectation averages: :attr:`n_observations` in every bin without
         weights, and fewer where zero weights drop observations, such as the
-        trial windows ``Multitaper(valid_samples=...)`` marks invalid or the
+        trial windows ``Multitaper(artifact_samples=...)`` drops or the
         edges a ``MorletWavelet(edge_mode="nan")`` masks. The measures that
         count observations (the debiased phase-lag measures, pairwise phase
         consistency, the significance test of ``delay`` and ``group_delay``,
@@ -2529,11 +2529,11 @@ class Connectivity:
         >>> import numpy as np
         >>> from spectral_connectivity import Connectivity, Multitaper
         >>> time_series = np.random.default_rng(0).standard_normal((1000, 4, 2))
-        >>> valid_samples = np.ones((1000, 4), dtype=bool)
-        >>> valid_samples[600:620, 1] = False  # trial 1, 0.6-0.62 s
+        >>> artifact_samples = np.zeros((1000, 4), dtype=bool)
+        >>> artifact_samples[600:620, 1] = True  # trial 1, 0.6-0.62 s
         >>> multitaper = Multitaper(
         ...     time_series, sampling_frequency=1000, time_window_duration=0.25,
-        ...     valid_samples=valid_samples,
+        ...     artifact_samples=artifact_samples,
         ... )
         >>> connectivity = Connectivity.from_transform(multitaper)
         >>> connectivity.n_observations  # 4 trials x 5 tapers
@@ -2664,7 +2664,7 @@ class Connectivity:
         Notes
         -----
         Where zero ``observation_weights`` drop observations (the invalid
-        windows of ``Multitaper(valid_samples=...)``, say), each bin's
+        windows of ``Multitaper(artifact_samples=...)``, say), each bin's
         interval is the jackknife of the observations it keeps: leaving out an
         observation the bin does not have gives no replicate there, and the
         degrees of freedom are its count of kept observations less one
@@ -2830,7 +2830,7 @@ class Connectivity:
                 msg = (
                     "jackknife needs observation_weights that drop the same "
                     "observations at every frequency of a bin (or all of them), as "
-                    "Multitaper(valid_samples=...) and MorletWavelet(edge_mode='nan') "
+                    "Multitaper(artifact_samples=...) and MorletWavelet(edge_mode='nan') "
                     "do; these drop an observation at some frequencies only, which "
                     "would give those frequencies a different count of replicates. "
                     "Compute the interval one frequency at a time, or zero an "
@@ -4538,7 +4538,7 @@ class Connectivity:
           and ``p`` signals, the leading value is at least ``1 / min(n, p)``
           whatever the data, and 1 for one observation; it warns when
           ``n < p``. Observations that zero ``observation_weights`` drop (the
-          invalid windows of ``Multitaper(valid_samples=...)`` or the masked
+          dropped windows of ``Multitaper(artifact_samples=...)`` or the masked
           edges of a Morlet transform, say) do not count: ``n`` is each bin's
           :attr:`n_valid_observations`, and the warning sees the bin keeping
           fewest.

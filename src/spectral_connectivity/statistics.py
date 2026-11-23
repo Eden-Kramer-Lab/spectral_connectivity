@@ -953,7 +953,7 @@ def coherence_significance_pvalue(
         (n_tapers * n_trials), at least 2: one count for every estimate, or an
         array of counts that broadcasts against ``coherency``, one per estimate.
         Pass ``Connectivity.n_observations``, or, where observation weights drop
-        observations (``Multitaper(valid_samples=...)``),
+        observations (``Multitaper(artifact_samples=...)``),
         ``Connectivity.n_valid_observations[..., np.newaxis, np.newaxis]`` for
         coherency shaped ``(..., n_frequencies, n_signals, n_signals)``.
     real_valued : bool or NDArray[bool], default=False

@@ -1703,9 +1703,9 @@ def multitaper_connectivity(
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
-    if "valid_samples" in transform_settings:
-        transform_settings["valid_samples"] = _valid_samples_in_core_layout(
-            transform_settings["valid_samples"],
+    if "artifact_samples" in transform_settings:
+        transform_settings["artifact_samples"] = _artifact_samples_in_core_layout(
+            transform_settings["artifact_samples"],
             time_series,
             tuple(time_series_data.shape),
             time_dim=time_dim,
@@ -1790,13 +1790,13 @@ def multitaper_connectivity(
     return result
 
 
-def _valid_samples_in_core_layout(
-    valid_samples: Any,
+def _artifact_samples_in_core_layout(
+    artifact_samples: Any,
     time_series: Any,
     shape: tuple[int, ...],
     **dimensions: Hashable | None,
 ) -> Any:
-    """``valid_samples`` in Multitaper's ``(n_time_samples, n_trials[, n_signals])``.
+    """``artifact_samples`` in Multitaper's ``(n_time_samples, n_trials[, n_signals])``.
 
     A mask of a DataArray time series that is itself a DataArray is
     transposed by its dimension names to the order the time series is (its
@@ -1807,40 +1807,40 @@ def _valid_samples_in_core_layout(
     in ``(n_time_samples[, n_trials], n_signals)`` order. Any other value is
     passed on, for Multitaper to check.
     """
-    if valid_samples is None or isinstance(valid_samples, str):
-        return valid_samples
-    if isinstance(valid_samples, xr.DataArray) and isinstance(time_series, xr.DataArray):
+    if artifact_samples is None or isinstance(artifact_samples, str):
+        return artifact_samples
+    if isinstance(artifact_samples, xr.DataArray) and isinstance(time_series, xr.DataArray):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # its notice was given for the data
             order = _resolve_dataarray_dimensions(time_series, **dimensions)
-        extra = [dimension for dimension in valid_samples.dims if dimension not in order]
+        extra = [dimension for dimension in artifact_samples.dims if dimension not in order]
         if extra:
             msg = (
-                f"valid_samples has dimension(s) {extra!r} that time_series, with "
+                f"artifact_samples has dimension(s) {extra!r} that time_series, with "
                 f"dimensions {time_series.dims!r}, does not; name its axes as the "
                 "time series names its time, trial and signal axes."
             )
             raise ValueError(msg)
-        valid_samples = valid_samples.transpose(
-            *[dimension for dimension in order if dimension in valid_samples.dims]
+        artifact_samples = artifact_samples.transpose(
+            *[dimension for dimension in order if dimension in artifact_samples.dims]
         ).data
     if len(shape) == 2:
-        mask = np.asarray(valid_samples)
+        mask = np.asarray(artifact_samples)
         n_time, n_signals = shape
         if mask.shape not in ((n_time,), (n_time, n_signals)):
             transposed = (
-                " Did you transpose it? Pass valid_samples.T."
+                " Did you transpose it? Pass artifact_samples.T."
                 if mask.shape == (n_signals, n_time)
                 else ""
             )
             msg = (
-                f"valid_samples has shape {mask.shape}; for the 2-D time_series "
+                f"artifact_samples has shape {mask.shape}; for the 2-D time_series "
                 f"{shape} = (n_time_samples, n_signals) it must be ({n_time},), shared "
                 f"by every signal, or {shape}.{transposed}"
             )
             raise ValueError(msg)
         return mask[:, np.newaxis] if mask.ndim == 1 else mask[:, np.newaxis, :]
-    return valid_samples
+    return artifact_samples
 
 
 # Every Multitaper setting, in its signature's order; the ones that

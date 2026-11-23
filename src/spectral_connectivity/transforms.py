@@ -656,7 +656,7 @@ class SpectralTransform(Protocol):
     ``observation_weights`` : ndarray, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, 1), default None
         Finite, non-negative weights applied to every expectation over the
         coefficients and shared across signals, e.g. a smoothing kernel or a
-        mask for invalid edge estimates or invalid samples (0 drops an
+        mask for invalid edge estimates or artifact samples (0 drops an
         observation). ``None`` weights all observations equally.
     ``observations_are_independent`` : bool, default True
         Whether the trial and taper observations are statistically
@@ -889,27 +889,31 @@ def _validate_detrend_type(detrend_type: str | None) -> None:
         raise ValueError(msg)
 
 
-def _validated_valid_samples(
-    valid_samples: Any, time_series: BackendArray
+def _validated_artifact_samples(
+    artifact_samples: Any, time_series: BackendArray
 ) -> tuple[str | None, BackendArray | None]:
-    """``Multitaper``'s ``valid_samples`` as its kind and a read-only
-    ``(n_time_samples, n_trials)`` boolean mask shared by the signals.
+    """``Multitaper``'s ``artifact_samples`` as its kind and a read-only
+    ``(n_time_samples, n_trials)`` boolean mask, ``True`` at an artifact,
+    shared by the signals.
 
-    The kind is ``"finite"``, ``"mask"``, or ``None`` (not given, and no mask).
+    The kind is ``"nonfinite"``, ``"mask"``, or ``None`` (not given, and no
+    mask).
     """
-    if valid_samples is None:
+    if artifact_samples is None:
         return None, None
     n_time, n_trials, n_signals = time_series.shape
-    if isinstance(valid_samples, str):
-        if valid_samples != "finite":
+    if isinstance(artifact_samples, str):
+        if artifact_samples != "nonfinite":
             msg = (
-                f"valid_samples must be a boolean array, 'finite', or None, got "
-                f"{valid_samples!r}. 'finite' marks every NaN or infinite sample "
-                "invalid."
+                f"artifact_samples must be a boolean array, 'nonfinite', or None, got "
+                f"{artifact_samples!r}. 'nonfinite' marks every NaN or infinite sample "
+                "as an artifact."
             )
             raise ValueError(msg)
-        return "finite", _immutable_array_snapshot(xp.all(xp.isfinite(time_series), axis=-1))
-    dimensions = getattr(valid_samples, "dims", None)
+        return "nonfinite", _immutable_array_snapshot(
+            ~xp.all(xp.isfinite(time_series), axis=-1)
+        )
+    dimensions = getattr(artifact_samples, "dims", None)
     if dimensions is not None:
         # Read by position, like time_series: a name saying otherwise is refused.
         from spectral_connectivity._input_handling import _dimension_role
@@ -921,24 +925,25 @@ def _validated_valid_samples(
         ]
         if misplaced:
             msg = (
-                "Multitaper reads valid_samples by position, as (time, trial[, "
+                "Multitaper reads artifact_samples by position, as (time, trial[, "
                 f"signal]), but its dimensions are named {tuple(dimensions)!r}: "
                 f"{'; '.join(misplaced)}. Transpose it to that order first."
             )
             raise ValueError(msg)
-        valid_samples = valid_samples.data
-    mask = xp.asarray(valid_samples)
+        artifact_samples = artifact_samples.data
+    mask = xp.asarray(artifact_samples)
     if mask.dtype != bool:
         msg = (
-            f"valid_samples must be a boolean array (True marks a valid sample), got "
-            f"dtype {mask.dtype}. For 0/1 values pass valid_samples.astype(bool); "
-            "to mark NaN or infinite samples invalid pass valid_samples='finite'."
+            f"artifact_samples must be a boolean array (True marks an artifact, a "
+            f"sample to leave out), got dtype {mask.dtype}. For 0/1 values pass "
+            "artifact_samples.astype(bool); to leave out NaN or infinite samples "
+            "pass artifact_samples='nonfinite'."
         )
         raise TypeError(msg)
     shapes = ((n_time,), (n_time, n_trials), (n_time, n_trials, n_signals))
     if tuple(mask.shape) not in shapes:
         msg = (
-            f"valid_samples has shape {tuple(mask.shape)}; it must be "
+            f"artifact_samples has shape {tuple(mask.shape)}; it must be "
             f"(n_time_samples,) = {shapes[0]}, shared by every trial and signal, "
             f"(n_time_samples, n_trials) = {shapes[1]}, shared by every signal, or "
             f"the time series' own shape (n_time_samples, n_trials, n_signals) = "
@@ -948,9 +953,9 @@ def _validated_valid_samples(
     if mask.ndim == 1:
         mask = xp.broadcast_to(mask[:, xp.newaxis], (n_time, n_trials))
     if mask.ndim == 3:
-        # The weights are shared across signals, so a sample invalid in one
-        # signal is invalid in all.
-        mask = xp.all(mask, axis=-1)
+        # The weights are shared across signals, so an artifact in one signal
+        # leaves the sample out of all.
+        mask = xp.any(mask, axis=-1)
     return "mask", _immutable_array_snapshot(mask)
 
 
@@ -1057,18 +1062,18 @@ def _listed_indices(flags: BackendArray, limit: int = 10) -> str:
 
 def _warn_about_unusual_time_series(
     time_series: BackendArray,
-    valid_samples: BackendArray | None = None,
+    artifact_samples: BackendArray | None = None,
     *,
-    suggest_valid_samples: bool = False,
+    suggest_artifact_samples: bool = False,
 ) -> bool:
     """Warn when a ``(n_time_samples, n_trials, n_signals)`` series looks transposed or not finite.
 
     Returns whether every value is finite, so a transform can record that it
     already warned about NaN or Inf in its input (see
-    :meth:`Connectivity.from_transform`). With ``valid_samples``, a
-    ``(n_time_samples, n_trials)`` mask, only the samples it marks valid
-    count: the others never reach an estimate. ``suggest_valid_samples``
-    names :class:`Multitaper`'s ``valid_samples`` among the remedies.
+    :meth:`Connectivity.from_transform`). With ``artifact_samples``, a
+    ``(n_time_samples, n_trials)`` mask, the samples it marks as artifacts
+    do not count: they never reach an estimate. ``suggest_artifact_samples``
+    names :class:`Multitaper`'s ``artifact_samples`` among the remedies.
     """
     # Warn if data appears to be transposed (very few time points, many signals)
     n_time, _, n_signals = time_series.shape
@@ -1089,8 +1094,8 @@ def _warn_about_unusual_time_series(
         )
 
     is_finite = xp.isfinite(time_series)
-    if valid_samples is not None:
-        is_finite |= ~valid_samples[..., xp.newaxis]
+    if artifact_samples is not None:
+        is_finite |= artifact_samples[..., xp.newaxis]
     # One pass and one device synchronization for the common, finite input;
     # the counts and locations are computed only for a warning.
     if bool(xp.all(is_finite)):
@@ -1100,14 +1105,14 @@ def _warn_about_unusual_time_series(
     where = f"signals {_listed_indices(xp.any(is_nonfinite, axis=(0, 1)))}"
     if time_series.shape[1] > 1:
         where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
-    at_valid = "" if valid_samples is None else " at samples valid_samples marks valid"
+    at_valid = "" if artifact_samples is None else " at samples artifact_samples does not mark"
     remedy = (
         "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
         "affected trials or signals before the analysis"
     )
-    if suggest_valid_samples:
+    if suggest_artifact_samples:
         remedy = (
-            "Pass valid_samples='finite' to leave them out (it drops every trial "
+            "Pass artifact_samples='nonfinite' to leave them out (it drops every trial "
             "window that contains one), or interpolate the affected samples (e.g. "
             "with numpy.interp) or drop the affected trials or signals before the "
             "analysis"
@@ -1843,13 +1848,21 @@ class Multitaper(_WindowedFourierTransform):
         Iteration ceiling for Thomson adaptive weighting.
     adaptive_tolerance : float, default=1e-8
         Relative convergence tolerance for the adaptive spectrum estimate.
-    valid_samples : NDArray[bool] or "finite", optional
-        Which samples to use, to leave out artifacts, gaps, or missing values
-        (NaN). ``True`` marks a **valid** sample, one to keep; if your mask
-        marks artifacts as ``True``, pass ``~mask``. A trial's window is used
-        only if every one of its samples is valid; otherwise all its tapers'
-        coefficients are dropped from every expectation (observation weight 0)
-        and the window's other trials are averaged on their own. Every
+    artifact_samples : NDArray[bool] or "nonfinite", optional
+        Samples to leave out: artifacts, gaps, or missing values (NaN).
+        ``True`` marks an **artifact**, a sample to leave out, as MNE's
+        ``BAD_`` annotations, FieldTrip's artifact definitions, EEGLAB's
+        rejection ranges, and NumPy masked arrays do; if your mask marks valid
+        samples as ``True``, pass ``~mask``. Artifact intervals convert
+        directly: set the mask ``True`` inside each one (for an MNE ``BAD_``
+        annotation, the samples from its onset for its duration; for a row
+        ``[begin, end]`` of a FieldTrip artifact matrix, those samples). A
+        trial's window is used only if none of its samples is an artifact;
+        otherwise all its tapers' coefficients are dropped from every
+        expectation (observation weight 0) and the window's other trials are
+        averaged on their own. The outputs mark what is kept instead:
+        :attr:`valid_windows` is ``True`` at the trial windows kept, and
+        ``Connectivity.n_valid_observations`` counts what each bin keeps. Every
         per-bin statistic, including those that count observations (the
         debiased phase-lag measures, pairwise phase consistency, the
         zero-coherence p-values of ``delay`` and ``group_delay``, and
@@ -1858,29 +1871,29 @@ class Multitaper(_WindowedFourierTransform):
         correct those p-values for multiple comparisons jointly over every
         window of the call, so their selected frequencies match a per-window
         computation only window by window.)
-        ``Connectivity.n_valid_observations`` counts what each bin keeps.
 
         - A boolean array of shape ``(n_time_samples,)``, shared by every
           trial and signal; ``(n_time_samples, n_trials)``, shared by every
-          signal; or ``(n_time_samples, n_trials, n_signals)``, where a sample
-          invalid in any signal is invalid for all: the observations, and so
-          their weights, are shared across signals, as every cross-spectrum
-          needs both signals of a pair at the same samples.
-        - ``"finite"``: every NaN or infinite sample is invalid.
-        - ``None`` (the default): every sample is valid.
+          signal; or ``(n_time_samples, n_trials, n_signals)``, where an
+          artifact in any signal leaves the sample out of all: the
+          observations, and so their weights, are shared across signals, as
+          every cross-spectrum needs both signals of a pair at the same
+          samples.
+        - ``"nonfinite"``: every NaN or infinite sample is an artifact.
+        - ``None`` (the default): no sample is left out.
 
-        A window touching any invalid sample is dropped whole for that trial,
+        A window touching any artifact sample is dropped whole for that trial,
         so long windows lose more data: choose the window to fit the gaps
         between artifacts. Construction warns when more than half of the
         trial windows are dropped, and when a window keeps no trial (it is
-        NaN in every measure); a mask that leaves no valid trial window
-        raises ``ValueError``. :attr:`valid_windows` shows which are kept.
-        The invalid samples are set to zero before detrending and tapering,
-        so the coefficients of a dropped window are finite (and unused), and
-        the NaN warning reports only NaN or Inf at samples marked valid. The
-        mask is read by position, like ``time_series``. Provenance records
-        the kind of mask (``"mask"`` or ``"finite"``) with the numbers of
-        invalid samples and dropped trial windows, not the mask itself.
+        NaN in every measure); a mask that leaves no trial window raises
+        ``ValueError``. The artifact samples are set to zero before
+        detrending and tapering, so the coefficients of a dropped window are
+        finite (and unused), and the NaN warning reports only NaN or Inf at
+        samples not marked as artifacts. The mask is read by position, like
+        ``time_series``. Provenance records the kind of mask (``"mask"`` or
+        ``"nonfinite"``) with the numbers of artifact samples and dropped
+        trial windows, not the mask itself.
 
     Attributes
     ----------
@@ -1972,7 +1985,7 @@ class Multitaper(_WindowedFourierTransform):
             "taper_weighting",
             "adaptive_max_iterations",
             "adaptive_tolerance",
-            "valid_samples",
+            "artifact_samples",
         }
     )
     _PROVENANCE_FIELDS: tuple[str, ...] = (
@@ -2016,7 +2029,7 @@ class Multitaper(_WindowedFourierTransform):
         taper_weighting: Literal["uniform", "eigen", "adaptive"] = "uniform",
         adaptive_max_iterations: int = 50,
         adaptive_tolerance: float = 1e-8,
-        valid_samples: NDArray[np.bool_] | Literal["finite"] | None = None,
+        artifact_samples: NDArray[np.bool_] | Literal["nonfinite"] | None = None,
     ) -> None:
         object.__setattr__(self, "_initialized", False)
         time_series = _validated_time_series(time_series, type(self).__name__)
@@ -2209,35 +2222,35 @@ class Multitaper(_WindowedFourierTransform):
             # announced where it was made.
             with _transposed_layout_hint(self._time_series):
                 self._tapers, self._taper_eigenvalues = self._dpss_tapers()
-        self._valid_samples_mode, self._valid_samples = _validated_valid_samples(
-            valid_samples, self._time_series
+        self._artifact_samples_mode, self._artifact_samples = _validated_artifact_samples(
+            artifact_samples, self._time_series
         )
         self._valid_windows = self._validated_valid_windows()
         # Warned only once every check has passed, so an invalid Multitaper
-        # (a transposed array among them) only raises. Only the samples marked
-        # valid can reach an estimate.
+        # (a transposed array among them) only raises. Artifact samples never
+        # reach an estimate.
         self._time_series_is_finite = _warn_about_unusual_time_series(
-            self._time_series, self._valid_samples, suggest_valid_samples=True
+            self._time_series, self._artifact_samples, suggest_artifact_samples=True
         )
         object.__setattr__(self, "_initialized", True)
 
     def _validated_valid_windows(self) -> BackendArray | None:
-        """Which trial windows ``valid_samples`` keeps, ``(n_time_windows, n_trials)``.
+        """Which trial windows ``artifact_samples`` keeps, ``(n_time_windows, n_trials)``.
 
         ``None`` when it keeps them all (or was not given), so the transform
         is the one without it. Warns of windows with no valid trial and raises
         if no trial window is valid.
         """
-        if self._valid_samples is None:
+        if self._artifact_samples is None:
             return None
         windows = _sliding_window(
-            self._valid_samples,
+            self._artifact_samples,
             self.n_time_samples_per_window,
             self.n_time_samples_per_step,
             axis=0,
             is_copy=False,
         )
-        valid_windows = xp.all(windows, axis=-1)
+        valid_windows = ~xp.any(windows, axis=-1)
         if bool(xp.all(valid_windows)):
             return None
         n_windows = int(valid_windows.shape[0])
@@ -2245,24 +2258,24 @@ class Multitaper(_WindowedFourierTransform):
         n_empty = int(xp.sum(empty))
         window = f"{self.n_time_samples_per_window} samples ({self.time_window_duration:g} s)"
         inverted = (
-            "valid_samples marks the samples to keep as True; if your mask marks "
-            "artifacts as True, pass ~mask."
+            "True in artifact_samples marks an artifact (a sample to leave out); if "
+            "your mask marks valid samples as True, pass ~mask."
         )
         if n_empty == n_windows:
             msg = (
-                "valid_samples leaves no valid trial window: every one of the "
+                "artifact_samples leaves no trial window: every one of the "
                 f"{n_windows} time window{'' if n_windows == 1 else 's'} of {window} "
-                "contains an invalid sample in every trial, so nothing can be "
-                f"estimated. {inverted} Otherwise mark more samples valid, or use a "
-                "shorter time_window_duration that fits between the invalid samples."
+                "contains an artifact sample in every trial, so nothing can be "
+                f"estimated. {inverted} Otherwise mark fewer samples as artifacts, or "
+                "use a shorter time_window_duration that fits between the artifacts."
             )
             raise ValueError(msg)
         n_kept, n_trial_windows = int(xp.sum(valid_windows)), int(valid_windows.size)
         if 2 * n_kept < n_trial_windows:
             warnings.warn(
-                f"valid_samples drops {1 - n_kept / n_trial_windows:.0%} of trial "
+                f"artifact_samples drops {1 - n_kept / n_trial_windows:.0%} of trial "
                 f"windows ({n_kept} of {n_trial_windows} kept). A window is dropped "
-                f"for a trial if any of its {window} is invalid; a shorter "
+                f"for a trial if any of its {window} is an artifact; a shorter "
                 f"time_window_duration keeps more. {inverted} Multitaper.valid_windows "
                 "shows which are kept.",
                 UserWarning,
@@ -2270,44 +2283,46 @@ class Multitaper(_WindowedFourierTransform):
             )
         if n_empty:
             warnings.warn(
-                f"valid_samples leaves {n_empty} of {n_windows} time windows (0-based "
+                f"artifact_samples leaves {n_empty} of {n_windows} time windows (0-based "
                 f"indices {_listed_indices(empty)}) with no valid trial, so every "
-                "measure is NaN there. A window is used for a trial only if all its "
-                f"{window} are valid; shorter windows lose less data around invalid "
-                "samples. Multitaper.valid_windows shows which are kept.",
+                "measure is NaN there. A window is used for a trial only if none of "
+                f"its {window} is an artifact; shorter windows lose less data around "
+                "artifacts. Multitaper.valid_windows shows which are kept.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
         return _immutable_array_snapshot(valid_windows)
 
     @property
-    def valid_samples(self) -> NDArray[np.bool_] | None:
-        """Which samples the transform uses, shared across signals.
+    def artifact_samples(self) -> NDArray[np.bool_] | None:
+        """Which samples the transform leaves out, shared across signals.
 
         Returns
         -------
         NDArray[bool], shape (n_time_samples, n_trials), or None
-            ``valid_samples`` as given, with a per-signal mask reduced over
-            signals (a sample invalid in any signal is invalid for all) and
-            ``"finite"`` resolved to the finite samples; ``None`` when not
-            given. A detached read-only copy.
+            ``True`` at an artifact: ``artifact_samples`` as given, a
+            ``(n_time_samples,)`` mask broadcast over trials, a per-signal mask
+            reduced over signals (an artifact in any signal leaves the sample
+            out of all), and ``"nonfinite"`` resolved to the NaN or infinite
+            samples; ``None`` when not given. A detached read-only copy.
         """
-        if self._valid_samples is None:
+        if self._artifact_samples is None:
             return None
-        return _readonly_array_copy(self._valid_samples)
+        return _readonly_array_copy(self._artifact_samples)
 
     @property
     def valid_windows(self) -> NDArray[np.bool_]:
         """Which trial windows the transform keeps.
 
-        A trial's window is kept only if ``valid_samples`` marks every one of
-        its samples valid; the coefficients of every taper of a dropped one
-        get observation weight 0.
+        ``True`` at a kept trial window, the opposite sense of
+        :attr:`artifact_samples`: a trial's window is kept only if none of its
+        samples is an artifact; the coefficients of every taper of a dropped
+        one get observation weight 0.
 
         Returns
         -------
         NDArray[bool], shape (n_time_windows, n_trials)
-            A detached read-only copy, all ``True`` without ``valid_samples``.
+            A detached read-only copy, all ``True`` without ``artifact_samples``.
         """
         if self._valid_windows is None:
             return mark_readonly_if_supported(
@@ -2339,15 +2354,15 @@ class Multitaper(_WindowedFourierTransform):
         )
 
     def _time_series_for_fft(self) -> BackendArray:
-        """The samples with the invalid ones set to zero.
+        """The samples with the artifacts set to zero.
 
-        A window with an invalid sample is dropped, so the zeros reach only
+        A window with an artifact sample is dropped, so the zeros reach only
         dropped coefficients, which they keep finite.
         """
         if self._valid_windows is None:
             return self._time_series
-        assert self._valid_samples is not None
-        return xp.where(self._valid_samples[..., xp.newaxis], self._time_series, 0)
+        assert self._artifact_samples is not None
+        return xp.where(self._artifact_samples[..., xp.newaxis], 0, self._time_series)
 
     @property
     def _n_tapers_to_generate(self) -> int:
@@ -2417,16 +2432,16 @@ class Multitaper(_WindowedFourierTransform):
             f"start_time={self.start_time}, "
             f"n_tapers={self.n_tapers}"
             + (
-                f",\n           valid_samples={self._valid_samples_description()}"
-                if self._valid_samples_mode is not None
+                f",\n           artifact_samples={self._artifact_samples_description()}"
+                if self._artifact_samples_mode is not None
                 else ""
             )
             + ")"
         )
 
-    def _valid_samples_description(self) -> str:
-        """``valid_samples`` as given ("finite" or a mask) and the windows it keeps."""
-        given = "'finite'" if self._valid_samples_mode == "finite" else "<mask>"
+    def _artifact_samples_description(self) -> str:
+        """``artifact_samples`` as given ("nonfinite" or a mask) and the windows kept."""
+        given = "'nonfinite'" if self._artifact_samples_mode == "nonfinite" else "<mask>"
         valid_windows = self.valid_windows
         return (
             f"{given} ({int(valid_windows.sum())} of {valid_windows.size} trial windows kept)"
@@ -2517,8 +2532,8 @@ class Multitaper(_WindowedFourierTransform):
             ("Time-halfbandwidth product", self.time_halfbandwidth_product),
             ("Number of tapers", n_tapers),
         ]
-        if self._valid_samples_mode is not None:
-            spectral_rows.append(("Valid samples", self._valid_samples_description()))
+        if self._artifact_samples_mode is not None:
+            spectral_rows.append(("Artifact samples", self._artifact_samples_description()))
         return self._summary(
             "Multitaper Spectral Analysis Configuration",
             spectral_rows,
@@ -2575,13 +2590,13 @@ class Multitaper(_WindowedFourierTransform):
         """
         metadata = super()._provenance_metadata()
         metadata["requested_n_tapers"] = self._n_tapers
-        if self._valid_samples_mode is not None:
+        if self._artifact_samples_mode is not None:
             # The mask itself can be as large as the recording, so its kind and
             # what it removed are recorded rather than the mask.
-            assert self._valid_samples is not None
+            assert self._artifact_samples is not None
             valid_windows = self.valid_windows
-            metadata["valid_samples"] = self._valid_samples_mode
-            metadata["n_invalid_samples"] = int(xp.sum(~self._valid_samples))
+            metadata["artifact_samples"] = self._artifact_samples_mode
+            metadata["n_artifact_samples"] = int(xp.sum(self._artifact_samples))
             metadata["n_dropped_trial_windows"] = int(valid_windows.size - valid_windows.sum())
         return metadata
 

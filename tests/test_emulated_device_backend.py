@@ -388,7 +388,7 @@ def test_multitaper_transform_runs_on_the_device(xp):
     assert np.isfinite(coherence[..., 0, 1]).all()
 
 
-def test_valid_samples_run_on_the_device(xp, monkeypatch):
+def test_artifact_samples_run_on_the_device(xp, monkeypatch):
     """The mask, the zero-filled samples, the drop weights, and the measures
     that count each bin's kept observations (the jackknife among them) stay on
     the device and match the host."""
@@ -406,7 +406,7 @@ def test_valid_samples_run_on_the_device(xp, monkeypatch):
 
     def compute():
         multitaper = Multitaper(
-            time_series, 200, n_time_samples_per_window=50, valid_samples="finite"
+            time_series, 200, n_time_samples_per_window=50, artifact_samples="nonfinite"
         )
         connectivity = Connectivity.from_transform(multitaper)
         results = {
