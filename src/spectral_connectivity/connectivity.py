@@ -60,6 +60,7 @@ from spectral_connectivity.statistics import (
     coherence_significance_pvalue,
     jackknife_confidence_interval,
 )
+from spectral_connectivity.transforms import VARSpectrum
 from spectral_connectivity.utils import (
     BackendArray,
     _validated_flag,
@@ -1605,6 +1606,88 @@ class Connectivity:
         """
         return cls._from_transform(
             transform,
+            expectation_type=expectation_type,
+            dtype=dtype,
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
+        )
+
+    @classmethod
+    def from_var(
+        cls,
+        coefficients: NDArray[np.floating],
+        noise_covariance: NDArray[np.floating] | None = None,
+        *,
+        sampling_frequency: float,
+        n_fft_samples: int | None = None,
+        time: NDArray[np.floating] | None = None,
+        expectation_type: str = "trials_tapers",
+        dtype: Any = xp.complex128,
+        minimum_phase_tolerance: float = 1e-8,
+        minimum_phase_max_iterations: int = 500,
+    ) -> "Connectivity":
+        """Construct from the exact spectrum of a vector autoregressive (VAR) model.
+
+        The shortcut for ``Connectivity.from_transform(VARSpectrum(coefficients,
+        noise_covariance, sampling_frequency=..., n_fft_samples=..., time=...))``:
+        every measure that is a function of the cross-spectral matrix is then
+        the model's population value, with no estimation error, and the
+        measures that use individual observations raise (see
+        :class:`~spectral_connectivity.transforms.VARSpectrum`).
+
+        .. versionadded:: 3.0
+
+        Parameters
+        ----------
+        coefficients : array, shape (n_lags, n_signals, n_signals) or (n_time_windows, n_lags, n_signals, n_signals)
+            ``coefficients[k - 1]`` is ``A_k`` of ``x(t) = sum_k A_k x(t - k) +
+            e(t)``, as for :func:`~spectral_connectivity.simulate.simulate_MVAR`
+            and statsmodels' ``VARResults.coefs``; one model per window with
+            the leading axis.
+        noise_covariance : array, shape (n_signals, n_signals) or (n_time_windows, n_signals, n_signals), optional
+            Covariance of the innovations ``e(t)`` (statsmodels' ``sigma_u``);
+            the identity by default.
+        sampling_frequency : float
+            Samples per second; required.
+        n_fft_samples : int, optional
+            Number of frequency bins; by default the shortest fast length on
+            which the directed measures are exact (see
+            :attr:`VARSpectrum.minimum_n_fft_samples
+            <spectral_connectivity.transforms.VARSpectrum.minimum_n_fft_samples>`).
+        time : array, shape (n_time_windows,), optional
+            Time of each window in seconds; window indices by default.
+        expectation_type : str, default="trials_tapers"
+            Must average the tapers: ``"trials_tapers"``, ``"tapers"``,
+            ``"time_tapers"`` (the mean spectrum over windows), or
+            ``"time_trials_tapers"``.
+        dtype, minimum_phase_tolerance, minimum_phase_max_iterations
+            As in :meth:`from_transform`.
+
+        Returns
+        -------
+        Connectivity
+            New instance with ``is_exact_spectrum`` set.
+
+        Examples
+        --------
+        Signal 0 drives signal 1 one sample later, never the reverse:
+
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity
+        >>> coefficients = np.array([[[0.5, 0.0], [0.4, 0.5]]])  # (n_lags, target, source)
+        >>> connectivity = Connectivity.from_var(coefficients, sampling_frequency=100)
+        >>> granger = connectivity.pairwise_spectral_granger_prediction()  # [..., source, target]
+        >>> bool(granger[0, :, 0, 1].min() > 0.05), bool(granger[0, :, 1, 0].max() < 1e-10)
+        (True, True)
+        """
+        return cls.from_transform(
+            VARSpectrum(
+                coefficients,
+                noise_covariance,
+                sampling_frequency=sampling_frequency,
+                n_fft_samples=n_fft_samples,
+                time=time,
+            ),
             expectation_type=expectation_type,
             dtype=dtype,
             minimum_phase_tolerance=minimum_phase_tolerance,

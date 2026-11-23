@@ -538,3 +538,45 @@ def test_the_docstring_names_every_refused_measure():
     ]
     notes = " ".join(VARSpectrum.__doc__.split())
     assert all(name in notes for name in refused)
+
+
+def test_from_var_is_from_transform_of_the_var_spectrum():
+    """The shortcut passes every setting through and builds the same instance."""
+    coefficients, noise_covariance = _DENSE
+    model = {
+        "sampling_frequency": _SAMPLING_FREQUENCY,
+        "n_fft_samples": 300,
+        "time": [4.0],
+    }
+    settings = {
+        "expectation_type": "tapers",
+        "minimum_phase_tolerance": 1e-11,
+        "minimum_phase_max_iterations": 900,
+    }
+    shortcut = Connectivity.from_var(coefficients, noise_covariance, **model, **settings)
+    explicit = Connectivity.from_transform(
+        VARSpectrum(coefficients, noise_covariance, **model), **settings
+    )
+    assert shortcut.is_exact_spectrum
+    assert shortcut.expectation_type == "tapers"
+    np.testing.assert_array_equal(shortcut.time, [4.0])
+    np.testing.assert_array_equal(shortcut.frequencies, explicit.frequencies)
+    np.testing.assert_array_equal(
+        shortcut.power(one_sided=True), explicit.power(one_sided=True)
+    )
+    for measure in ("coherency", "pairwise_spectral_granger_prediction"):
+        np.testing.assert_array_equal(
+            _directed(shortcut, measure), _directed(explicit, measure), err_msg=measure
+        )
+
+
+def test_from_var_refuses_what_varspectrum_and_the_flag_refuse():
+    coefficients, noise_covariance = _DENSE
+    with pytest.raises(ValueError, match="not stable"):
+        Connectivity.from_var(3 * coefficients, sampling_frequency=_SAMPLING_FREQUENCY)
+    with pytest.raises(ValueError, match="keeps the tapers"):
+        Connectivity.from_var(
+            coefficients, sampling_frequency=_SAMPLING_FREQUENCY, expectation_type="trials"
+        )
+    with pytest.raises(TypeError, match="positional arguments"):
+        Connectivity.from_var(coefficients, noise_covariance, _SAMPLING_FREQUENCY)  # type: ignore[misc]

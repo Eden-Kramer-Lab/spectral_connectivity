@@ -271,3 +271,13 @@ def test_power_confidence_intervals_keeps_its_released_argument_order():
             n_observations=25, power=np.array([0.5, 2.0]), confidence_level=0.9
         )
     np.testing.assert_array_equal(by_position, by_keyword)
+
+
+@pytest.mark.parametrize("constructor", ["VARSpectrum", "Connectivity.from_var"])
+def test_var_constructors_take_only_the_model_positionally(constructor):
+    """The model, as simulate_MVAR takes it; every setting by keyword."""
+    from spectral_connectivity import VARSpectrum
+
+    function = VARSpectrum if constructor == "VARSpectrum" else Connectivity.from_var
+    assert _positional_names(function) == ["coefficients", "noise_covariance"]
+    assert "sampling_frequency" in _keyword_only_names(function)
