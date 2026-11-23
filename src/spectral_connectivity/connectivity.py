@@ -2436,10 +2436,10 @@ class Connectivity:
 
         The configured expectation must average trials, tapers, or their
         combination. By default each averaged observation is left out in turn,
-        or each whole trial with ``leave_out="trial"``. The method is recomputed for every leave-one-out
-        sample, so it supports nonlinear measures without an analytic variance
-        formula (at a computational cost proportional to the number of
-        samples left out).
+        or each whole trial with ``leave_out="trial"``. The method is
+        recomputed for every leave-one-out sample, so it supports nonlinear
+        measures without an analytic variance formula (at a computational cost
+        proportional to the number of samples left out).
 
         Parameters
         ----------
@@ -2516,9 +2516,9 @@ class Connectivity:
             axis as an output dimension instead of averaging it, a different
             measure.)
 
-            If ``leave_out`` is not ``"observation"`` or ``"trial"``, or is
-            ``"trial"`` with an expectation that does not average trials or
-            with fewer than 3 trials.
+            Also raised if ``leave_out`` is not ``"observation"`` or
+            ``"trial"``, or is ``"trial"`` with an expectation that does not
+            average trials or with fewer than 3 trials.
 
         Notes
         -----
@@ -2565,12 +2565,12 @@ class Connectivity:
         interval for ``magnitude_squared_coherence`` covers 94-96% with either
         setting when every trial has the same coherency. When each trial's
         coherency is drawn from U(0, 0.9), ``leave_out="observation"`` covers
-        83-92% (less with more tapers per trial), because it treats one
-        trial's tapers as independent draws, and ``leave_out="trial"``
-        93.5-95.4%, from ``n_tapers`` times fewer replicates. When the trials
-        are alike, the median ``"trial"`` interval is wider by
-        20-47% with 3 or 4 trials, 14-19% with 5 and 5-8% with 10, at the same
-        coverage.
+        82-92% (less with 7 tapers per trial than with 3), because it treats
+        one trial's tapers as independent draws, and ``leave_out="trial"``
+        93.5-96.5%, from ``n_tapers`` times fewer replicates. When the trials
+        are alike, the median ``"trial"`` interval is wider by 19-47% with 3
+        or 4 trials, 13-20% with 5 and 5-8% with 10, at the same coverage
+        (two Monte Carlo runs of 1000-2000 datasets each).
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (
