@@ -2210,13 +2210,15 @@ class Multitaper(_WindowedFourierTransform):
           detrended (``detrend_type``) over its valid samples only. The
           tapers concentrated above 0.9, the ``is_low_bias`` rule, are kept
           and the others get observation weight 0, so such a window can keep
-          fewer than ``n_tapers``; ``Connectivity.n_valid_observations``
-          counts what each bin keeps, and the measures that count
-          observations use those counts. A window keeping fewer than 2 is
-          dropped, as with ``"drop"``: one with too few valid samples, or one
-          blanked more often than every ``1 / (2 W)`` samples, which caps
-          every taper's concentration at the fraction of samples kept (every
-          ninth sample missing drops it). Windows without artifacts keep
+          fewer than ``n_tapers`` (:attr:`n_kept_tapers` says how many);
+          ``Connectivity.n_valid_observations`` counts what each bin keeps,
+          and the measures that count observations use those counts. A
+          window keeping fewer than 2 is dropped, as with ``"drop"``, with a
+          warning: one with too few valid samples, or one whose artifacts
+          recur more often than every ``1 / (2 W)`` samples (``1 /
+          frequency_resolution`` seconds), which caps every taper's
+          concentration at the fraction of samples kept (every ninth sample
+          missing drops it). Windows without artifacts keep
           the DPSS tapers and their coefficients unchanged (with
           ``taper_weighting="adaptive"`` to within its tolerance, as its
           iterations stop when every window has converged).
@@ -2227,7 +2229,9 @@ class Multitaper(_WindowedFourierTransform):
           without gaps. For 64-sample windows (NW = 3) with gaps of 4 to 12
           samples, away from 0 Hz and Nyquist, by under 6% for a spectrum
           spanning a factor of 100 (an AR(2) with poles of radius 0.77) and by
-          up to 37% for one spanning 2400. In exchange the valid samples are
+          up to 37% for one spanning 2400 (poles of radius 0.95 at 0.1 cycles
+          per sample, a window with two 3-sample gaps). In exchange the valid
+          samples are
           used: with three of four trials gapped in every window there, the
           variance of white-noise power is a third of that of ``"drop"``.
           ``taper_weighting="eigen"`` and ``"adaptive"`` use each window's own
@@ -2235,12 +2239,14 @@ class Multitaper(_WindowedFourierTransform):
           samples). Needs generated DPSS tapers, ``is_low_bias=True``, and
           at least 2 tapers. Construction solves one dense eigenproblem, of
           the size of the window's valid samples, for each distinct pattern
-          of artifact samples in a trial window, and keeps their tapers. Its
-          cost grows as the cube of the window length: measured on a laptop,
-          about 30 ms for 1000 samples, 0.2 s for 2000, 2 s for 4000, and 20 s
-          (with a 0.5 GB kernel) for 8000, so a window as long as the
-          recording (``time_window_duration=None``) is impractical beyond a
-          few thousand samples.
+          of artifact samples in a trial window, and keeps their tapers. The
+          cost per pattern grows as the cube of the window length: measured
+          on a laptop, about 30 ms per pattern for 1000 samples, 0.2 s for
+          2000, 2 s for 4000, and 20 s (with a 0.5 GB kernel) for 8000, so a
+          window as long as the recording (``time_window_duration=None``) is
+          impractical beyond a few thousand samples. Construction warns,
+          before solving, when the total is estimated above 10 s or one
+          kernel above 1 GB.
 
     Attributes
     ----------

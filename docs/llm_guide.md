@@ -171,12 +171,16 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `DeprecationWarning`.
 - **Artifacts and NaN.** Do not let NaN reach the transform: pass
   `transform_kwargs={"artifact_samples": "nonfinite"}`, or a boolean mask that
-  is `True` at the artifacts, the samples to leave out (invert a mask of
-  valid samples with `~`). A trial's
-  window touching an artifact is dropped whole, so use windows that fit
-  between artifacts, or add `"artifact_handling": "missing_data_tapers"` to
-  estimate such a window from its valid samples instead. The outputs mark what is kept: `Multitaper.valid_windows`,
-  and `Connectivity.n_valid_observations`, the per-bin counts to give the
+  is `True` at the artifacts, the samples to leave out (invert a mask of valid
+  samples with `~`). A trial's window touching an artifact is dropped whole,
+  so use windows that fit between artifacts, or add
+  `"artifact_handling": "missing_data_tapers"` to `transform_kwargs` to
+  estimate such a window from its valid samples. Keep `"drop"` when few
+  windows have artifacts or the spectrum spans more than about 1000 in power;
+  use `"missing_data_tapers"` when dropping would lose much of the data and
+  the artifacts are short. The outputs mark what is kept:
+  `Multitaper.valid_windows`, `Multitaper.n_kept_tapers`, and
+  `Connectivity.n_valid_observations`, the per-bin counts to give the
   statistics functions instead of `n_observations`. See the
   [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
 

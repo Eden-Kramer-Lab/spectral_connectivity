@@ -359,15 +359,18 @@ frequency, for the statistics functions:
 ```
 
 Dropping a window throws away its valid samples too. With
-`artifact_handling="missing_data_tapers"` (a `Multitaper` setting, also in
-`transform_kwargs`) a trial window containing artifacts is estimated from its
-valid samples instead, with missing-data Slepian tapers: the sequences that are
-zero at its artifacts and most concentrated in the bandwidth, the DPSS of a
-window with gaps (Bronez 1988; Chave 2019). It keeps those concentrated above
-0.9, so it can count fewer tapers than a clean window, and a window keeping
-fewer than 2 (too few valid samples, or gaps recurring faster than the
-bandwidth) is still dropped. Here both gapped windows are kept, with 4 and 3
-of their 5 tapers:
+`artifact_handling="missing_data_tapers"` (a `Multitaper` setting; for the
+wrapper, in `transform_kwargs` beside `artifact_samples`) a trial window
+containing artifacts is estimated from its valid samples instead, with
+missing-data Slepian tapers: the sequences that are zero at its artifacts and
+most concentrated in the bandwidth, the DPSS of a window with gaps (Bronez
+1988; Chave 2019). It keeps those with over 90% of their energy in the band,
+so it can keep fewer tapers than a clean window. A window keeping fewer than
+2 is still dropped, with a warning: one with too few valid samples, or one
+whose artifacts recur more often than every `1 / frequency_resolution`
+seconds (here 1 / 12 Hz, 83 ms). `Multitaper.n_kept_tapers` says what each
+trial window keeps; here the two windows with artifacts keep 4 and 3 of
+their 5 tapers:
 
 ```python
 >>> multitaper = Multitaper(
@@ -377,18 +380,30 @@ of their 5 tapers:
 ...     artifact_samples=artifact_samples,
 ...     artifact_handling="missing_data_tapers",
 ... )
->>> bool(multitaper.valid_windows.all())
-True
->>> Connectivity.from_transform(multitaper).n_valid_observations[:, 0].tolist()
-[19, 20, 18, 20]
+>>> multitaper.n_kept_tapers.tolist()  # (n_time_windows, n_trials)
+[[5, 5, 5, 4], [5, 5, 5, 5], [5, 3, 5, 5], [5, 5, 5, 5]]
 
 ```
 
-The gapped windows' tapers are less concentrated than the DPSS, so their
-estimates leak more power from strong peaks into the rest of the spectrum
-(see the `artifact_handling` parameter of `Multitaper` for measured sizes),
-and their concentration eigenproblems, one per distinct gap pattern, are
-solved when the transform is built. Windows without artifacts are unchanged.
+Which to choose:
+
+- `"drop"` when few windows have artifacts, or when the spectrum spans more
+  than about 1000 in power (strong peaks over a low floor), where the
+  gapped windows' extra leakage matters;
+- `"missing_data_tapers"` when `"drop"` would lose much of the data, the
+  artifacts are short, and the spectrum spans less than about 100;
+- in between, compute both on your data and compare.
+
+:::{note}
+The gapped windows' tapers are less concentrated than the DPSS (down to 0.9
+rather than about 0.95), so their estimates leak more power from strong peaks
+into the rest of the spectrum; see the `artifact_handling` parameter of
+`Multitaper` for measured sizes. Building the transform solves one
+eigenproblem per distinct pattern of artifacts in a trial window, whose cost
+grows as the cube of the window length (about 30 ms per pattern for 1000
+samples, 20 s for 8000); construction warns when the total is estimated above
+10 s. Windows without artifacts are unchanged.
+:::
 
 ## Group measures: canonical coherence between areas
 
