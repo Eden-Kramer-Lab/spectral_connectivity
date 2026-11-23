@@ -1037,6 +1037,47 @@ def test_directed_measures_of_signals_of_very_different_power_match_oracle(
         )
 
 
+@pytest.mark.parametrize(
+    "scales",
+    [
+        (1.0, 1.0, 1.0, 1.0),
+        (1e-3, 1.0, 1e3, 1.0),
+        (1e-6, 1.0, 1e6, 1.0),
+        (1e-6, 1e6, 1.0, 1.0),
+    ],
+    ids=["as_drawn", "rescaled_1e3", "rescaled_1e6", "within_block_1e6"],
+)
+@_BOTH_FACTORIZATION_PATHS
+def test_blockwise_granger_of_blocks_of_signals_of_very_different_power_matches_oracle(
+    scales, conjugate_symmetric
+):
+    """Blockwise Granger between two-signal blocks is unchanged by rescaling
+    the signals, also when the signals of one block differ in power by twelve
+    orders of magnitude: the inverse of the target block's innovation
+    covariance is loaded per signal."""
+    n_fft = 1024
+    coefficients, noise_covariance = _dense_stable_var(
+        n_signals=4, n_lags=2, spectral_radius=0.8, seed=0
+    )
+    scale = np.diag(scales)
+    coefficients = scale @ coefficients @ np.linalg.inv(scale)
+    noise_covariance = scale @ noise_covariance @ scale
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        blockwise, labels = connectivity.blockwise_spectral_granger_prediction([0, 0, 1, 1])
+
+    oracle = _block_granger_from_state_space(
+        coefficients, noise_covariance, n_fft, _blocks([0, 0, 1, 1], labels)
+    )
+    off_diagonal = ~np.eye(2, dtype=bool)
+    np.testing.assert_allclose(
+        blockwise[0][:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
+
+
 # Dense VARs of signals of comparable power (mean powers within a factor of 16)
 # whose factorization once converged, with no warning and a factor reproducing
 # the spectrum, to a factor that is not minimum phase: its determinant wound

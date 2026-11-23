@@ -1222,7 +1222,7 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   1e-3, 1, 1e3 still missed conditional Granger by 4e-3 and PDC by 0.4. The
   inverses of the factor's lag-0 coefficient (for the transfer function), of
   the transfer function (PDC, gPDC, dDTF), of the reduced transfer function
-  (conditional Granger), and of the noise covariance (dDTF) load each
+  (conditional Granger), and of the noise covariance (dDTF, blockwise Granger) load each
   diagonal entry by 1e-12 of its own size instead of 1e-12 of the matrix's
   RMS entry, which perturbed a signal far weaker than the others by far
   more: for the chain rescaled to mean powers from 5e-5 to 3e12, pairwise
