@@ -409,6 +409,11 @@ def _determinant_winding_number(
     factor whose largest increment reaches ``WINDING_MAX_PHASE_INCREMENT`` is
     reported as NaN (not tested).
 
+    As a test of minimum phase it is best effort: a factor that is not
+    minimum phase but whose determinant does not wind countably (a causal
+    factor with zeros outside the unit circle that the count misses, or an
+    anticausal one) passes it.
+
     Parameters
     ----------
     factor : NDArray[complexfloating],
@@ -447,44 +452,6 @@ def _determinant_winding_number(
         resolved, xp.sum(increments, axis=-1) / (2 * np.pi), xp.nan
     )
     return winding
-
-
-def _is_not_minimum_phase(
-    factor: NDArray[np.complexfloating],
-    n_fft_samples: int | None = None,
-) -> NDArray[np.bool_]:
-    """Flag converged factors that are not minimum phase.
-
-    Every factor ``G`` with ``G Gᴴ = S`` is a fixed point of the Wilson
-    iteration, so convergence alone does not make ``G`` minimum phase. A
-    factor is flagged when ``det G(e^{iω})`` winds around zero (see
-    :func:`_determinant_winding_number`); a non-finite factor, or one whose
-    determinant turns too fast between bins to count, is not flagged.
-
-    The check is best effort. A factor that is causal but not minimum phase,
-    or anticausal, passes it unless its determinant winds countably. An
-    anticausal-energy criterion (energy at negative lags against the
-    spectrum's wrap-around) also flagged factors that were not wrong: 10 of
-    240 windows of zero-padded multitaper estimates, whose measures agreed
-    with those from a twice finer grid as closely as unflagged windows did.
-
-    Parameters
-    ----------
-    factor : NDArray[complexfloating],
-        shape (..., n_frequencies, n_signals, n_signals)
-        Converged factors: all bins of a two-sided grid, or the non-negative
-        half of a conjugate-symmetric one of ``n_fft_samples`` bins.
-    n_fft_samples : int, optional
-        Two-sided length of a half spectrum.
-
-    Returns
-    -------
-    NDArray[bool], shape (...,)
-        True for each factor that is not minimum phase.
-    """
-    winding = _determinant_winding_number(factor, n_fft_samples)
-    is_flagged: NDArray[np.bool_] = xp.abs(winding) > 0.5
-    return is_flagged
 
 
 def _all_finite_units(
@@ -1058,9 +1025,11 @@ def _minimum_phase_factor_and_flags(
             xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
             minimum_phase_factor,
         )
-    # The winding number is unchanged by the scaling; the unconverged
+    # A converged factor whose determinant winds around zero is not minimum
+    # phase. The winding number is unchanged by the scaling; the unconverged
     # sub-spectra are NaN by now and are not flagged.
-    not_minimum_phase = _is_not_minimum_phase(minimum_phase_factor, half_spectrum_n_fft)
+    winding = _determinant_winding_number(minimum_phase_factor, half_spectrum_n_fft)
+    not_minimum_phase = xp.abs(winding) > 0.5
     minimum_phase_factor = signal_scale[..., xp.newaxis, :, xp.newaxis] * minimum_phase_factor
     if half_spectrum_n_fft is not None:
         minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)
