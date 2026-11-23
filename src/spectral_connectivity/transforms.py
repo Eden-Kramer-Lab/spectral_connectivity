@@ -36,15 +36,21 @@ from spectral_connectivity._backend import (
 from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
     TIME_SERIES_RAGGED_FIX,
+    VAR_SINGLE_LAG_HINT,
     BackendArray,
     _validate_sampling_frequency,
     both_spellings_message,
     is_positive_integer,
     mark_readonly_if_supported,
     numeric_array,
+    reject_complex_var,
     reject_sampling_frequency_aliases,
     stacklevel_outside_package,
     to_numpy,
+    var_companion_matrices,
+    var_is_unstable,
+    var_spectral_radius,
+    var_stabilizing_advice,
     warn_deprecated,
 )
 
@@ -3572,40 +3578,22 @@ def _real_var_array(value: Any, name: str, layout: str) -> NDArray[np.float64]:
             value, name, layout, "Give every matrix the same number of rows and columns."
         )
     )
-    if array.dtype.kind == "c":
-        msg = (
-            f"{name} must be real, got dtype {array.dtype}. VARSpectrum describes "
-            "real-valued processes, whose spectrum is conjugate-symmetric (S(-f) "
-            "= conj(S(f))); a complex VAR is not supported. Pass the real "
-            "coefficient and covariance matrices."
-        )
-        raise TypeError(msg)
+    reject_complex_var(
+        array,
+        name,
+        "VARSpectrum describes real-valued processes, whose spectrum is "
+        "conjugate-symmetric (S(-f) = conj(S(f))); a complex VAR is not supported. "
+        "Pass the real coefficient and covariance matrices.",
+    )
     if array.dtype.kind not in "iuf":
-        msg = (
-            f"{name} must be a real numeric array of shape {layout}, got dtype {array.dtype}."
-        )
+        what = "bool, not numbers" if array.dtype.kind == "b" else f"dtype {array.dtype}"
+        msg = f"{name} must be a real numeric array of shape {layout}, got {what}."
         raise TypeError(msg)
     array = array.astype(np.float64)
     if not np.all(np.isfinite(array)):
         msg = f"{name} must contain only finite values; it holds NaN or Inf."
         raise ValueError(msg)
     return array
-
-
-def _var_companion_matrices(coefficients: NDArray[np.float64]) -> NDArray[np.float64]:
-    """Companion matrices ``[[A_1 ... A_p], [I 0]]`` of each window's model.
-
-    ``coefficients`` is ``(n_windows, n_lags, n_signals, n_signals)``; the
-    result is ``(n_windows, n_lags * n_signals, n_lags * n_signals)``, the
-    transition matrix of the state ``[x(t - 1), ..., x(t - n_lags)]``.
-    """
-    n_windows, n_lags, n_signals, _ = coefficients.shape
-    companion = np.zeros((n_windows, n_lags * n_signals, n_lags * n_signals))
-    if n_lags == 0:
-        return companion
-    companion[:, n_signals:, :-n_signals] = np.eye((n_lags - 1) * n_signals)
-    companion[:, :n_signals] = np.concatenate(list(coefficients.swapaxes(0, 1)), axis=-1)
-    return companion
 
 
 def _companion_power_norm(companion: NDArray[np.float64], power: int) -> float:
@@ -3838,11 +3826,7 @@ class VARSpectrum:
         if var_coefficients.ndim not in (3, 4) or (
             var_coefficients.shape[-1] != var_coefficients.shape[-2]
         ):
-            hint = (
-                "; for a single lag, pass coefficients[np.newaxis]"
-                if var_coefficients.ndim == 2
-                else ""
-            )
+            hint = VAR_SINGLE_LAG_HINT if var_coefficients.ndim == 2 else ""
             msg = (
                 f"coefficients must have shape {_VAR_COEFFICIENTS_LAYOUT}, one "
                 f"square matrix A_k per lag; got shape {var_coefficients.shape}{hint}."
@@ -3889,10 +3873,8 @@ class VARSpectrum:
                 (n_time_windows, n_signals, n_signals),
             ).copy()
         )
-        companion = _var_companion_matrices(self._coefficients)
-        self._spectral_radius = mark_readonly_if_supported(
-            np.abs(np.linalg.eigvals(companion)).max(axis=-1, initial=0.0)
-        )
+        companion = var_companion_matrices(self._coefficients)
+        self._spectral_radius = mark_readonly_if_supported(var_spectral_radius(companion))
         self._check_stable()
         self._companion = companion
         self._minimum_n_fft_samples = max(2, 2 * _decay_lag(companion))
@@ -3970,22 +3952,18 @@ class VARSpectrum:
     def _check_stable(self) -> None:
         """Raise unless every window's model is stable (spectral radius below 1)."""
         radius = self._spectral_radius
-        unstable = (radius > 1) | np.isclose(radius, 1, rtol=1e-12, atol=0)
+        unstable = var_is_unstable(radius)
         if not np.any(unstable):
             return
         window = int(np.flatnonzero(unstable)[0])
         where = f" of window {window}" if radius.size > 1 else ""
-        # Scaling A_k by c**k scales every companion eigenvalue by c.
-        scale = 0.9 / radius[window]
         msg = (
             f"The VAR coefficients{where} are not stable: the spectral radius of "
             f"their companion matrix is {radius[window]:.6g}, not below 1, so the "
             "process has no stationary state and its spectrum and connectivity are "
             "undefined. Check that coefficients[k - 1] is A_k of x(t) = sum_k A_k "
-            "x(t - k) + e(t) (statsmodels' VARResults.coefs). To scale a model to "
-            "a stable one, multiply each A_k by c**k: coefficients * c ** "
-            "np.arange(1, n_lags + 1)[:, np.newaxis, np.newaxis] with "
-            f"c = {scale:.6g} gives a radius of 0.9."
+            "x(t - k) + e(t) (statsmodels' VARResults.coefs). "
+            + var_stabilizing_advice(float(radius[window]))
         )
         raise ValueError(msg)
 
