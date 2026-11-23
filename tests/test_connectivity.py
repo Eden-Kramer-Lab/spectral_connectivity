@@ -4918,10 +4918,6 @@ def test_jackknife_leave_out_trial_recomputes_without_each_whole_trial():
         ** 2,
         rtol=1e-8,
     )
-    # Not the leave-one-observation-out interval: that has 15 replicates.
-    observation = Connectivity(coefficients).jackknife("magnitude_squared_coherence")
-    assert observation.n_observations == 15
-    assert not np.allclose(observation.standard_error, result.standard_error)
 
 
 def test_jackknife_leave_out_trial_drops_the_trial_from_weights_and_every_window():
@@ -4952,19 +4948,6 @@ def test_jackknife_leave_out_trial_drops_the_trial_from_weights_and_every_window
     )
     assert result.estimate.shape == (3, 5, 2, 2)
     np.testing.assert_allclose(result.standard_error, expected.standard_error, rtol=1e-10)
-
-
-def test_jackknife_leave_out_trial_is_the_default_when_trials_are_the_observations():
-    rng = np.random.default_rng(512)
-    shape = (1, 6, 2, 16, 2)
-    connectivity = Connectivity(
-        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
-        expectation_type="trials",
-    )
-    trial = connectivity.jackknife("phase_locking_value", leave_out="trial")
-    observation = connectivity.jackknife("phase_locking_value")
-    assert trial.n_observations == observation.n_observations == 6
-    np.testing.assert_array_equal(trial.standard_error, observation.standard_error)
 
 
 def test_jackknife_leave_out_trial_covers_when_coupling_varies_across_trials():

@@ -133,29 +133,29 @@ def test_jackknife_refuses_to_leave_out_correlated_taper_observations(expectatio
     assert ("leave_out='trial'" in str(error.value)) is (expectation_type == "trials_tapers")
 
 
-@pytest.mark.parametrize("leave_out", ["observation", "trial"])
-def test_jackknife_over_trials_is_allowed_with_correlated_tapers(leave_out):
+def test_jackknife_over_trials_is_allowed_with_correlated_tapers():
+    """With expectation_type='trials' the trials are the observations, so both
+    settings leave out one trial and give the same interval."""
     conn = Connectivity(
         _coefficients(np.random.default_rng(6)),
         expectation_type="trials",
         observations_are_independent=False,
     )
-    result = conn.jackknife("phase_lag_index", leave_out=leave_out)
-    assert np.isfinite(result.standard_error).any()
+    trial = conn.jackknife("phase_lag_index", leave_out="trial")
+    observation = conn.jackknife("phase_lag_index")
+    assert trial.n_observations == observation.n_observations == 4
+    np.testing.assert_array_equal(trial.standard_error, observation.standard_error)
+    assert np.isfinite(trial.standard_error).any()
 
 
 def test_jackknife_leaving_out_trials_is_allowed_with_correlated_tapers():
     """Whole trials are independent even when the tapers within one are not, so
-    leave_out='trial' runs and gives the same interval as for independent tapers;
-    the refusal for observations points to it."""
+    leave_out='trial' runs and gives the same interval as for independent tapers."""
     coefficients = _coefficients(np.random.default_rng(6))
     correlated = Connectivity(coefficients, observations_are_independent=False)
-    with pytest.raises(ValueError, match="pass leave_out='trial'"):
-        correlated.jackknife("phase_lag_index")
     result = correlated.jackknife("phase_lag_index", leave_out="trial")
     expected = Connectivity(coefficients).jackknife("phase_lag_index", leave_out="trial")
     np.testing.assert_array_equal(result.standard_error, expected.standard_error)
-    assert np.isfinite(result.standard_error).any()
 
 
 def test_connectivity_defaults_to_independent_time_bins():

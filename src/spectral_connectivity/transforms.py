@@ -2327,10 +2327,10 @@ class Multitaper(_WindowedFourierTransform):
         uncorrelated (Thomson 1982; Percival & Walden 1993, ch. 7), and trials
         are independent realizations. :class:`Connectivity` reads this flag to
         decide whether ``n_observations`` (trials x tapers) counts effectively
-        independent samples: the leave-one-observation-out jackknife, the debiased measures (pairwise
-        phase consistency, debiased squared PLI/WPLI) and the zero-coherence
-        significance test (``Beta(1, n_observations - 1)`` null) all assume it
-        does. ``True`` for DPSS tapers and for custom tapers that are mutually
+        independent samples: the leave-one-observation-out jackknife, the
+        debiased measures (pairwise phase consistency, debiased squared
+        PLI/WPLI) and the zero-coherence significance test
+        (``Beta(1, n_observations - 1)`` null) all assume it does. ``True`` for DPSS tapers and for custom tapers that are mutually
         orthogonal; ``False`` for custom tapers that are not, whose
         eigencoefficients are correlated even for white noise (copies of one
         taper give identical ones). The flag describes the observations within
@@ -2917,9 +2917,9 @@ class Welch:
         add little independent information, so ``n_observations`` (trials x
         segments) overstates the effective sample size. :class:`Connectivity`
         reads this flag before the leave-one-observation-out jackknife, the
-        debiased measures (pairwise phase consistency, debiased squared PLI/WPLI) and the zero-coherence
-        significance test, whose finite-sample corrections assume independent
-        observations.
+        debiased measures (pairwise phase consistency, debiased squared
+        PLI/WPLI) and the zero-coherence significance test, whose finite-sample
+        corrections assume independent observations.
 
         Returns
         -------
@@ -3263,9 +3263,9 @@ class MorletWavelet:
         overstates the effective sample size, and normalized measures of
         independent signals are biased toward 1. :class:`Connectivity` reads
         this flag before the leave-one-observation-out jackknife, the debiased
-        measures (pairwise phase consistency, debiased squared PLI/WPLI) and the zero-coherence
-        significance test, whose finite-sample corrections assume independent
-        observations. Correlation between successive time bins, which matters
+        measures (pairwise phase consistency, debiased squared PLI/WPLI) and
+        the zero-coherence significance test, whose finite-sample corrections
+        assume independent observations. Correlation between successive time bins, which matters
         only for expectations that also average over time, is reported by
         :attr:`time_bins_are_independent`.
 

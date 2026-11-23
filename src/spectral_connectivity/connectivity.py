@@ -2435,10 +2435,8 @@ class Connectivity:
         """Estimate uncertainty by leaving out one observation or one trial.
 
         The configured expectation must average trials, tapers, or their
-        combination. By default each averaged observation is left out in turn:
-        for ``trials_tapers`` each trial-taper eigencoefficient is one
-        observation. ``leave_out="trial"`` leaves out all of one trial's tapers
-        at a time instead. The method is recomputed for every leave-one-out
+        combination. By default each averaged observation is left out in turn,
+        or each whole trial with ``leave_out="trial"``. The method is recomputed for every leave-one-out
         sample, so it supports nonlinear measures without an analytic variance
         formula (at a computational cost proportional to the number of
         samples left out).
@@ -2477,12 +2475,12 @@ class Connectivity:
             much the measure varies from trial to trial.
 
             Prefer ``"trial"`` for recordings of several trials unless they
-            are known to be alike. When trials differ (in coupling strength,
+            are known to be alike: when trials differ (in coupling strength,
             state, or noise level), leaving out one taper at a time treats the
             tapers of one trial as independent draws from one shared spectrum
-            and gives too narrow an interval. The cost is a wider interval
-            when trials are alike and few, from the fewer degrees of freedom
-            (see Notes). Keep ``"observation"`` for a single trial.
+            and gives too narrow an interval. Its cost is a wider interval
+            when trials are alike and few (see Notes). Keep ``"observation"``
+            for a single trial.
 
             ``"trial"`` needs an expectation that averages trials
             (``"trials_tapers"``, or ``"trials"``, for which the two settings
@@ -2516,8 +2514,11 @@ class Connectivity:
             ``smoothing_time`` on at least 3 trials.
             (``expectation_type="trials"`` is accepted but keeps the correlated
             axis as an output dimension instead of averaging it, a different
-            measure.) Also if ``leave_out="trial"`` with an expectation that
-            does not average trials, or with fewer than 3 trials.
+            measure.)
+
+            If ``leave_out`` is not ``"observation"`` or ``"trial"``, or is
+            ``"trial"`` with an expectation that does not average trials or
+            with fewer than 3 trials.
 
         Notes
         -----
@@ -2564,9 +2565,10 @@ class Connectivity:
         interval for ``magnitude_squared_coherence`` covers 94-96% with either
         setting when every trial has the same coherency. When each trial's
         coherency is drawn from U(0, 0.9), ``leave_out="observation"`` covers
-        83-92% (less with more tapers per trial), and ``leave_out="trial"``
-        93.5-95.4%. It also computes ``n_tapers`` times fewer replicates.
-        When the trials are alike, the median ``"trial"`` interval is wider by
+        83-92% (less with more tapers per trial), because it treats one
+        trial's tapers as independent draws, and ``leave_out="trial"``
+        93.5-95.4%, from ``n_tapers`` times fewer replicates. When the trials
+        are alike, the median ``"trial"`` interval is wider by
         20-47% with 3 or 4 trials, 14-19% with 5 and 5-8% with 10, at the same
         coverage.
         """
@@ -2593,11 +2595,19 @@ class Connectivity:
                 "out, or keep leave_out='observation' to leave out one taper."
             )
             raise ValueError(msg)
-        trial_remedy = (
-            "pass leave_out='trial' (with at least 3 trials), which leaves out "
-            "whole trials and is valid with correlated tapers, or "
-            if self.expectation_type == "trials_tapers"
-            else ""
+        coefficients = self._fourier_coefficients
+        n_trials = coefficients.shape[1]
+        # Each replicate leaves out one index of ``observation_axis``; for one
+        # trial-taper observation of ``trials_tapers`` the two axes are
+        # flattened into axis 1 first.
+        flatten_trials_tapers = (
+            self.expectation_type == "trials_tapers" and leave_out == "observation"
+        )
+        observation_axis = 2 if self.expectation_type == "tapers" else 1
+        n_observations = (
+            n_trials * coefficients.shape[2]
+            if flatten_trials_tapers
+            else coefficients.shape[observation_axis]
         )
         if (
             leave_out == "observation"
@@ -2611,7 +2621,13 @@ class Connectivity:
                 "False: a MorletWavelet smoothing neighborhood, or Welch segments "
                 "overlapping by more than half), so leave-one-out intervals over "
                 "them are invalid. For an interval on the same averaged measure, "
-                f"{trial_remedy}"
+            )
+            if self.expectation_type == "trials_tapers" and n_trials >= 3:
+                msg += (
+                    "pass leave_out='trial', which leaves out whole trials and is "
+                    "valid with correlated tapers, or "
+                )
+            msg += (
                 "recompute the transform with independent observations: Welch "
                 "with segment_overlap <= 0.5, a Multitaper transform, or "
                 "MorletWavelet without smoothing_time on at least 3 trials (the "
@@ -2650,6 +2666,35 @@ class Connectivity:
         # on the class, so the bound attribute is always callable here.
         measure = getattr(self, method)
 
+        if n_observations < 3:
+            if leave_out == "trial":
+                msg = (
+                    "jackknife(leave_out='trial') requires at least 3 trials, got "
+                    f"{n_observations}: an interval over n trials has n - 1 degrees "
+                    "of freedom, so 2 trials give a critical value near 13 and 1 "
+                    "trial gives none."
+                )
+                if (
+                    self.expectation_type == "trials_tapers"
+                    and self._observations_are_independent
+                ):
+                    msg += (
+                        " Keep leave_out='observation' to leave out one trial-taper "
+                        "observation at a time."
+                    )
+                else:
+                    msg += " Collect at least 3 trials for an interval."
+            else:
+                msg = (
+                    "jackknife requires at least 3 observations, got "
+                    f"{n_observations}. With two, each leave-one-out replicate has a "
+                    "single observation, which forces magnitude-normalized measures "
+                    "to 1 and makes the interval degenerate (a zero standard error, "
+                    "or NaN under a variance-stabilizing transform such as the "
+                    "coherence default)."
+                )
+            raise ValueError(msg)
+
         full_estimate = measure(**method_kwargs)
         if isinstance(full_estimate, tuple):
             msg = f"jackknife does not support tuple-valued measure {method!r}."
@@ -2667,10 +2712,9 @@ class Connectivity:
             msg = f"jackknife requires a real-valued measure; {method!r} is complex."
             raise TypeError(msg)
 
-        coefficients = self._fourier_coefficients
         observation_weights = self._observation_weights
-        if self.expectation_type == "trials_tapers" and leave_out == "observation":
-            n_observations = coefficients.shape[1] * coefficients.shape[2]
+        observation_coefficients = coefficients
+        if flatten_trials_tapers:
             observation_coefficients = coefficients.reshape(
                 coefficients.shape[0],
                 n_observations,
@@ -2686,36 +2730,6 @@ class Connectivity:
                     observation_weights.shape[3],
                     1,
                 )
-            observation_axis = 1
-        else:
-            observation_coefficients = coefficients
-            observation_axis = 2 if self.expectation_type == "tapers" else 1
-            n_observations = coefficients.shape[observation_axis]
-        if n_observations < 3 and leave_out == "trial":
-            msg = (
-                "jackknife(leave_out='trial') requires at least 3 trials, got "
-                f"{n_observations}: an interval over n trials has n - 1 degrees "
-                "of freedom, so 2 trials give a critical value near 13 and 1 "
-                "trial gives none."
-            )
-            if self.expectation_type == "trials_tapers" and self._observations_are_independent:
-                msg += (
-                    " Keep leave_out='observation' to leave out one trial-taper "
-                    "observation at a time."
-                )
-            else:
-                msg += " Collect at least 3 trials for an interval."
-            raise ValueError(msg)
-        if n_observations < 3:
-            msg = (
-                f"jackknife requires at least 3 observations, got {n_observations}. "
-                "With two, each leave-one-out replicate has a single observation, "
-                "which forces magnitude-normalized measures to 1 and makes the "
-                "interval degenerate (a zero standard error, or NaN under a "
-                "variance-stabilizing transform such as the coherence default)."
-            )
-            raise ValueError(msg)
-
         replicates: list[NDArray[np.floating]] = []
         for omitted in range(n_observations):
             keep = xp.arange(n_observations) != omitted
