@@ -75,6 +75,34 @@ def _to_two_sided(
     return xp.concatenate((nonnegative, negative), axis=-3)
 
 
+def _signal_scale(
+    cross_spectral_matrix: NDArray[np.complexfloating],
+) -> NDArray[np.floating]:
+    """Root-mean-square amplitude of each signal of each sub-spectrum.
+
+    The square root of the signal's power averaged over the frequency axis
+    (-3), its zero-lag autocovariance on the grid. A signal with zero or
+    non-finite power gets a scale of 1, so that sub-spectrum is factored as it
+    would be without scaling.
+
+    Parameters
+    ----------
+    cross_spectral_matrix : NDArray[complexfloating],
+        shape (..., n_fft_samples, n_signals, n_signals)
+        Two-sided cross-spectral matrix.
+
+    Returns
+    -------
+    NDArray[floating], shape (..., n_signals)
+        Positive scale of each signal, in float64 or wider.
+    """
+    power = xp.mean(
+        xp.diagonal(cross_spectral_matrix, axis1=-2, axis2=-1).real, axis=-2
+    ).astype(xp.result_type(cross_spectral_matrix.real.dtype, xp.float64), copy=False)
+    has_power = xp.isfinite(power) & (power > 0)
+    return xp.sqrt(xp.where(has_power, power, 1))
+
+
 def _get_initial_conditions(
     cross_spectral_matrix: NDArray[np.complexfloating],
     n_fft_samples: int | None = None,
@@ -566,7 +594,8 @@ def minimum_phase_decomposition(
         Cross-spectral density matrix to be decomposed. Must be Hermitian
         positive semidefinite for each frequency.
     tolerance : float, default=1e-8
-        Relative convergence tolerance for Wilson algorithm iterations.
+        Relative convergence tolerance for Wilson algorithm iterations,
+        applied to the factor of the scaled spectrum (see Notes).
     max_iterations : int, default=500
         Maximum number of iterations before stopping algorithm. Near-singular
         cross-spectral matrices (highly correlated channels) can need several
@@ -619,6 +648,13 @@ def minimum_phase_decomposition(
     (complex-valued signals), take the two-sided iteration, which does about
     twice the arithmetic per iteration.
 
+    Each sub-spectrum is factored with its signals scaled to unit mean power:
+    the iteration factors ``D S D``, with ``D`` diagonal and ``D_ii`` one over
+    the square root of the mean of ``S_ii`` over frequency, and returns
+    ``D⁻¹ G'`` for its factor ``G'``. That is the factor of ``S`` exactly, so
+    the result does not depend on the signals' units or relative scales. A
+    signal with zero or non-finite power keeps a scale of 1.
+
     Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
     computed once, which lets sub-spectra with near-collinear channels converge.
     An indefinite or non-finite ``S`` has no such square root and is returned as
@@ -655,6 +691,17 @@ def minimum_phase_decomposition(
        windows and highly correlated channels) and added a bin-to-bin
        alternation to every measure derived from it. Odd-length grids were
        not affected.
+
+    .. versionchanged:: 3.0
+       Signals are scaled to unit mean power before the iteration. Every
+       factor ``G`` with ``G Gᴴ = S`` is a fixed point of the iteration, and
+       without the scaling, signals whose powers differ by orders of
+       magnitude could converge to one that is not minimum phase, with no
+       warning and ``G Gᴴ`` within 1e-9 of ``S``. All directed measures were
+       then wrong: for a chain of three nearly integrating signals (mean
+       powers 50, 1e4 and 3e6), pairwise spectral Granger missed its true
+       values by up to 6.5 and conditional Granger by up to 3.4, and both
+       differed between the raw and the standardized signals.
 
     References
     ----------
@@ -697,9 +744,18 @@ def minimum_phase_decomposition(
         working_cross_spectral_matrix = cross_spectral_matrix[
             ..., : n_fft_samples // 2 + 1, :, :
         ]
-    working_cross_spectral_matrix = working_cross_spectral_matrix.astype(
-        working_dtype, copy=False
-    )
+    # Factor D S D, with D scaling every signal to unit mean power, and return
+    # D^-1 G for its factor G: the factor of S, exactly. Without it, signals
+    # whose powers differ by orders of magnitude could converge to a factor
+    # that reproduces S but is not minimum phase (see Notes).
+    signal_scale = _signal_scale(cross_spectral_matrix)
+    working_cross_spectral_matrix = (
+        working_cross_spectral_matrix
+        / (
+            signal_scale[..., xp.newaxis, :, xp.newaxis]
+            * signal_scale[..., xp.newaxis, xp.newaxis, :]
+        )
+    ).astype(working_dtype, copy=False)
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # S is fixed across iterations, so factor it once as S = L Lᴴ.
     cross_spectral_square_root = _hermitian_square_root(working_cross_spectral_matrix)
@@ -799,6 +855,7 @@ def minimum_phase_decomposition(
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
+    minimum_phase_factor = signal_scale[..., xp.newaxis, :, xp.newaxis] * minimum_phase_factor
     if half_spectrum_n_fft is not None:
         minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)
     return minimum_phase_factor

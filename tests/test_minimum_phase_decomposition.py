@@ -900,3 +900,52 @@ def test_real_signal_factorization_matches_full_spectrum_iteration(monkeypatch, 
     )
     mirrored = half_spectrum_factor[..., (-np.arange(n_fft)) % n_fft, :, :]
     np.testing.assert_array_equal(half_spectrum_factor, mirrored.conj())
+
+
+@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+def test_rescaling_the_signals_rescales_the_factor(real_signals):
+    """Each signal is scaled to unit mean power before the iteration, so the
+    factor of ``D S D`` is ``D G`` to rounding for any positive diagonal ``D``,
+    in every window: the iterates do not see the signals' units."""
+    signals = _lagged_signals(
+        16, np.random.default_rng(0), dtype=float if real_signals else complex
+    )
+    spectrum = _cross_spectrum_of(signals)
+    scale = np.array([[1e-4, 1.0, 1e4], [3.0, 1e-6, 1.0]])  # (window, signal)
+    rescaled = (
+        scale[:, np.newaxis, :, np.newaxis] * spectrum * scale[:, np.newaxis, np.newaxis, :]
+    )
+    assert _is_conjugate_symmetric(to_device(rescaled)) == real_signals
+
+    factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+    rescaled_factor = to_host(minimum_phase_decomposition(to_device(rescaled)))
+
+    np.testing.assert_allclose(
+        rescaled_factor / scale[:, np.newaxis, :, np.newaxis],
+        factor,
+        rtol=0,
+        atol=1e-12 * np.abs(factor).max(),
+    )
+
+
+def test_a_zero_power_signal_is_factored_as_without_scaling(monkeypatch):
+    """A signal with no power has no scale; it keeps a scale of 1, so its
+    sub-spectrum takes the same route as before scaling was introduced."""
+    spectrum = _real_signal_spectrum(n_signals=2)
+    spectrum[1, :, 1, :] = 0
+    spectrum[1, :, :, 1] = 0
+    spectrum = to_device(spectrum)
+    np.testing.assert_array_equal(to_host(mpd_module._signal_scale(spectrum))[1, 1], 1.0)
+    with warnings.catch_warnings(record=True) as scaled_warnings:
+        warnings.simplefilter("always")
+        scaled = to_host(minimum_phase_decomposition(spectrum))
+    monkeypatch.setattr(
+        mpd_module, "_signal_scale", lambda csm: xp.ones(csm.shape[:-3] + csm.shape[-1:])
+    )
+    with warnings.catch_warnings(record=True) as unscaled_warnings:
+        warnings.simplefilter("always")
+        unscaled = to_host(minimum_phase_decomposition(spectrum))
+    assert [str(w.message) for w in scaled_warnings] == [
+        str(w.message) for w in unscaled_warnings
+    ]
+    np.testing.assert_array_equal(np.isnan(scaled), np.isnan(unscaled))

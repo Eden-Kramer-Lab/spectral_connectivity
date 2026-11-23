@@ -954,3 +954,70 @@ def test_pairwise_granger_is_defined_on_a_grid_the_spectrum_wraps_around(n_fft):
     off_diagonal = ~np.eye(3, dtype=bool)
     assert np.isfinite(granger[:, off_diagonal]).all()
     assert (granger[:, off_diagonal] >= 0).all()
+
+
+# A chain 0 -> 1 -> 2 of nearly integrating signals (each an AR(1) at 0.99):
+# every coupling integrates its input, so the mean powers are 50, 1e4 and
+# 3e6. The Wilson iteration once converged here, with no warning and a factor
+# reproducing the spectrum, to a spectral factor that is not minimum phase,
+# and every directed measure came out wrong.
+_INTEGRATING_CHAIN_COEFFICIENTS = 0.99 * np.eye(3)[np.newaxis] + np.array(
+    [[[0.0, 0.0, 0.0], [0.2, 0.0, 0.0], [0.0, 0.2, 0.0]]]
+)
+_INTEGRATING_CHAIN_N_FFT = 8192
+
+
+@pytest.fixture(scope="module")
+def integrating_chain_oracle():
+    """Pairwise and conditional Granger of the integrating chain from its
+    state space; both are unchanged by rescaling the signals."""
+    coefficients, n_fft = _INTEGRATING_CHAIN_COEFFICIENTS, _INTEGRATING_CHAIN_N_FFT
+    conditional = np.full((n_fft // 2 + 1, 3, 3), np.nan)
+    for source, target in itertools.permutations(range(3), 2):
+        conditional[:, source, target] = _state_space_conditional_granger(
+            coefficients, np.eye(3), n_fft, target, source
+        )
+    return {
+        "pairwise_spectral_granger_prediction": _pairwise_granger_from_state_space(
+            coefficients, np.eye(3), n_fft
+        ),
+        "conditional_spectral_granger_prediction": conditional,
+    }
+
+
+@pytest.mark.parametrize(
+    "scales", [(1.0, 1.0, 1.0), (0.1, 1.0, 10.0)], ids=["as_simulated", "rescaled"]
+)
+@_BOTH_FACTORIZATION_PATHS
+def test_directed_measures_of_signals_of_very_different_power_match_oracle(
+    integrating_chain_oracle, scales, conjugate_symmetric
+):
+    """Signals whose powers differ by orders of magnitude, as they do in the
+    integrating chain and more so once rescaled, are factored as accurately as
+    signals of equal power. Rescaling signal ``i`` by ``d_i`` leaves spectral
+    Granger unchanged and scales the transfer function to ``D H D^-1``, which
+    gives the DTF of the rescaled model. Unscaled, the factorization missed
+    every one of these measures by more than 0.5."""
+    scale = np.diag(scales)
+    coefficients = scale @ _INTEGRATING_CHAIN_COEFFICIENTS @ np.linalg.inv(scale)
+    noise_covariance = scale @ scale
+    A, H, spectrum = _analytic_var(coefficients, noise_covariance, _INTEGRATING_CHAIN_N_FFT)
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
+    off_diagonal = ~np.eye(3, dtype=bool)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        for measure, oracle in integrating_chain_oracle.items():
+            result = np.asarray(getattr(connectivity, measure)())[0]
+            np.testing.assert_allclose(
+                result[:, off_diagonal],
+                oracle[:, off_diagonal],
+                atol=1e-5,
+                rtol=0,
+                err_msg=measure,
+            )
+        dtf = np.asarray(connectivity.directed_transfer_function())[0]
+    expected_dtf = _analytic_directed_measures(A, H, noise_covariance)[
+        "directed_transfer_function"
+    ]
+    np.testing.assert_allclose(dtf, np.swapaxes(expected_dtf, -1, -2), atol=1e-5, rtol=0)

@@ -1196,6 +1196,30 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   by 1e-4 to 0.1 for data at 1e-6 of unit variance (microvolt signals stored
   in volts) in the cases run, and by more below that. Recompute directed
   results from small-amplitude data.
+- The Wilson factorization behind every directed measure scales each signal
+  to unit mean power before iterating and unscales the factor afterwards,
+  which gives the same factor exactly, so the directed measures no longer
+  depend on the signals' relative scales. Every factor `G` with `G Gᴴ = S` is
+  a fixed point of the iteration, and signals whose powers differed by orders
+  of magnitude could converge to one that is not minimum phase, with no
+  warning and `G Gᴴ` within 1e-9 of `S`; its transfer function and noise
+  covariance, and every measure read from them, were then wrong. For a chain
+  `0 -> 1 -> 2` of nearly integrating signals (a VAR(1) with 0.99 on the
+  diagonal and couplings of 0.2, mean powers 50, 1e4 and 3e6), the exact
+  spectrum on an 8192-point grid gave pairwise spectral Granger up to 6.5 from
+  its true value, conditional Granger up to 3.4, and DTF and PDC up to 0.8;
+  they are now within 3e-7. From multitaper estimates of the same model (8192
+  samples, 20 trials, NW 2), pairwise spectral Granger of the raw and the
+  standardized signals differed by up to 3.7, and `2 -> 0`, which is 0 in the
+  model, peaked at 0.44 raw and 0.09 standardized; the two now agree to
+  rounding. 2.x has the same defect (raw and standardized pairwise Granger
+  differed by up to 4.3 there). Recompute directed results, above all from
+  signals whose powers differ by orders of magnitude. Results from signals
+  of comparable power change by much less than their estimation
+  error (by at most 5e-3 for spectral Granger, DTF, and PDC in the regression
+  examples, whose RMS error against their models is 0.02-0.08), because the
+  factor of a spectrum estimated on a finite grid is not unique and the
+  scaled iteration converges to a slightly different one.
 - The Wilson iteration builds each update from a square root of the
   cross-spectrum, so it is Hermitian positive semidefinite by construction.
   Sub-spectra with near-duplicate channels (condition numbers from about 1e10)
