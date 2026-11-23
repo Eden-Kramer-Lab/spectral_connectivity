@@ -949,3 +949,55 @@ def test_a_zero_power_signal_is_factored_as_without_scaling(monkeypatch):
         str(w.message) for w in unscaled_warnings
     ]
     np.testing.assert_array_equal(np.isnan(scaled), np.isnan(unscaled))
+
+
+def _minimum_phase_ma1_factor(n_fft):
+    """The 2x2 minimum-phase MA(1) factor of
+    ``test_minimum_phase_decomposition_recovers_matrix_factor``, one window."""
+    g0 = np.array([[1.5, 0.4], [0.0, 0.8]])
+    g1 = np.array([[0.3, -0.2], [0.5, 0.1]])
+    omega = 2 * np.pi * np.arange(n_fft) / n_fft
+    return (g0 + g1 * np.exp(-1j * omega)[:, np.newaxis, np.newaxis])[np.newaxis]
+
+
+@pytest.mark.parametrize("n_fft", [64, 65])
+def test_is_not_minimum_phase_flags_an_all_pass_rotation_of_the_factor(n_fft):
+    """``G U`` reproduces ``G Gᴴ`` for any unitary ``U(f)``. The all-pass
+    ``U = diag(b, 1)`` with ``b(z) = (z - a) / (1 - a z)``, whose impulse
+    response is at negative lags (powers of ``z``), makes the product
+    anticausal, which the check flags, while ``G`` itself and ``G`` times a
+    constant unitary matrix are not flagged."""
+    factor = _minimum_phase_ma1_factor(n_fft)
+    spectrum = factor @ _conjugate_transpose(factor)
+    z = np.exp(2j * np.pi * np.arange(n_fft) / n_fft)
+    blaschke = (z - 0.5) / (1 - 0.5 * z)
+    all_pass = np.zeros((n_fft, 2, 2), dtype=complex)
+    all_pass[:, 0, 0] = blaschke
+    all_pass[:, 1, 1] = 1
+    rotation = np.array([[np.cos(0.3), -np.sin(0.3)], [np.sin(0.3), np.cos(0.3)]])
+    factors = np.concatenate([factor, factor @ rotation, factor @ all_pass])
+    spectra = np.concatenate([spectrum] * 3)
+    np.testing.assert_allclose(factors @ _conjugate_transpose(factors), spectra, atol=1e-12)
+
+    flagged = to_host(mpd_module._is_not_minimum_phase(to_device(factors), to_device(spectra)))
+
+    np.testing.assert_array_equal(flagged, [False, False, True])
+
+
+def test_unscaled_factor_of_signals_of_very_different_power_warns(monkeypatch):
+    """Without the scaling to unit power, the exact spectrum of a chain of
+    nearly integrating signals (mean powers 50 and 3e6) converges to a factor
+    that is not minimum phase, which the check reports; with it, the same
+    spectrum factors without a warning."""
+    coefficients = np.array([[[0.99, 0.0, 0.0], [0.2, 0.99, 0.0], [0.0, 0.2, 0.99]]])
+    spectrum = _analytic_var_spectrum(coefficients, np.eye(3), n_fft=8192)
+    pair = to_device(spectrum[..., [0, 2], :][..., [0, 2]])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        minimum_phase_decomposition(pair)
+    monkeypatch.setattr(
+        mpd_module, "_signal_scale", lambda csm: xp.ones(csm.shape[:-3] + csm.shape[-1:])
+    )
+    with pytest.warns(UserWarning, match="not minimum phase for 1 of 1"):
+        minimum_phase_decomposition(pair)

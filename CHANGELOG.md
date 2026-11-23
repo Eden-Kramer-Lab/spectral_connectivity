@@ -1219,7 +1219,14 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   error (by at most 5e-3 for spectral Granger, DTF, and PDC in the regression
   examples, whose RMS error against their models is 0.02-0.08), because the
   factor of a spectrum estimated on a finite grid is not unique and the
-  scaled iteration converges to a slightly different one.
+  scaled iteration converges to a slightly different one. The factorization
+  also warns when a converged factor is anticausal, with more of its energy
+  at negative lags than 100 times the share the spectrum's wrap-around on the
+  grid explains (and more than 1e-6), as the unscaled factors of that chain's
+  exact spectrum were (those of its multitaper estimate were not anticausal
+  enough to be told apart from the estimate's own wrap-around); it costs less
+  than one iteration and gave no warning across the test suite or the
+  benchmark cases.
 - The Wilson iteration builds each update from a square root of the
   cross-spectrum, so it is Hermitian positive semidefinite by construction.
   Sub-spectra with near-duplicate channels (condition numbers from about 1e10)
