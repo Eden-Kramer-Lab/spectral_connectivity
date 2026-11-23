@@ -211,11 +211,7 @@ True
 - `help(spectral_connectivity.SpectralTransform)` for the interface a custom
   transform needs to work with `Connectivity.from_transform`.
 - `help(spectral_connectivity.VARSpectrum)` for the exact connectivity of a
-  VAR model, with `coefficients[k - 1]` the lag-`k` matrix (lag first) as in
-  `simulate_MVAR` and statsmodels' `VARResults.coefs`. Label its results with
-  `connectivity_to_xarray(VARSpectrum(...), method)`, one measure per call
-  (`multitaper_connectivity` takes a time series, not a transform), or get
-  arrays from `Connectivity.from_var(coefficients, noise_covariance,
-  sampling_frequency=...)`. It does not fit the model, and refuses the
-  measures computed from individual observations.
+  VAR model (label it with `connectivity_to_xarray`, not
+  `multitaper_connectivity`; see the
+  [cookbook recipe](cookbook.md#exact-connectivity-of-a-var-model)).
 - The [Cookbook](cookbook.md) has recipes for common tasks.

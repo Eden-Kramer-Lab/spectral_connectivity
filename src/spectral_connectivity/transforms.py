@@ -3735,31 +3735,21 @@ class VARSpectrum:
     so the parts of the model's autocovariance and impulse response beyond
     lag ``n_fft_samples / 2`` wrap around. Both decay as the powers ``J ** k``
     of the companion matrix ``J``, and the directed measures are off by about
-    the norm of ``J ** (n_fft_samples / 2)``: pairwise spectral Granger
-    prediction of six models of 3 to 5 signals and 1 to 3 lags was off by 0.4
-    to 12 times it, and by at most 1.2e-9 at :attr:`minimum_n_fft_samples`.
-    :attr:`minimum_n_fft_samples` is twice the smallest ``k`` at which
-    that norm (Frobenius, the largest over the windows) is at most 1e-10, and
-    at least 2. The norm is at least ``rho ** k``, for ``rho`` the largest of
-    :attr:`spectral_radius`, so the grid has at least ``2 * ln(1e10) / -ln(rho)``
-    bins (about ``46 / (1 - rho)`` for ``rho`` near 1); repeated eigenvalues,
-    as in a chain of signals with the same dynamics, decay more slowly and
-    need more. That grid also resolves the sharpest spectral peaks: a pole at
-    radius ``r`` near 1 gives a peak about ``(1 - r) * sampling_frequency /
-    (2 pi)`` Hz wide on each side, about 7 bins or more for ``r <= rho``.
-    On that grid the rest of the error is the Wilson factorization's. Against
-    the state-space oracle, pairwise spectral Granger prediction of dense
-    models of 3 and 5 signals was off by 1.4e-9 to 2.2e-7 (values up to 4.6)
-    at the default ``minimum_phase_tolerance`` of :class:`Connectivity`
-    (1e-8), and by at most 1.1e-9 at 1e-12; the transfer-function measures
-    matched their closed forms to 7e-11. Where the spectrum is nearly
-    singular the floor is float64 rounding instead, relative error near
-    ``eps`` times the condition number of the spectral matrix: in a chain
-    0 -> 1 -> 2 whose signals all have a pole at 0.99 (their powers differ by
-    five orders of magnitude), 3.2e-7 at 0 Hz, where the value is 12 and the
-    condition number 6.4e7, unchanged by a longer grid or a tighter
-    tolerance. A grid that is a multiple of another transform's FFT length
-    contains its frequencies.
+    the norm of ``J ** (n_fft_samples / 2)``. :attr:`minimum_n_fft_samples` is
+    twice the smallest ``k`` at which that norm (Frobenius, the largest over
+    the windows) is at most 1e-10, and at least 2. The norm is at least
+    ``rho ** k``, for ``rho`` the largest of :attr:`spectral_radius`, so the
+    grid has at least ``2 * ln(1e10) / -ln(rho)`` bins (about
+    ``46 / (1 - rho)`` for ``rho`` near 1); repeated eigenvalues, as in a chain
+    of signals with the same dynamics, decay more slowly and need more. That
+    grid also resolves the sharpest spectral peaks: a pole at radius ``r`` near
+    1 gives a peak about ``(1 - r) * sampling_frequency / (2 pi)`` Hz wide on
+    each side, about 7 bins or more for ``r <= rho``. On it the directed
+    measures are exact to the Wilson factorization's tolerance (the
+    ``minimum_phase_tolerance`` of :class:`Connectivity`), down to a floor of
+    float64 rounding, a relative error near ``eps`` times the condition number
+    of the spectral matrix, at nearly singular frequencies. A grid that is a
+    multiple of another transform's FFT length contains its frequencies.
 
     Examples
     --------
