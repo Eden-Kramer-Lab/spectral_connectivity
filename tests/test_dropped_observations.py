@@ -1,0 +1,253 @@
+"""Observation weights that only keep or drop observations.
+
+Zero weights drop observations (the invalid windows of
+``Multitaper(valid_samples=...)``, the masked edges of a Morlet transform);
+every other observation keeps one common weight. Each reduced bin is then the
+plain average of the observations it keeps, so every measure, including those
+that count observations, must equal the measure of the coefficients with the
+dropped observations physically removed.
+"""
+
+import warnings
+
+import numpy as np
+import pytest
+
+from spectral_connectivity import Connectivity
+from spectral_connectivity.connectivity import _find_significant_frequencies
+
+# Measures of every kind: plain averages, the normalized and phase-lag
+# families, those that count observations, and those that factor or invert the
+# cross-spectral matrix.
+MEASURES = (
+    "power",
+    "cross_spectral_density",
+    "coherency",
+    "magnitude_squared_coherence",
+    "imaginary_coherence",
+    "phase_locking_value",
+    "corrected_imaginary_phase_locking_value",
+    "phase_lag_index",
+    "weighted_phase_lag_index",
+    "directed_phase_lag_index",
+    "debiased_squared_phase_lag_index",
+    "debiased_squared_weighted_phase_lag_index",
+    "pairwise_phase_consistency",
+    "partial_coherence",
+    "pairwise_spectral_granger_prediction",
+    "directed_transfer_function",
+)
+# The Wilson factorization iterates to a tolerance, so its inputs' rounding
+# (a weighted rather than a plain mean) moves it by more than an ulp.
+FACTORIZED = frozenset({"pairwise_spectral_granger_prediction", "directed_transfer_function"})
+
+
+def _coefficients(rng, shape):
+    return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+
+@pytest.fixture(scope="module")
+def dropped_trials():
+    """Three windows of six trials, each window dropping different trials."""
+    rng = np.random.default_rng(0)
+    coefficients = _coefficients(rng, (3, 6, 3, 16, 3))
+    valid = np.ones((3, 6), dtype=bool)
+    valid[0, [1, 4]] = False
+    valid[2, [0, 2, 3]] = False
+    weights = np.broadcast_to(valid[:, :, None, None, None], (*coefficients.shape[:-1], 1))
+    return coefficients, valid, weights
+
+
+def _measure(connectivity, measure):
+    with warnings.catch_warnings():
+        # Few observations for 3 signals: the rank warnings are expected.
+        warnings.simplefilter("ignore", UserWarning)
+        return getattr(connectivity, measure)()
+
+
+@pytest.mark.parametrize("measure", MEASURES)
+def test_dropped_trials_match_their_removal(dropped_trials, measure):
+    """Each window's value is the value of that window's kept trials alone."""
+    coefficients, valid, weights = dropped_trials
+    masked = _measure(Connectivity(coefficients, observation_weights=weights), measure)
+    rtol = 1e-7 if measure in FACTORIZED else 1e-11
+    for window in range(coefficients.shape[0]):
+        kept = Connectivity(coefficients[[window]][:, valid[window]])
+        np.testing.assert_allclose(
+            masked[window], _measure(kept, measure)[0], rtol=rtol, atol=1e-13
+        )
+
+
+def test_group_measures_match_their_removal(dropped_trials):
+    coefficients, valid, weights = dropped_trials
+    groups = ["a", "a", "b"]
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    canonical, _ = connectivity.canonical_coherence(groups)
+    fractions, _ = connectivity.global_coherence()
+    for window in range(coefficients.shape[0]):
+        kept = Connectivity(coefficients[[window]][:, valid[window]])
+        np.testing.assert_allclose(
+            canonical[window], kept.canonical_coherence(groups)[0][0], rtol=1e-10
+        )
+        np.testing.assert_allclose(
+            fractions[window], kept.global_coherence()[0][0], rtol=1e-10
+        )
+
+
+def test_n_valid_observations_counts_each_window(dropped_trials):
+    coefficients, valid, weights = dropped_trials
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    n_tapers = coefficients.shape[2]
+    assert connectivity.n_observations == 6 * n_tapers  # the raw count
+    counts = connectivity.n_valid_observations
+    assert counts.shape == (3, 9)  # (n_time_windows, n_nonnegative_frequencies)
+    expected = np.broadcast_to((valid.sum(axis=1) * n_tapers)[:, None], counts.shape)
+    np.testing.assert_array_equal(counts, expected)
+
+
+@pytest.mark.parametrize(
+    ("expectation_type", "shape"),
+    [
+        ("trials_tapers", (3, 9)),
+        ("tapers", (3, 6, 9)),
+        ("trials", (3, 3, 9)),
+        ("time_trials_tapers", (9,)),
+    ],
+)
+def test_n_valid_observations_without_weights_is_n_observations(
+    dropped_trials, expectation_type, shape
+):
+    coefficients, _, _ = dropped_trials
+    connectivity = Connectivity(coefficients, expectation_type=expectation_type)
+    counts = connectivity.n_valid_observations
+    assert counts.shape == shape
+    assert (counts == connectivity.n_observations).all()
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+        "pairwise_phase_consistency",
+    ],
+)
+def test_counting_measures_use_each_frequency_count(measure):
+    """Weights that drop different observations at different frequencies: each
+    (window, frequency) bin counts its own."""
+    rng = np.random.default_rng(1)
+    coefficients = _coefficients(rng, (2, 8, 2, 8, 2))
+    valid = rng.random((*coefficients.shape[:-1], 1)) > 0.3
+    valid[..., 0] |= np.arange(8)[None, :, None, None] < 2  # at least 2 trials each
+    connectivity = Connectivity(coefficients, observation_weights=valid.astype(float))
+    value = getattr(connectivity, measure)()
+    for window in range(2):
+        for frequency in range(5):
+            observations = valid[window, :, :, frequency, 0]
+            kept = Connectivity(
+                coefficients[window][observations][None, :, None, [frequency], :],
+                is_one_sided=True,
+            )
+            np.testing.assert_allclose(
+                value[window, frequency],
+                getattr(kept, measure)()[0, 0],
+                rtol=1e-11,
+                atol=1e-14,
+            )
+
+
+def test_a_scaled_drop_weight_is_still_only_a_drop():
+    """The kept observations' common weight need not be 1."""
+    rng = np.random.default_rng(2)
+    coefficients = _coefficients(rng, (1, 6, 2, 8, 2))
+    weights = np.full((*coefficients.shape[:-1], 1), 2.5)
+    weights[0, :2] = 0
+    scaled = Connectivity(coefficients, observation_weights=weights)
+    kept = Connectivity(coefficients[:, 2:])
+    np.testing.assert_allclose(
+        scaled.pairwise_phase_consistency(), kept.pairwise_phase_consistency(), rtol=1e-12
+    )
+
+
+def test_reweighting_observations_is_still_refused():
+    rng = np.random.default_rng(3)
+    coefficients = _coefficients(rng, (1, 6, 2, 8, 2))
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[0, 0] = 0.5
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    with pytest.raises(ValueError, match="non-uniform observation_weights"):
+        connectivity.pairwise_phase_consistency()
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+        "pairwise_phase_consistency",
+    ],
+)
+def test_a_bin_of_one_observation_is_nan_with_one_warning(measure):
+    rng = np.random.default_rng(4)
+    coefficients = _coefficients(rng, (2, 4, 1, 8, 2))
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[1, 1:] = 0  # window 1 keeps one trial of one taper
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    with pytest.warns(UserWarning, match="single observation") as record:
+        value = getattr(connectivity, measure)()
+    assert len([w for w in record if "finite-sample correction" in str(w.message)]) == 1
+    assert np.isnan(value[1, :, 0, 1]).all()
+    assert np.isfinite(value[0, 1:-1, 0, 1]).all()
+
+
+def test_a_bin_of_one_observation_warns_for_a_normalized_measure():
+    rng = np.random.default_rng(5)
+    coefficients = _coefficients(rng, (2, 4, 1, 8, 2))
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[1, 1:] = 0
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    with pytest.warns(UserWarning, match="single observation in some bins"):
+        connectivity.magnitude_squared_coherence()
+
+
+def test_zero_filled_dropped_observations_do_not_warn_of_zero_magnitude():
+    """A dropped observation may be all zero (a zero-filled invalid window);
+    the phase-locking normalization never averages it, so it does not warn."""
+    rng = np.random.default_rng(6)
+    coefficients = _coefficients(rng, (1, 5, 2, 8, 2))
+    coefficients[0, 0] = 0
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[0, 0] = 0
+    plv = Connectivity(coefficients, observation_weights=weights).phase_locking_value()
+    np.testing.assert_allclose(
+        plv, Connectivity(coefficients[:, 1:]).phase_locking_value(), rtol=1e-12
+    )
+
+
+@pytest.mark.parametrize("measure", ["delay", "group_delay"])
+def test_delay_significance_counts_the_kept_observations(measure):
+    """The zero-coherence test of each bin uses its kept count: the result is
+    that of the kept observations alone, and differs from what the raw count
+    would give."""
+    rng = np.random.default_rng(7)
+    n_samples, n_trials = 64, 12
+    source = rng.standard_normal((n_trials, n_samples))
+    lagged = np.roll(source, 2, axis=-1) + 1.5 * rng.standard_normal(source.shape)
+    coefficients = np.fft.fft(np.stack([source, lagged], axis=-1), axis=1)
+    coefficients = coefficients[None, :, None, :, :]  # (1, trials, 1, fft, 2)
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[0, 7:] = 0  # keep 7 of 12 trials
+    frequencies = np.fft.fftfreq(n_samples)
+    masked = Connectivity(coefficients, frequencies=frequencies, observation_weights=weights)
+    kept = Connectivity(coefficients[:, :7], frequencies=frequencies)
+    np.testing.assert_allclose(
+        np.asarray(getattr(masked, measure)(), dtype=float),
+        np.asarray(getattr(kept, measure)(), dtype=float),
+        rtol=1e-10,
+    )
+    # The raw count, 12, would select different frequencies.
+    coherency = kept.coherency()[..., [0], [1]]
+    assert not np.array_equal(
+        _find_significant_frequencies(coherency, 7),
+        _find_significant_frequencies(coherency, masked.n_observations),
+    )

@@ -2051,9 +2051,10 @@ def test_delay_significance_rejects_non_uniform_weights(measure):
         getattr(weighted, measure)(frequency_range=(10, 40))
 
 
-def test_morlet_boxcar_edge_mask_error_names_edge_mode():
-    """The debiased-measure guard must point at the knob that actually made the
-    weights non-uniform (edge masking), not at a kernel already in use."""
+def test_morlet_boxcar_edge_mask_counts_the_valid_bins_of_each_frequency():
+    """A boxcar edge mask only drops observations, so a measure that counts
+    them pools time with each frequency's count of valid bins: the result is
+    the one computed from those bins alone."""
     data = np.random.default_rng(925).standard_normal((400, 1, 2))
     with _short_smoothing_window():
         transform = MorletWavelet(
@@ -2067,8 +2068,23 @@ def test_morlet_boxcar_edge_mask_error_names_edge_mode():
     connectivity = Connectivity.from_transform(
         transform, expectation_type="time_trials_tapers"
     )
-    with pytest.raises(ValueError, match="edge_mode"):
-        connectivity.pairwise_phase_consistency()
+    valid = to_host(transform.valid_time_frequency)
+    assert (valid.sum(axis=0) < valid.shape[0]).all()  # every frequency drops bins
+    # The smoothing neighborhood's samples are correlated, which it reports.
+    with pytest.warns(UserWarning, match="assumes independent observations"):
+        ppc = connectivity.pairwise_phase_consistency()
+    coefficients = to_host(transform.fft())
+    n_kept = connectivity.n_valid_observations
+    for frequency in range(valid.shape[1]):
+        kept = Connectivity(
+            coefficients[valid[:, frequency]][..., [frequency], :],
+            expectation_type="time_trials_tapers",
+            is_one_sided=True,
+        )
+        assert n_kept[frequency] == kept.n_observations
+        np.testing.assert_allclose(
+            ppc[frequency], kept.pairwise_phase_consistency()[0], rtol=1e-12, atol=1e-15
+        )
 
 
 def test_morlet_frequency_smoothing_is_local_cross_spectral_average():

@@ -1095,7 +1095,11 @@ def test_global_coherence_of_weighted_nan_still_raises():
         connectivity = Connectivity(
             coefficients, expectation_type="tapers", observation_weights=weights
         )
-    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+    # That bin keeps a single observation, which the floor warning reports.
+    with (
+        pytest.warns(UserWarning, match="single observation in some bins"),
+        pytest.raises(ValueError, match=r"^global_coherence cannot be computed"),
+    ):
         connectivity.global_coherence()
 
 
