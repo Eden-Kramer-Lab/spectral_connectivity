@@ -3703,11 +3703,12 @@ class VARSpectrum:
     that norm (Frobenius, the largest over the windows) is at most 1e-10, and
     at least 2. The norm is at least ``rho ** k``, for ``rho`` the largest of
     :attr:`spectral_radius`, so the grid has at least ``2 * ln(1e10) / -ln(rho)``
-    (about ``46 / (1 - rho)``) bins; repeated eigenvalues, as in a chain of
-    signals with the same dynamics, decay more slowly and need more. That
-    grid also resolves every spectral peak: a pole at radius ``r <= rho``
-    gives a peak about ``(1 - r) * sampling_frequency / (2 pi)`` Hz wide on
-    each side, at least 7 bins. Wilson's own tolerance (the
+    bins (about ``46 / (1 - rho)`` for ``rho`` near 1); repeated eigenvalues,
+    as in a chain of signals with the same dynamics, decay more slowly and
+    need more. That grid also resolves the sharpest spectral peaks: a pole at
+    radius ``r`` near 1 gives a peak about ``(1 - r) * sampling_frequency /
+    (2 pi)`` Hz wide on each side, about 7 bins or more for ``r <= rho``.
+    Wilson's own tolerance (the
     ``minimum_phase_tolerance`` of :class:`Connectivity`, 1e-8 by default)
     then dominates the error. A grid that is a multiple of another
     transform's FFT length contains its frequencies.
