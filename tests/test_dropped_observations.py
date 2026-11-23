@@ -195,7 +195,8 @@ def test_a_bin_of_one_observation_is_nan_with_one_warning(measure):
     connectivity = Connectivity(coefficients, observation_weights=weights)
     with pytest.warns(UserWarning, match="single observation") as record:
         value = getattr(connectivity, measure)()
-    assert len([w for w in record if "finite-sample correction" in str(w.message)]) == 1
+    assert len(record) == 1  # one warning, naming this measure
+    assert str(record[0].message).startswith(measure)
     assert np.isnan(value[1, :, 0, 1]).all()
     assert np.isfinite(value[0, 1:-1, 0, 1]).all()
 

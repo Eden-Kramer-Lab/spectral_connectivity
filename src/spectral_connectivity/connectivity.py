@@ -640,11 +640,16 @@ def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[No
 
 _ABSENT = object()
 
-# The warnings of a bin that zero weights leave a single observation; the
-# jackknife ignores them in its replicates (see Connectivity.jackknife).
+# Where the warnings of bins that zero weights leave a single observation say
+# so; the jackknife ignores them in its replicates (see Connectivity.jackknife).
+_SINGLE_OBSERVATION_IN_SOME_BINS = (
+    "in some bins, where observation_weights give only one observation a nonzero "
+    "weight (see n_valid_observations)"
+)
+_SINGLE_KEPT_OBSERVATION = "observation_weights keep a single observation in"
 _SINGLE_KEPT_OBSERVATION_WARNINGS = (
-    ".*computed from a single observation in some bins",
-    ".*observation_weights keep a single observation in",
+    ".*" + re.escape(f"computed from a single observation {_SINGLE_OBSERVATION_IN_SOME_BINS}"),
+    ".*" + re.escape(_SINGLE_KEPT_OBSERVATION),
 )
 
 
@@ -1879,10 +1884,7 @@ class Connectivity:
         if self.n_observations < 2:
             where = "(n_observations == 1)"
         elif self._fewest_valid_observations() == 1:
-            where = (
-                "in some bins, where observation_weights give only one observation "
-                "a nonzero weight (see n_valid_observations)"
-            )
+            where = _SINGLE_OBSERVATION_IN_SOME_BINS
         else:
             return
         remedies = self._more_observations_remedies()
@@ -1924,12 +1926,7 @@ class Connectivity:
         remedies.append("fewer signals")
         dropped = n_observations < self.n_observations
         if n_observations == 1:
-            where = (
-                "in some bins, where observation_weights give only one observation "
-                "a nonzero weight (see n_valid_observations)"
-                if dropped
-                else "(n_observations == 1)"
-            )
+            where = _SINGLE_OBSERVATION_IN_SOME_BINS if dropped else "(n_observations == 1)"
             floor = (
                 f"is computed from a single observation {where}. The "
                 "cross-spectral matrix then has rank one, so its first component "
@@ -2422,29 +2419,46 @@ class Connectivity:
         largest = xp.max(flattened, axis=-1, keepdims=True)
         return bool(xp.all((flattened == largest) | (flattened == 0)))
 
-    @cached_property
-    def _valid_observation_counts(self) -> BackendArray | None:
-        """Observations with nonzero weight in each reduced bin.
+    def _valid_counts_over(self, axes: tuple[int, ...]) -> BackendArray:
+        """Observations with nonzero weight over the observation ``axes``.
 
-        Shape ``(*kept observation axes, n_fft_samples)``; ``None`` without
-        observation weights, when every bin keeps all :attr:`n_observations`.
+        Shape: the other observation axes, then ``n_fft_samples``. Only with
+        observation weights.
         """
-        if self._observation_weights is None:
-            return None
+        assert self._observation_weights is not None
         counts: BackendArray = xp.count_nonzero(
-            self._observation_weights[..., 0] > 0, axis=self._expectation_axes
+            self._observation_weights[..., 0] > 0, axis=axes
         )
         return counts
 
-    def _fewest_valid_observations(self) -> int:
-        """The fewest observations any reduced bin keeps, ignoring the bins
-        that keep none (every measure is NaN there); 0 if none keeps any."""
-        if self._observation_weights is None:
-            return self.n_observations
-        counts = self._valid_observation_counts
-        assert counts is not None
+    @cached_property
+    def _valid_observation_counts(self) -> BackendArray:
+        """Observations with nonzero weight in each reduced bin, ``(*kept
+        observation axes, n_fft_samples)``; only with observation weights."""
+        return self._valid_counts_over(self._expectation_axes)
+
+    @staticmethod
+    def _fewest_positive(counts: BackendArray) -> int:
+        """The smallest positive count, ignoring the bins that keep none
+        (every measure is NaN there); 0 if none keeps any."""
         kept = counts[counts > 0]
         return int(xp.min(kept)) if kept.size else 0
+
+    def _fewest_valid_observations(self) -> int:
+        """The fewest observations any reduced bin keeps (see
+        :meth:`_fewest_positive`); :attr:`n_observations` without weights."""
+        if self._observation_weights is None:
+            return self.n_observations
+        return self._fewest_positive(self._valid_observation_counts)
+
+    @staticmethod
+    def _uses_observations(fewest: int, n_observations: int, where: str) -> str:
+        """ "uses {n} observations", or "uses as few as {n} ... in some bins" with
+        ``where`` saying where the counts are when zero weights drop some."""
+        noun = f"observation{'' if fewest == 1 else 's'}"
+        if fewest == n_observations:
+            return f"uses {fewest} {noun}"
+        return f"uses as few as {fewest} {noun} in some bins ({where})"
 
     def _counts_for_correction(self, measure: str, dtype: DTypeLike) -> int | BackendArray:
         """The observation count of each bin of a measure that counts them.
@@ -2460,14 +2474,13 @@ class Connectivity:
         if self._observation_weights is None:
             return self.n_observations
         counts = self._valid_observation_counts
-        assert counts is not None
         n_nonnegative = self._nonnegative_frequency_count(counts.shape[-1])
         counts = counts[..., :n_nonnegative, xp.newaxis, xp.newaxis]
         single = counts == 1
         if bool(xp.any(single)):
             n_single, n_bins = int(xp.count_nonzero(single)), int(single.size)
             warnings.warn(
-                f"{measure}: observation_weights keep a single observation in "
+                f"{measure}: {_SINGLE_KEPT_OBSERVATION} "
                 f"{n_single} of {n_bins} bins (one per kept observation index and "
                 "frequency), where its finite-sample correction, which needs two, "
                 "is undefined, so it is NaN there. Connectivity.n_valid_observations "
@@ -2562,13 +2575,13 @@ class Connectivity:
         [20, 20, 15, 20]
         """
         n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[3])
-        counts = None if self._observation_weights is None else self._valid_observation_counts
-        if counts is None:
+        if self._observation_weights is None:
             kept_shape = tuple(
                 self._fourier_coefficients.shape[axis] for axis in self._kept_observation_axes
             )
             return np.full((*kept_shape, n_nonnegative), self.n_observations, dtype=np.intp)
-        return np.asarray(to_numpy(counts[..., :n_nonnegative]), dtype=np.intp)
+        counts = self._valid_observation_counts[..., :n_nonnegative]
+        return np.asarray(to_numpy(counts), dtype=np.intp)
 
     @property
     def n_signals(self) -> int:
@@ -3527,11 +3540,8 @@ class Connectivity:
         # unrelated to the data. (A single observation already warned above.)
         # With observations dropped by zero weights, the bin keeping fewest.
         if 2 <= n_observations < self.n_signals:
-            uses = (
-                f"uses {n_observations} observations"
-                if n_observations == self.n_observations
-                else f"uses as few as {n_observations} observations in some bins "
-                "(see n_valid_observations)"
+            uses = self._uses_observations(
+                n_observations, self.n_observations, "see n_valid_observations"
             )
             warnings.warn(
                 f"partial_coherence {uses} (the "
@@ -3723,9 +3733,10 @@ class Connectivity:
         fewest = n_observations
         if self._observation_weights is not None:
             observation_weights = self._observation_weights[..., non_negative_frequencies, :]
-            valid_counts = xp.count_nonzero(observation_weights[..., 0] > 0, axis=(1, 2))
-            kept = valid_counts[valid_counts > 0]
-            fewest = int(xp.min(kept)) if kept.size else n_observations
+            # Whatever expectation_type is: canonical coherence always pools
+            # each window's trials and tapers.
+            valid_counts = self._valid_counts_over((1, 2))[..., non_negative_frequencies]
+            fewest = self._fewest_positive(valid_counts) or n_observations
         # When a group pair has more signals than observations, the two groups'
         # observation subspaces must intersect and the value is forced to 1 for
         # any data.
@@ -3736,11 +3747,11 @@ class Connectivity:
         ]
         if degenerate_pairs:
             pairs = ", ".join(f"({first}, {second})" for first, second in degenerate_pairs)
-            uses = (
-                f"uses {fewest} observation{'' if fewest == 1 else 's'}"
-                if fewest == n_observations
-                else f"uses as few as {fewest} observation{'' if fewest == 1 else 's'} "
-                "in some bins (see n_valid_observations)"
+            uses = self._uses_observations(
+                fewest,
+                n_observations,
+                "time windows and frequencies whose trials x tapers observation_weights "
+                "partly drop",
             )
             warnings.warn(
                 f"canonical_coherence {uses} (trials x "
@@ -4841,7 +4852,7 @@ class Connectivity:
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
     def _phase_locking_value(
-        self, dtype: DTypeLike | None = None
+        self, dtype: DTypeLike | None = None, *, warn_single_observation: bool = True
     ) -> NDArray[np.complexfloating]:
         # Normalize each Fourier coefficient to unit magnitude, then reuse the
         # batched reduced cross-spectral matmul: because
@@ -4853,7 +4864,8 @@ class Connectivity:
         # O(observations * signals**2). Kept on the active namespace (xp); the
         # public ``phase_locking_value`` wrapper converts to NumPy.
         self._validate_multiple_signals()
-        self._warn_single_observation_degenerate("phase_locking_value")
+        if warn_single_observation:
+            self._warn_single_observation_degenerate("phase_locking_value")
         # Normalize at the computation dtype (``self._dtype``, complex128 by
         # default): the previous materialized path formed the outer product at
         # that dtype, so normalizing complex64 inputs at their own precision here
@@ -5571,15 +5583,9 @@ class Connectivity:
         # Vinck's closed form (n m**2 - 1) / (n - 1) takes it as 1. With
         # observations dropped by zero weights, n is each bin's kept count and
         # the moments are means over the kept observations.
-        if isinstance(n_observations, int):
+        # A bin of one kept observation divides by 0; it is NaN below.
+        with np.errstate(divide="ignore", invalid="ignore"):
             debiased = (n_observations * mean_sign**2 - mean_nonzero) / (n_observations - 1.0)
-        else:
-            debiased = _divide_where(
-                n_observations * mean_sign**2 - mean_nonzero,
-                n_observations - 1.0,
-                n_observations >= 2,
-                xp.nan,
-            )
         # Where there is no phase lag (in-phase signals, the zeroed diagonal)
         # the signs are rounding noise; there is no lag to estimate, so 0.
         result = xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
@@ -5705,7 +5711,8 @@ class Connectivity:
         True
         """
         self._validate_debiasing_observations("pairwise_phase_consistency")
-        phase_locking_value = self._phase_locking_value()
+        # A bin of a single observation is reported once, as PPC's.
+        phase_locking_value = self._phase_locking_value(warn_single_observation=False)
         n_observations = self._counts_for_correction(
             "pairwise_phase_consistency", phase_locking_value.real.dtype
         )
@@ -5719,13 +5726,13 @@ class Connectivity:
                 n_observations**2 - n_observations
             )
             return ppc.real
-        ppc = _divide_where(
+        ppc_values: NDArray[np.floating] = _divide_where(
             (plv_sum * plv_sum.conjugate()).real - n_observations,
             n_observations**2 - n_observations,
             n_observations >= 2,
             xp.nan,
         )
-        return self._nan_where_too_few(ppc, n_observations)
+        return ppc_values
 
     @staticmethod
     def _nan_where_too_few(
