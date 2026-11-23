@@ -507,6 +507,8 @@ def test_the_sampling_frequency_is_required_by_its_name():
         VARSpectrum(np.zeros((1, 2, 2)))  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="sampling_frequency"):
         VARSpectrum(np.zeros((1, 2, 2)), fs=100)  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match=r"^VARSpectrum\(\) takes only the model by position"):
+        VARSpectrum(np.zeros((1, 2, 2)), None, 100)  # type: ignore[misc]
 
 
 def test_the_model_is_a_read_only_snapshot():
@@ -626,7 +628,8 @@ def test_from_var_refuses_what_varspectrum_and_the_flag_refuse():
         Connectivity.from_var(
             coefficients, sampling_frequency=_SAMPLING_FREQUENCY, expectation_type="trials"
         )
-    with pytest.raises(TypeError, match="positional arguments"):
+    match = r"from_var\(\) takes only the model by position .* sampling_frequency=500"
+    with pytest.raises(TypeError, match=match):
         Connectivity.from_var(coefficients, noise_covariance, _SAMPLING_FREQUENCY)  # type: ignore[misc]
 
 

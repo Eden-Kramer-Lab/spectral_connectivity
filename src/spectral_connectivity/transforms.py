@@ -1,13 +1,16 @@
 """Transforms time domain signals to the frequency domain."""
 
 import contextlib
+import functools
+import inspect
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from logging import getLogger
 from typing import (
     TYPE_CHECKING,
     Any,
     Literal,
+    ParamSpec,
     Protocol,
     TypedDict,
     TypeVar,
@@ -47,6 +50,8 @@ from spectral_connectivity.utils import (
 
 logger = getLogger(__name__)
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 # Element type of a dtype-preserving array helper (real or complex input).
 _ScalarT = TypeVar("_ScalarT", bound=np.generic)
 
@@ -3527,6 +3532,39 @@ _VAR_COEFFICIENTS_LAYOUT = (
 _VAR_NOISE_LAYOUT = "(n_signals, n_signals) or (n_time_windows, n_signals, n_signals)"
 
 
+def _var_settings_by_keyword(function: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Answer a setting passed by position, ``VARSpectrum(A, Sigma, 500)``,
+    with the keyword to use instead of Python's count of positional arguments.
+
+    Only the model (``coefficients``, ``noise_covariance``) is positional; the
+    signature is unchanged for ``inspect``.
+    """
+    parameters = list(inspect.signature(function).parameters.values())
+    n_positional = sum(
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
+    )
+
+    @functools.wraps(function)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        if len(args) > n_positional:
+            owner = args[0] if parameters[0].name == "self" else None
+            name = (
+                type(owner).__name__
+                if owner is not None
+                else getattr(args[0], "__name__", "") + "." + function.__name__
+            )
+            msg = (
+                f"{name}() takes only the model by position (coefficients, "
+                f"noise_covariance), but got {args[n_positional]!r} after them. Pass "
+                "the settings by keyword, e.g. sampling_frequency=500 (with "
+                "noise_covariance=None for identity innovations)."
+            )
+            raise TypeError(msg)
+        return function(*args, **kwargs)
+
+    return wrapper
+
+
 def _real_var_array(value: Any, name: str, layout: str) -> NDArray[np.float64]:
     """``value`` as a finite real float64 host array, or ``TypeError``/``ValueError``."""
     array = to_numpy(
@@ -3767,6 +3805,7 @@ class VARSpectrum:
     is_exact_spectrum = True
 
     @reject_sampling_frequency_aliases
+    @_var_settings_by_keyword
     def __init__(
         self,
         coefficients: NDArray[np.floating],

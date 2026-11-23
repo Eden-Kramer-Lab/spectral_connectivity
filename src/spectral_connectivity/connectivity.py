@@ -60,7 +60,7 @@ from spectral_connectivity.statistics import (
     coherence_significance_pvalue,
     jackknife_confidence_interval,
 )
-from spectral_connectivity.transforms import VARSpectrum
+from spectral_connectivity.transforms import VARSpectrum, _var_settings_by_keyword
 from spectral_connectivity.utils import (
     BackendArray,
     _validated_flag,
@@ -1623,6 +1623,7 @@ class Connectivity:
         )
 
     @classmethod
+    @_var_settings_by_keyword
     def from_var(
         cls,
         coefficients: NDArray[np.floating],
