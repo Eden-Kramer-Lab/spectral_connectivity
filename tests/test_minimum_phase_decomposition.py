@@ -21,7 +21,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
 )
 from tests._backend_helpers import ON_GPU, to_device, to_host, xp
-from tests._var_oracle import _analytic_var
+from tests._var_oracle import _analytic_var, _dense_stable_var
 
 
 def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
@@ -613,12 +613,14 @@ def test__check_convergence_tracks_extra_batch_dims():
 
 
 def test__get_initial_conditions():
-    """The start is the upper-triangular Cholesky factor of the zero-lag matrix.
+    """The start is the upper-triangular square root ``U`` of the zero-lag
+    matrix with ``U U^T = S0``, and the start for ``D S D`` is ``D U``.
 
     Each window's spectrum is ``S(f) = S0 + B e^{-iw} + B^T e^{iw}`` (Hermitian),
     whose inverse-FFT zero lag is exactly the positive-definite ``S0`` with
-    non-zero off-diagonals. The returned factor is ``R = cholesky(S0).T``: upper
-    triangular with a positive diagonal and ``R^T R = S0``.
+    non-zero off-diagonals. ``cholesky(S0).T`` is also upper triangular but has
+    ``U^T U = S0``, and its start for ``D S D`` is ``U D``, which is not the
+    start of the rescaled factor ``D G``.
     """
     n_time_samples, n_fft_samples, n_signals = 3, 11, 2
     omega = 2 * np.pi * np.arange(n_fft_samples) / n_fft_samples
@@ -638,14 +640,19 @@ def test__get_initial_conditions():
     minimum_phase_factor = to_host(_get_initial_conditions(to_device(cross_spectral_matrix)))
 
     assert minimum_phase_factor.shape == (n_time_samples, 1, n_signals, n_signals)
-    expected = np.linalg.cholesky(zero_lag).swapaxes(-1, -2)[:, np.newaxis]
-    np.testing.assert_allclose(minimum_phase_factor, expected, rtol=1e-12)
-    # Upper triangular with a positive diagonal, and R^T R reproduces S0.
+    # Upper triangular with a positive diagonal, and U U^T reproduces S0.
     np.testing.assert_array_equal(minimum_phase_factor[..., 1, 0], 0.0)
     assert np.all(np.diagonal(minimum_phase_factor, axis1=-2, axis2=-1) > 0)
     np.testing.assert_allclose(
-        minimum_phase_factor.swapaxes(-1, -2) @ minimum_phase_factor,
+        minimum_phase_factor @ minimum_phase_factor.swapaxes(-1, -2),
         zero_lag[:, np.newaxis],
+        rtol=1e-12,
+    )
+    scale = np.array([1e-3, 1e3])
+    rescaled = scale[:, np.newaxis] * cross_spectral_matrix * scale[np.newaxis, :]
+    np.testing.assert_allclose(
+        to_host(_get_initial_conditions(to_device(rescaled))),
+        scale[:, np.newaxis] * minimum_phase_factor,
         rtol=1e-12,
     )
 
@@ -1002,20 +1009,22 @@ def test_winding_number_is_not_counted_where_the_phase_jumps_between_bins():
     assert np.isnan(winding[1])
 
 
-def test_unscaled_factor_of_signals_of_very_different_power_warns(monkeypatch):
-    """Without the scaling to unit power, the exact spectrum of a chain of
-    nearly integrating signals (mean powers 50 and 3e6) converges to a factor
-    that is not minimum phase, which the check reports; with it, the same
-    spectrum factors without a warning."""
-    coefficients = np.array([[[0.99, 0.0, 0.0], [0.2, 0.99, 0.0], [0.0, 0.2, 0.99]]])
-    spectrum = _analytic_var_spectrum(coefficients, np.eye(3), n_fft=8192)
-    pair = to_device(spectrum[..., [0, 2], :][..., [0, 2]])
+def test_factor_from_a_start_that_is_not_covariant_warns(monkeypatch):
+    """Started from ``chol(R0)^T`` (``U^T U = R0``), the exact spectrum of
+    this dense VAR of signals of comparable power converges to a factor whose
+    determinant winds once around zero; the check reports it. From the
+    covariant start (``U U^T = R0``) it factors without a warning."""
+    coefficients, noise_covariance = _dense_stable_var(3, 1, 0.99, seed=857449258)
+    spectrum = to_device(_analytic_var_spectrum(coefficients, noise_covariance, n_fft=4096))
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        minimum_phase_decomposition(pair)
+        minimum_phase_decomposition(spectrum)
     monkeypatch.setattr(
-        mpd_module, "_signal_scale", lambda csm: xp.ones(csm.shape[:-3] + csm.shape[-1:])
+        mpd_module,
+        "_reverse_cholesky",
+        lambda matrices: xp.linalg.cholesky(matrices).swapaxes(-1, -2),
     )
-    with pytest.warns(UserWarning, match="not minimum phase for 1 of 1"):
-        minimum_phase_decomposition(pair)
+    with pytest.warns(UserWarning, match="not minimum phase for 1 of 1 sub-spectrum"):
+        factor = minimum_phase_decomposition(spectrum)
+    assert to_host(mpd_module._determinant_winding_number(factor))[0] == pytest.approx(-1)

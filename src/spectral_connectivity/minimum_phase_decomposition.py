@@ -142,14 +142,32 @@ def _signal_scale(
     return xp.sqrt(xp.where(has_power, power, 1))
 
 
+def _reverse_cholesky(matrices: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Upper-triangular ``U`` with a positive diagonal and ``U Uᵀ = M``.
+
+    ``J chol(J M J) J`` for the exchange matrix ``J``, which reverses the
+    order of the signals; batched over the leading axes.
+    """
+    flipped: NDArray[np.floating] = xp.linalg.cholesky(matrices[..., ::-1, ::-1])
+    return flipped[..., ::-1, ::-1]
+
+
 def _get_initial_conditions(
     cross_spectral_matrix: NDArray[np.complexfloating],
     n_fft_samples: int | None = None,
 ) -> NDArray[np.floating]:
     """Generate initial guess for minimum phase factor using Cholesky decomposition.
 
-    Provides an initial estimate for the Wilson algorithm by taking the Cholesky
-    decomposition of the zero-lag cross-spectral matrix (real part of inverse FFT).
+    Provides an initial estimate for the Wilson algorithm: the upper-triangular
+    ``U`` with a positive diagonal and ``U Uᵀ = R0``, where ``R0`` is the
+    zero-lag cross-spectral matrix (real part of the inverse FFT). It is the
+    "reverse" Cholesky factor ``J chol(J R0 J) J``, with ``J`` the exchange
+    matrix. For a positive diagonal ``D`` the start for ``D R0 D`` is then
+    ``D U``, as the factor of ``D S D`` is ``D G``, so the iteration is
+    covariant under rescaling the signals. The transposed lower Cholesky
+    factor ``chol(R0)ᵀ`` satisfies ``Uᵀ U = R0`` instead: its start for
+    ``D R0 D`` is ``U D``, and for some spectra of signals of comparable power
+    the iteration then converged to a factor that is not minimum phase.
     Falls back to a deterministic positive-definite start if Cholesky fails.
 
     Parameters
@@ -167,7 +185,7 @@ def _get_initial_conditions(
     -------
     minimum_phase_factor : NDArray[floating],
         shape (n_time_samples, ..., 1, n_signals, n_signals)
-        Initial guess for minimum phase square root matrix. Real-valued (the
+        Initial guess for minimum phase square root matrix. Real-valued (a
         Cholesky factor of the real zero-lag matrix); the caller promotes it to
         the complex working dtype.
 
@@ -188,7 +206,7 @@ def _get_initial_conditions(
     else:
         zero_lag = irfft(cross_spectral_matrix, n=n_fft_samples, axis=-3)[..., 0:1, :, :]
     try:
-        return xp.linalg.cholesky(zero_lag).swapaxes(-1, -2)
+        return _reverse_cholesky(zero_lag)
     except xp.linalg.LinAlgError:
         # One or more sub-spectra are not positive-definite (rank-deficient /
         # duplicated channels). Replace ONLY those with a deterministic PD start
@@ -228,7 +246,7 @@ def _get_initial_conditions(
         not_positive_definite = xp.zeros(flat_zero_lag.shape[0], dtype=bool)
         for index in range(flat_zero_lag.shape[0]):
             try:
-                xp.linalg.cholesky(flat_zero_lag[index])
+                _reverse_cholesky(flat_zero_lag[index])
             except xp.linalg.LinAlgError:  # noqa: PERF203 -- per-unit on purpose (see above)
                 not_positive_definite[index] = True
         # Deterministic well-conditioned PD start for the failed units. The
@@ -247,7 +265,7 @@ def _get_initial_conditions(
         deterministic_start = n_signals * xp.eye(n_signals, dtype=zero_lag.dtype)
         safe_flat = flat_zero_lag.copy()
         safe_flat[failed_indices] = deterministic_start
-        return xp.linalg.cholesky(safe_flat.reshape(zero_lag.shape)).swapaxes(-1, -2)
+        return _reverse_cholesky(safe_flat.reshape(zero_lag.shape))
 
 
 def _get_causal_signal(
@@ -828,15 +846,22 @@ def minimum_phase_decomposition(
     (complex-valued signals), take the two-sided iteration, which does about
     twice the arithmetic per iteration.
 
-    Each sub-spectrum is factored with its signals scaled to unit mean power:
-    the iteration factors ``D S D``, with ``D`` diagonal and ``D_ii`` one over
-    the square root of the mean of ``S_ii`` over frequency, and returns
-    ``D⁻¹ G'`` for its factor ``G'``. That is the factor of ``S`` exactly, so
-    the result does not depend on the signals' units or relative scales. A
-    signal with zero or non-finite power keeps a scale of 1.
+    Every factor ``G`` with ``G Gᴴ = S`` is a fixed point of the iteration;
+    which one it reaches depends on where it starts. It starts from the
+    upper-triangular ``U`` with ``U Uᵀ = R0`` for the zero-lag matrix ``R0``
+    (the reverse Cholesky factor), so the factorization is covariant under
+    rescaling the signals: for a positive diagonal ``D`` the factor of
+    ``D S D`` is ``D G``, up to rounding and the convergence tolerance. The
+    transposed Cholesky factor ``chol(R0)ᵀ``, which satisfies ``Uᵀ U = R0``
+    instead, is the start of FieldTrip's ``sfactorization_wilson.m`` (MATLAB's
+    ``chol``) and of this function before 3.0; it is not covariant. As
+    preconditioning, each sub-spectrum is also factored with its signals
+    scaled to unit mean power: the iteration factors ``D S D``, with ``D_ii``
+    one over the square root of the mean of ``S_ii`` over frequency, and
+    returns ``D⁻¹ G'`` for its factor ``G'``. A signal with zero or
+    non-finite power keeps a scale of 1.
 
-    Every factor ``G`` with ``G Gᴴ = S`` is a fixed point of the iteration, so
-    each converged factor is then checked, on a best-effort basis, for being
+    Each converged factor is then checked, on a best-effort basis, for being
     minimum phase. Such a factor is causal: its impulse response reaches the
     negative lags only by wrapping around the grid, as the spectrum's
     autocovariance does past a quarter of the grid; and its determinant does
@@ -887,15 +912,20 @@ def minimum_phase_decomposition(
        not affected.
 
     .. versionchanged:: 3.0
-       Signals are scaled to unit mean power before the iteration. Every
-       factor ``G`` with ``G Gᴴ = S`` is a fixed point of the iteration, and
-       without the scaling, signals whose powers differ by orders of
-       magnitude could converge to one that is not minimum phase, with no
-       warning and ``G Gᴴ`` within 1e-9 of ``S``. All directed measures were
-       then wrong: for a chain of three nearly integrating signals (mean
-       powers 50, 1e4 and 3e6), pairwise spectral Granger missed its true
-       values by up to 6.5 and conditional Granger by up to 3.4, and both
-       differed between the raw and the standardized signals.
+       The iteration starts from ``U`` with ``U Uᵀ = R0`` instead of
+       ``chol(R0)ᵀ``, and the signals are scaled to unit mean power. From the
+       old start the iteration could converge, with no warning and ``G Gᴴ``
+       within 1e-9 of ``S``, to a factor that is not minimum phase, and every
+       directed measure was then wrong: for 9 of 400 random dense VARs (2-6
+       signals of comparable power, companion-matrix radius 0.8-0.99, exact
+       spectra; all 9 at 0.99), DTF and PDC missed their true values by
+       0.3-0.8, and for a chain of three nearly integrating signals (mean
+       powers 50, 1e4 and 3e6) pairwise spectral Granger missed by up to 6.5
+       and differed between the raw and the standardized signals. Without the
+       scaling, the covariant start still missed conditional Granger by 1e-4
+       for that chain with its signals rescaled by 0.1, 1 and 10, and
+       conditional Granger by 4e-3 and PDC by 0.4 with them rescaled by 1e-3,
+       1 and 1e3.
 
     References
     ----------
@@ -978,9 +1008,9 @@ def _minimum_phase_factor_and_flags(
             ..., : n_fft_samples // 2 + 1, :, :
         ]
     # Factor D S D, with D scaling every signal to unit mean power, and return
-    # D^-1 G for its factor G: the factor of S, exactly. Without it, signals
-    # whose powers differ by orders of magnitude could converge to a factor
-    # that reproduces S but is not minimum phase (see Notes).
+    # D^-1 G for its factor G. The covariant start makes that the factor of S
+    # up to rounding; the scaling preconditions the iteration for signals
+    # whose powers differ by orders of magnitude (see Notes).
     signal_scale = _signal_scale(cross_spectral_matrix)
     working_cross_spectral_matrix = (
         working_cross_spectral_matrix

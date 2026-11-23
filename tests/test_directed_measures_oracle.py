@@ -1030,3 +1030,64 @@ def test_directed_measures_of_signals_of_very_different_power_match_oracle(
         np.testing.assert_allclose(
             result, np.swapaxes(expected[measure], -1, -2), atol=1e-5, rtol=0, err_msg=measure
         )
+
+
+# Dense VARs of signals of comparable power (mean powers within a factor of 16)
+# whose factorization once converged, with no warning and a factor reproducing
+# the spectrum, to a factor that is not minimum phase: its determinant wound
+# once around zero, and DTF and PDC missed their true values by 0.3-0.8. The
+# start of the iteration then satisfied ``U^T U = R0`` instead of ``U U^T = R0``
+# for the zero-lag matrix ``R0``, which is not covariant under rescaling the
+# signals; the second model, rescaled, was factored correctly before the
+# signals were scaled to unit power and wrongly after.
+_DENSE_VARS_ONCE_FACTORED_WRONGLY = pytest.mark.parametrize(
+    ("model", "scales"),
+    [
+        pytest.param(
+            {"n_signals": 3, "n_lags": 1, "spectral_radius": 0.99, "seed": 857449258},
+            (1.0, 1.0, 1.0),
+            id="var1",
+        ),
+        pytest.param(
+            {"n_signals": 3, "n_lags": 3, "spectral_radius": 0.99, "seed": 357460746},
+            (60.2, 17.8, 82.8),
+            id="var3_rescaled",
+        ),
+    ],
+)
+
+
+@_DENSE_VARS_ONCE_FACTORED_WRONGLY
+@_BOTH_FACTORIZATION_PATHS
+def test_transfer_function_measures_of_dense_vars_match_closed_form(
+    model, scales, conjugate_symmetric
+):
+    """The factor of these spectra is minimum phase, so DTF, PDC, and gPDC
+    match the closed forms of the model at the default tolerance."""
+    coefficients, noise_covariance = _dense_stable_var(**model)
+    scale = np.diag(scales)
+    coefficients = scale @ coefficients @ np.linalg.inv(scale)
+    noise_covariance = scale @ noise_covariance @ scale
+    A, H, spectrum = _analytic_var(coefficients, noise_covariance, 4096)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            spectrum, conjugate_symmetric=conjugate_symmetric
+        )
+    )
+    expected = _analytic_directed_measures(A, H, noise_covariance)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        for measure in (
+            "directed_transfer_function",
+            "partial_directed_coherence",
+            "generalized_partial_directed_coherence",
+        ):
+            result = np.asarray(getattr(connectivity, measure)())[0]
+            np.testing.assert_allclose(
+                result,
+                np.swapaxes(expected[measure], -1, -2),
+                atol=1e-6,
+                rtol=0,
+                err_msg=measure,
+            )
