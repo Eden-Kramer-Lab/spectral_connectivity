@@ -8,10 +8,10 @@ dependencies:
 - "numpy >= 1.24, <3.0"
 - "scipy >= 1.11.1"
 - "xarray >= 2023.1"
-- "matplotlib >= 3.7"
-- nitime
 
 # Development and testing (match the `dev` extra in pyproject.toml)
+- "matplotlib >= 3.7"  # the tutorials
+- nitime
 - "pytest >= 8.0"
 - "pytest-cov >= 4.1"
 - "syrupy >= 4.0"

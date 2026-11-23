@@ -50,7 +50,6 @@ dependencies = [
     "numpy>=1.24,<3.0",
     "scipy>=1.11.1",  # false_discovery_control (statistics.py); 1.11.0 is yanked
     "xarray>=2023.1",
-    "matplotlib>=3.7"
 ]
 
 [project.optional-dependencies]
@@ -65,6 +64,8 @@ dev = [
     "mypy>=1.11",  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
     "scipy-stubs",
     "numpydoc>=1.6",
+    # The tutorial notebooks, which CI executes, plot with it.
+    "matplotlib>=3.7",
     # NetCDF engines for the result round-trip tests (xarray's default writers).
     "netCDF4",
     "h5netcdf",
@@ -72,6 +73,8 @@ dev = [
 ]
 # CuPy 13 added cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
 gpu = ["cupy-cuda12x>=13.0"]
+# Plotting for the README example and the tutorials; the package never imports it.
+plot = ["matplotlib>=3.7"]
 
 [dependency-groups]
 # `uv sync` installs the package in editable mode plus this group. Keep
@@ -85,6 +88,8 @@ dev = [
     "mypy>=1.11",
     "scipy-stubs",
     "numpydoc>=1.6",
+    # The tutorial notebooks, which CI executes, plot with it.
+    "matplotlib>=3.7",
     # NetCDF engines for the result round-trip tests (xarray's default writers).
     "netCDF4",
     "h5netcdf",
