@@ -308,3 +308,37 @@ def test_jackknife_is_nan_in_a_bin_of_too_few_observations():
         result = connectivity.jackknife("magnitude_squared_coherence")
     assert np.isnan(result.standard_error[1]).all()
     assert np.isfinite(result.standard_error[0, :, 0, 1]).all()
+
+
+def test_jackknife_refuses_weights_that_drop_a_unit_at_some_frequencies():
+    rng = np.random.default_rng(10)
+    coefficients = _coefficients(rng, (1, 5, 1, 8, 2))
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[0, 0, 0, :3] = 0  # trial 0 is dropped at three frequencies only
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    with pytest.raises(ValueError, match="at some frequencies only"):
+        connectivity.jackknife("magnitude_squared_coherence")
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "power",
+        "magnitude_squared_coherence",
+        "phase_locking_value",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+        "pairwise_phase_consistency",
+    ],
+)
+def test_drop_weights_keep_the_working_precision(measure):
+    """complex64 coefficients give the dtype with drop weights as without."""
+    rng = np.random.default_rng(11)
+    coefficients = _coefficients(rng, (1, 6, 2, 8, 2)).astype(np.complex64)
+    weights = np.ones((*coefficients.shape[:-1], 1), dtype=np.float32)
+    weights[0, 0] = 0
+    masked = getattr(
+        Connectivity(coefficients, dtype=np.complex64, observation_weights=weights), measure
+    )()
+    plain = getattr(Connectivity(coefficients, dtype=np.complex64), measure)()
+    assert masked.dtype == plain.dtype

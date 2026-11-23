@@ -2250,7 +2250,10 @@ class Connectivity:
         )
         if weights is None:
             return cross_spectral_matrix / n_observations
-        denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis]
+        # At the product's precision, so the weights do not promote it.
+        denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis].astype(
+            cross_spectral_matrix.real.dtype, copy=False
+        )
         return _divide_where(cross_spectral_matrix, denominator, denominator > 0, xp.nan)
 
     @cached_property
@@ -2423,12 +2426,13 @@ class Connectivity:
         kept = counts[counts > 0]
         return int(xp.min(kept)) if kept.size else 0
 
-    def _counts_for_correction(self, measure: str) -> int | BackendArray:
+    def _counts_for_correction(self, measure: str, dtype: DTypeLike) -> int | BackendArray:
         """The observation count of each bin of a measure that counts them.
 
         ``n_observations`` without observation weights; otherwise each bin's
         count of kept observations, shaped ``(..., n_nonnegative_frequencies,
-        1, 1)`` to broadcast against a pairwise measure. A bin with fewer than
+        1, 1)`` to broadcast against a pairwise measure, in the measure's real
+        ``dtype`` so they do not promote it. A bin with fewer than
         two leaves the finite-sample correction undefined: the caller makes it
         NaN. This warns once if a bin keeps a single observation; a bin that
         keeps none is NaN in every measure, which the transform reports.
@@ -2452,7 +2456,7 @@ class Connectivity:
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
-        return counts
+        return counts.astype(dtype)
 
     @property
     def _expectation_axes(self) -> tuple[int, ...]:
@@ -2482,7 +2486,9 @@ class Connectivity:
             ``Multitaper(valid_samples=...)`` marks invalid; see
             :attr:`n_valid_observations`) and is not reduced when the
             transform's observations are correlated (see
-            ``observations_are_independent``).
+            ``observations_are_independent``). Use
+            :attr:`n_valid_observations` when ``valid_samples`` or edge masking
+            drops observations.
 
         """
         return int(
@@ -2811,7 +2817,26 @@ class Connectivity:
         # never had gives no replicate there.
         unit_is_valid = None
         if observation_weights is not None:
-            present = xp.any(observation_weights[..., 0] > 0, axis=-1)
+            positive = observation_weights[..., 0] > 0
+            present = xp.any(positive, axis=-1)
+            # A frequency keeping only some of a bin's units would need its own
+            # replicates and count; one keeping none is NaN there anyway.
+            if not bool(
+                xp.all(
+                    (positive == present[..., xp.newaxis])
+                    | ~xp.any(positive, axis=observation_axis, keepdims=True)
+                )
+            ):
+                msg = (
+                    "jackknife needs observation_weights that drop the same "
+                    "observations at every frequency of a bin (or all of them), as "
+                    "Multitaper(valid_samples=...) and MorletWavelet(edge_mode='nan') "
+                    "do; these drop an observation at some frequencies only, which "
+                    "would give those frequencies a different count of replicates. "
+                    "Compute the interval one frequency at a time, or zero an "
+                    "observation's weight at every frequency."
+                )
+                raise ValueError(msg)
             if self.expectation_type == "trials_tapers":
                 present = present[:, :, 0]
             present = to_numpy(xp.moveaxis(present, observation_axis, 0))
@@ -5488,9 +5513,11 @@ class Connectivity:
         True
         """
         self._validate_debiasing_observations("debiased_squared_phase_lag_index")
-        n_observations = self._counts_for_correction("debiased_squared_phase_lag_index")
         mean_sign, mean_nonzero, mean_absolute = self._imaginary_cross_spectrum_moments(
             "sign", "nonzero", "absolute"
+        )
+        n_observations = self._counts_for_correction(
+            "debiased_squared_phase_lag_index", mean_sign.dtype
         )
         # The mean of s_k s_l over ordered pairs of distinct observations,
         # (n**2 m**2 - sum_k s_k**2) / (n (n - 1)), is unbiased for E[s]**2.
@@ -5562,11 +5589,11 @@ class Connectivity:
         True
         """
         self._validate_debiasing_observations("debiased_squared_weighted_phase_lag_index")
-        n_observations = self._counts_for_correction(
-            "debiased_squared_weighted_phase_lag_index"
-        )
         mean_imaginary, mean_squared, mean_absolute = self._imaginary_cross_spectrum_moments(
             "imaginary", "squared", "absolute"
+        )
+        n_observations = self._counts_for_correction(
+            "debiased_squared_weighted_phase_lag_index", mean_imaginary.dtype
         )
         # Each product is a fresh array, so the cached moments are not mutated.
         # With observations dropped by zero weights the moments are means over
@@ -5632,12 +5659,15 @@ class Connectivity:
         True
         """
         self._validate_debiasing_observations("pairwise_phase_consistency")
-        n_observations = self._counts_for_correction("pairwise_phase_consistency")
+        phase_locking_value = self._phase_locking_value()
+        n_observations = self._counts_for_correction(
+            "pairwise_phase_consistency", phase_locking_value.real.dtype
+        )
         # The mean over ordered pairs of distinct observations of
         # Re(u_k conj(u_l)), unit phasors u: (|sum_k u_k|**2 - n) / (n (n - 1)).
         # With observations dropped by zero weights, n is each bin's kept count
         # and the PLV their mean.
-        plv_sum = self._phase_locking_value() * n_observations
+        plv_sum = phase_locking_value * n_observations
         if isinstance(n_observations, int):
             ppc = (plv_sum * plv_sum.conjugate() - n_observations) / (
                 n_observations**2 - n_observations

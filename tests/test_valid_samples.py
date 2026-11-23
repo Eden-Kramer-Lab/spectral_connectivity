@@ -465,7 +465,7 @@ def test_counting_measures_are_unbiased_with_dropped_trials(
     mean, limit = _replicate_mean_and_limit(getattr(independent_signals, measure)())
     assert abs(mean) < limit, (mean, limit)
 
-    def raw_count(self, measure):
+    def raw_count(self, measure, dtype):
         return self.n_observations
 
     monkeypatch.setattr(Connectivity, "_counts_for_correction", raw_count)
