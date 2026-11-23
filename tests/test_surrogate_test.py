@@ -424,12 +424,18 @@ def test_every_pairwise_measure_runs_with_every_kind(
     lagged_connectivity, measure, kwargs, kind
 ):
     """Each real pairwise measure has its frequency axis where phase_rotation
-    looks for it, and every kind accepts it."""
+    looks for it, and every kind accepts it. The diagonal is never tested,
+    including where the measure is finite there (1 for the phase-locking
+    value, near 1 for the transfer-function measures, 0 for the lag indices),
+    so it cannot enter a family maximum."""
     result = lagged_connectivity.surrogate_test(
         measure, kind=kind, n_surrogates=2, random_state=6, **kwargs
     )
     assert result.p_value.shape == result.estimate.shape
     assert np.nanmin(result.p_value) >= 1 / 3
+    diagonal = np.eye(result.estimate.shape[-1], dtype=bool)
+    assert np.isnan(result.p_value[..., diagonal]).all()
+    assert np.isnan(result.fwer_p_value[..., diagonal]).all()
 
 
 def test_migration_notice_is_emitted_once_per_call(lagged_connectivity):
@@ -518,7 +524,7 @@ def test_invalid_arguments_are_refused(small_connectivity, kwargs, error, match)
             TypeError,
             "'coherency' is complex. Test a real measure of it: magnitude_squared_coherence",
         ),
-        ("canonical_coherence", {"group_labels": [0, 1]}, TypeError, "tuple-valued"),
+        ("canonical_coherence", {"group_labels": [0, 1]}, TypeError, "the group measure"),
         (
             "coherence",
             {},

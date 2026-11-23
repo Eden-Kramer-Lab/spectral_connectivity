@@ -865,6 +865,11 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* `Connectivity.jackknife` of a measure defined on a
+  `Connectivity` subclass failed with `AttributeError` after computing the
+  estimate (the replicates were rebuilt as plain `Connectivity`), and a
+  subclass override of an existing measure was used for the estimate but not
+  the replicates. The replicates now keep the instance's class.
 - *Unreleased:* `power_bias` and `power_variance` accept an array of counts
   with a scalar `real_valued` (the default), returning one value per count as
   2.0.1 did; once `real_valued` was added they raised converting the array to

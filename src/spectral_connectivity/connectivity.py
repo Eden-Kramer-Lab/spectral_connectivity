@@ -2814,8 +2814,8 @@ class Connectivity:
             method,
             "jackknife",
             structured_hint=(
-                " Jackknife the scalar score measure instead (e.g. canonical_coherence "
-                "rather than canonical_coherency)."
+                " Jackknife a measure that returns one real array, such as a "
+                "pairwise measure; group measures are not resampled yet."
             ),
         )
 
@@ -3127,7 +3127,9 @@ class Connectivity:
 
         **Measured sizes.** Monte Carlo rejection rates at nominal 5% with 99
         surrogates per dataset, AR signals sampled at 200 Hz, multitaper
-        transforms:
+        transforms. These were measured once, during development; the test
+        suite checks each kind's size and the family-wise error rate in
+        smaller designs, within stated limits.
 
         - ``"trial_shuffle"``, three independent AR(1) signals, 10 trials,
           1 s windows with 5 tapers, 2100 datasets: 4.9-5.1% for
@@ -3157,8 +3159,12 @@ class Connectivity:
           element was rejected in 5.0-5.1% of datasets with
           ``"trial_shuffle"``, 3.6-3.8% with ``"phase_rotation"`` and
           3.9-5.2% with ``"conjugation"``, against every dataset with the
-          uncorrected p-values. Conjugation rejected pairwise Granger at
-          0 Hz in 6.5% of these datasets (5.8% under the mixing above).
+          uncorrected p-values. A second design (5 trials, 2 s windows,
+          7 tapers) gave 4.0-4.7% with ``"trial_shuffle"`` and 1.7-4.8% with
+          ``"phase_rotation"``: the maximum statistic keeps the family-wise
+          rate at or below nominal, not exactly at it. Conjugation rejected
+          pairwise Granger at 0 Hz in 6.5% of these datasets (5.8% under the
+          mixing above).
         - Correlated observations, Welch segments overlapping by 75% (13 per
           trial): randomizing each segment rejected independent signals in
           19.6% of datasets (5 trials, magnitude-squared coherence and
@@ -3257,12 +3263,12 @@ class Connectivity:
                 "tests every frequency. Drop half_bandwidth."
             )
             raise ValueError(msg)
-        unit_axes = self._surrogate_unit_axes(kind, n_surrogates)
         method, measure = self._resampled_measure(method, "surrogate_test")
         refusal = _surrogate_refusal(method)
         if refusal is not None:
             msg = f"surrogate_test cannot test {method!r}: {_SURROGATE_REFUSALS[refusal]}"
             raise ValueError(msg)
+        unit_axes = self._surrogate_unit_axes(kind, n_surrogates)
         if alternative == "auto":
             alternative = _signed_measure_alternative(method)
         estimate = _real_array_result(
@@ -7939,7 +7945,18 @@ def _real_array_result(
         to the structured-result and complex-result messages.
     """
     if isinstance(result, tuple):
-        msg = f"{caller} does not support tuple-valued measure {method!r}."
+        # The registry imports this module, so its helper is imported here.
+        from spectral_connectivity._measure_registry import _is_group_measure
+
+        if _is_group_measure(method):
+            msg = (
+                f"{caller} does not support the group measure {method!r}: it "
+                "returns its values together with the group labels, and "
+                f"{caller} does not resample group measures yet. Use a pairwise "
+                "measure, or call the group measure directly."
+            )
+        else:
+            msg = f"{caller} does not support tuple-valued measure {method!r}."
         raise TypeError(msg)
     values: NDArray[np.floating] = np.asarray(result)
     if values.dtype == object:
