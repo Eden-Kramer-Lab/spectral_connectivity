@@ -25,6 +25,7 @@ from spectral_connectivity.statistics import (
 )
 from spectral_connectivity.transforms import Multitaper
 from tests._deprecation_helpers import warns_once_at_the_call
+from tests._monte_carlo import replicate_mean_and_limit
 
 # Two-sided 95% critical values: the standard normal, norm.ppf(0.975), and
 # Student t with n - 1 degrees of freedom for n = 3, 4, and 5 leave-one-out
@@ -605,8 +606,8 @@ def test_log_power_statistics_hold_at_real_valued_bins():
     z = power_fisher_z_transform(estimates, n_observations, true_power, real_valued=True)
     complex_z = power_fisher_z_transform(estimates, n_observations, true_power)
 
-    mean_limit = 5 * log_ratio.std(ddof=1) / np.sqrt(n_rep)
-    assert abs(log_ratio.mean() - bias) < mean_limit
+    mean_log_ratio, mean_limit = replicate_mean_and_limit(log_ratio)
+    assert abs(mean_log_ratio - bias) < mean_limit
     # Variance of a sample variance: 5 SE from the fourth central moment.
     centered = log_ratio - log_ratio.mean()
     variance_limit = 5 * np.sqrt((np.mean(centered**4) - log_ratio.var() ** 2) / n_rep)

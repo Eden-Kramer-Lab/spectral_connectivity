@@ -24,6 +24,7 @@ from spectral_connectivity import (
 from spectral_connectivity.connectivity import _NON_MEASURE_METHODS
 from spectral_connectivity.statistics import _SurrogateTally
 from tests._backend_helpers import to_host
+from tests._monte_carlo import replicate_mean_and_limit
 
 _ALPHA = 0.05
 _N_SURROGATES = 99  # P(p <= 0.05) is exactly 5 / 100 for an exact test without ties
@@ -79,8 +80,8 @@ def _rejection(p_value, select=np.s_[...]):
 
 def _assert_rate(per_replicate, expected, *, allowance=0.0, label=""):
     """The replicate mean is within 5 standard errors (plus ``allowance``)."""
-    mean = per_replicate.mean()
-    limit = 5 * per_replicate.std(ddof=1) / np.sqrt(per_replicate.size) + allowance
+    mean, limit = replicate_mean_and_limit(per_replicate)
+    limit += allowance
     assert abs(mean - expected) <= limit, f"{label}: {mean:.4f} vs {expected} +/- {limit:.4f}"
     return mean, limit
 

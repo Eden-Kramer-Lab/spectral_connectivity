@@ -29,6 +29,7 @@ from spectral_connectivity.simulate import simulate_MVAR, simulate_shared_oscill
 from spectral_connectivity.statistics import jackknife_confidence_interval
 from spectral_connectivity.transforms import MorletWavelet, Multitaper
 from tests._backend_helpers import ON_GPU, to_device, to_host
+from tests._monte_carlo import replicate_mean_and_limit
 from tests._var_oracle import (
     _STRONG_CHAIN_COEFFICIENTS,
     _analytic_var,
@@ -1405,17 +1406,6 @@ def _von_mises_expectation(function, mean, concentration):
     )
 
 
-def _monte_carlo_mean_and_limit(replicates):
-    """Mean of independent replicates and 5 standard errors of that mean.
-
-    The standard error is the replicates' sample standard deviation over
-    sqrt(n_replicates). The mean of an unbiased estimator falls outside 5
-    standard errors of its expectation with probability 6e-7.
-    """
-    standard_error = replicates.std(ddof=1) / np.sqrt(replicates.size)
-    return replicates.mean(), 5 * standard_error
-
-
 @pytest.mark.parametrize("n_observations", [4, 7])
 def test_pairwise_phase_consistency_is_unbiased_and_squared_plv_is_not(n_observations):
     """E[PPC] = rho**2 and E[PLV**2] = rho**2 + (1 - rho**2) / n, checked at n = 4 and 7.
@@ -1442,8 +1432,8 @@ def test_pairwise_phase_consistency_is_unbiased_and_squared_plv_is_not(n_observa
     squared_plv = connectivity.phase_locking_value()[:, 0, 0, 1] ** 2
     ppc = connectivity.pairwise_phase_consistency()[:, 0, 0, 1]
 
-    mean_squared_plv, squared_plv_limit = _monte_carlo_mean_and_limit(squared_plv)
-    mean_ppc, ppc_limit = _monte_carlo_mean_and_limit(ppc)
+    mean_squared_plv, squared_plv_limit = replicate_mean_and_limit(squared_plv)
+    mean_ppc, ppc_limit = replicate_mean_and_limit(ppc)
     assert abs(mean_squared_plv - (squared_resultant_length + plv_bias)) < squared_plv_limit
     assert abs(mean_ppc - squared_resultant_length) < ppc_limit
     # The bias that separates the two estimators is many times the limits.
@@ -1474,8 +1464,8 @@ def test_debiased_squared_phase_lag_index_is_unbiased_for_the_squared_sign_imbal
     debiased = connectivity.debiased_squared_phase_lag_index()[:, 0, 0, 1]
     squared_pli = connectivity.phase_lag_index()[:, 0, 0, 1] ** 2
 
-    mean_debiased, debiased_limit = _monte_carlo_mean_and_limit(debiased)
-    mean_squared_pli, squared_pli_limit = _monte_carlo_mean_and_limit(squared_pli)
+    mean_debiased, debiased_limit = replicate_mean_and_limit(debiased)
+    mean_squared_pli, squared_pli_limit = replicate_mean_and_limit(squared_pli)
     assert 0.1 < squared_sign_imbalance < 0.9
     assert abs(mean_debiased - squared_sign_imbalance) < debiased_limit
     assert abs(mean_squared_pli - (squared_sign_imbalance + plain_bias)) < squared_pli_limit
@@ -1503,8 +1493,8 @@ def test_debiased_squared_weighted_phase_lag_index_has_zero_mean_without_a_phase
     debiased = connectivity.debiased_squared_weighted_phase_lag_index()[:, 0, 0, 1]
     squared_wpli = connectivity.weighted_phase_lag_index()[:, 0, 0, 1] ** 2
 
-    mean_debiased, debiased_limit = _monte_carlo_mean_and_limit(debiased)
-    mean_squared_wpli, squared_wpli_limit = _monte_carlo_mean_and_limit(squared_wpli)
+    mean_debiased, debiased_limit = replicate_mean_and_limit(debiased)
+    mean_squared_wpli, squared_wpli_limit = replicate_mean_and_limit(squared_wpli)
     assert abs(mean_debiased) < debiased_limit
     assert mean_squared_wpli > 1 / n_observations - squared_wpli_limit
     assert 1 / n_observations > 10 * max(debiased_limit, squared_wpli_limit)
@@ -1532,7 +1522,7 @@ def test_debiased_squared_weighted_phase_lag_index_with_equal_weights_is_unbiase
 
     debiased = connectivity.debiased_squared_weighted_phase_lag_index()[:, 0, 0, 1]
 
-    mean_debiased, limit = _monte_carlo_mean_and_limit(debiased)
+    mean_debiased, limit = replicate_mean_and_limit(debiased)
     assert abs(mean_debiased - 0.25) < limit
     # The shift from a denominator with its j == k terms is many times the limit.
     assert 0.25 / n_observations > 5 * limit
@@ -1560,7 +1550,7 @@ def test_debiased_squared_weighted_phase_lag_index_converges_to_the_population_r
 
     debiased = connectivity.debiased_squared_weighted_phase_lag_index()[:, 0, 0, 1]
 
-    mean_debiased, monte_carlo_limit = _monte_carlo_mean_and_limit(debiased)
+    mean_debiased, monte_carlo_limit = replicate_mean_and_limit(debiased)
     # The numerator and denominator are unbiased for (E[Im])**2 and (E|Im|)**2,
     # but their ratio is not: to first order (the delta method for a ratio of
     # U-statistics) its bias is
@@ -4432,7 +4422,7 @@ def test_debiased_squared_phase_lag_index_is_unbiased_with_in_phase_observations
 
     debiased = Connectivity(coefficients).debiased_squared_phase_lag_index()[:, 0, 0, 1]
 
-    mean_debiased, limit = _monte_carlo_mean_and_limit(debiased)
+    mean_debiased, limit = replicate_mean_and_limit(debiased)
     assert abs(mean_debiased - expected) < limit
     assert shortcut_bias > 10 * limit
 
