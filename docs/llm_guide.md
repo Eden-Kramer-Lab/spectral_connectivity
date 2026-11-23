@@ -169,6 +169,26 @@ Prefer the wrapper's labeled results so you never index these by hand.
   the `transform_kwargs`/`connectivity_kwargs` mappings for advanced
   settings. Each old form still works through 3.x with a
   `DeprecationWarning`.
+- **Artifacts and NaN.** Do not let NaN reach the transform: pass
+  `transform_kwargs={"valid_samples": "finite"}`, or a boolean mask that is
+  `True` at the samples to keep (invert an artifact mask with `~`). A trial's
+  window touching an invalid sample is dropped whole, so use windows that fit
+  between artifacts. Give the statistics functions
+  `Connectivity.n_valid_observations`, the per-bin counts, not
+  `n_observations`. See the
+  [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
+
+  ```python
+  >>> with_gap = time_series.copy()
+  >>> with_gap[500:520, 3] = np.nan  # an artifact in trial 3
+  >>> multitaper_connectivity(
+  ...     with_gap, sampling_frequency=500, time_window_duration=0.5,
+  ...     method="pairwise_phase_consistency",
+  ...     transform_kwargs={"valid_samples": "finite"},
+  ... ).sizes["time"]
+  4
+
+  ```
 - **GPU.** Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` *before* importing the
   package; setting it later has no effect.
 

@@ -272,11 +272,9 @@ mapping to use, and is removed in 4.0.
 ## Leave out artifacts and missing samples
 
 Mark the samples to leave out with `valid_samples`, a `Multitaper` setting
-(so in `transform_kwargs` for the wrapper): `"finite"` leaves out every NaN or
-infinite sample, and a boolean array of shape `(n_time_samples, n_trials)`
-(or the time series' own shape) leaves out the samples marked `False`. A
-trial's window is used only if all its samples are valid; the others are
-dropped from every average, so each time window averages the trials it keeps:
+(so in `transform_kwargs` for the wrapper). `True` marks a sample to **keep**;
+a mask that marks artifacts as `True` must be inverted (`~artifacts`).
+`"finite"` leaves out every NaN or infinite sample:
 
 ```python
 >>> artifacts = time_series.copy()
@@ -293,45 +291,68 @@ True
 
 ```
 
+A trial's window is used only if all its samples are valid, so choose windows
+that fit between artifacts: here the 50-sample gap drops all 250 samples of
+trial 1's third 0.5 s window, a quarter of that window's data, and a 1 s window
+would drop half the recording of trial 1. Each time window averages the trials
+it keeps, a window keeping none is NaN in every measure, and dropping more than
+half of the trial windows warns. `Multitaper.valid_windows` shows which are
+kept, and the result's `transform_parameters_json` records the kind of mask and
+the numbers of invalid samples and dropped trial windows
+(`n_observations` stays the raw count).
+
+To mark artifact intervals given in seconds, build a boolean mask with the time
+series' `(n_time_samples, n_trials)` layout:
+
+```python
+>>> sampling_frequency = 500
+>>> times = np.arange(time_series.shape[0]) / sampling_frequency
+>>> valid_samples = np.ones(time_series.shape[:2], dtype=bool)
+>>> for trial, start, stop in [(1, 1.2, 1.3), (3, 0.1, 0.15)]:  # (trial, s, s)
+...     valid_samples[(times >= start) & (times < stop), trial] = False
+>>> coherence = multitaper_connectivity(
+...     time_series,
+...     sampling_frequency=sampling_frequency,
+...     time_window_duration=0.5,
+...     method="magnitude_squared_coherence",
+...     transform_kwargs={"valid_samples": valid_samples},
+... )
+>>> coherence.sizes["time"]
+4
+
+```
+
+A mask may also mark each channel, with the time series' own
+`(n_time_samples, n_trials, n_signals)` shape: a sample invalid in one channel
+is then left out of every channel, since every cross-spectrum needs both
+channels at the same samples. For a 2-D `(n_time_samples, n_channels)` time
+series give the wrapper a `(n_time_samples,)` or `(n_time_samples, n_channels)`
+mask.
+
 The measures that count observations (pairwise phase consistency, the
-debiased phase-lag measures, the significance test of `delay` and
-`group_delay`, and `Connectivity.jackknife`) count each window's kept trial
-windows, so they equal their values with the dropped trial windows removed.
-`n_observations` stays the raw count; `n_valid_observations` counts each bin
-(time window and frequency) and is the count to give the statistics functions:
+debiased phase-lag measures, the zero-coherence test of `delay` and
+`group_delay`, and `Connectivity.jackknife`) count each bin's kept
+observations. `Connectivity.n_valid_observations` gives those counts, one per
+time window and frequency, for the statistics functions:
 
 ```python
 >>> from spectral_connectivity import Connectivity, Multitaper
 >>> from spectral_connectivity.statistics import coherence_significance_pvalue
->>> valid_samples = np.ones((1000, 4), dtype=bool)
->>> valid_samples[600:650, 1] = False  # the same gap, as a mask
 >>> multitaper = Multitaper(
 ...     time_series,
-...     sampling_frequency=500,
+...     sampling_frequency=sampling_frequency,
 ...     time_window_duration=0.5,
 ...     valid_samples=valid_samples,
 ... )
->>> multitaper.valid_windows.sum(axis=1).tolist()  # kept trials per window
-[4, 4, 3, 4]
 >>> connectivity = Connectivity.from_transform(multitaper)
->>> connectivity.n_observations  # 4 trials x 5 tapers
-20
->>> counts = connectivity.n_valid_observations  # (n_time_windows, n_frequencies)
->>> counts[:, 0].tolist()
-[20, 20, 15, 20]
+>>> connectivity.n_valid_observations[:, 0].tolist()  # of 4 trials x 5 tapers
+[15, 20, 15, 20]
 >>> p_values = coherence_significance_pvalue(
 ...     connectivity.coherency(),
-...     counts[..., np.newaxis, np.newaxis],
-...     real_valued=connectivity.real_valued_frequencies[:, np.newaxis, np.newaxis],
+...     connectivity.n_valid_observations[..., np.newaxis, np.newaxis],
 ... )
->>> p_values.shape
-(4, 126, 3, 3)
 
 ```
-
-A window touching any invalid sample is dropped whole for that trial, so
-choose windows that fit between artifacts. A window that keeps no trial is NaN
-in every measure, with a warning.
 
 ## Group measures: canonical coherence between areas
 
