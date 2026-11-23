@@ -8,6 +8,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Literal,
+    NamedTuple,
     Protocol,
     TypedDict,
     TypeVar,
@@ -1169,6 +1170,44 @@ def _warn_about_unusual_time_series(
     return False
 
 
+class _MissingDataTapers(NamedTuple):
+    """A Multitaper's missing-data tapers, computed at construction.
+
+    The tables' row 0 holds the DPSS tapers and row ``k`` the tapers of the
+    ``k``-th artifact pattern that is kept; each trial window's row is in
+    ``table_index``. The tapers and concentrations are zero past the ones a
+    pattern keeps (:func:`_missing_data_taper_sets`).
+    """
+
+    #: (n_time_windows, n_trials): each trial window's row; 0 without
+    #: artifacts or when dropped.
+    table_index: BackendArray
+    #: The window and trial indices of the kept trial windows with artifacts.
+    windows: tuple[BackendArray, BackendArray]
+    #: (1 + n_kept_patterns, n_time_samples_per_window, n_tapers), scaled by
+    #: sqrt(sampling_frequency) as the DPSS tapers are.
+    tapers: BackendArray
+    #: (1 + n_kept_patterns, n_tapers); row 0 the DPSS eigenvalues.
+    concentrations: BackendArray
+    #: (1 + n_kept_patterns, n_time_samples_per_window): the valid samples.
+    valid: BackendArray
+    #: The trial windows with artifacts, kept or dropped.
+    n_gapped: int
+    #: What the dropped windows with artifacts look like, for the warnings.
+    dropped_summary: str
+
+    @property
+    def n_rescued(self) -> int:
+        """The trial windows with artifacts that are kept."""
+        return int(self.windows[0].size)
+
+    def valid_of_rescued(self) -> BackendArray:
+        """The valid samples of each kept window with artifacts, ``(n_rescued,
+        1, n_time_samples_per_window)`` (broadcasting over signals)."""
+        valid: BackendArray = self.valid[self.table_index[self.windows]][:, xp.newaxis, :]
+        return valid
+
+
 class _WindowedFourierTransform:
     """Tapered sliding-window FFT shared by Multitaper and the Hann STFT.
 
@@ -1206,8 +1245,9 @@ class _WindowedFourierTransform:
       coefficients of each taper;
     - optionally, to estimate trial windows that contain artifact samples
       rather than drop them, :meth:`_kept_trial_windows` (which may set
-      ``_n_kept_tapers``), :meth:`_estimate_gapped_windows`, and
-      :meth:`_window_drop_rule`.
+      ``_n_kept_tapers``), :meth:`_detrend_gapped_windows`,
+      :meth:`_window_tapers_for_fft`, :meth:`_window_drop_rule`,
+      :meth:`_dropped_window_notes`, and :meth:`_artifact_samples_details`.
     """
 
     #: The transform returns the full two-sided FFT spectrum (both positive and
@@ -1732,8 +1772,9 @@ Frequency Analysis
         if self._artifact_samples is not None:
             # Zeroing the artifacts in the windows' copy keeps the coefficients
             # of the windows containing them finite: those of a dropped window
-            # are unused, and :meth:`_estimate_gapped_windows` replaces the
-            # others. The other windows are unchanged.
+            # are unused, and the others are detrended again over their valid
+            # samples (:meth:`_detrend_gapped_windows`). The other windows are
+            # unchanged.
             xp.copyto(time_series, 0, where=self._artifact_windows()[:, :, xp.newaxis, :])
         # NaN or Inf input was reported at construction; detrending and
         # tapering it (Inf times a taper's zero end) would add NumPy "invalid value"
@@ -1745,33 +1786,30 @@ Frequency Analysis
         ):
             if self.detrend_type is not None:
                 time_series = detrend(time_series, type=self.detrend_type)
+            self._detrend_gapped_windows(time_series)
 
             coefficients = _multitaper_fft(
-                self._tapers_for_fft(),
+                self._window_tapers_for_fft(),
                 time_series,
                 self.n_fft_samples,
                 self.sampling_frequency,
                 workers=self.fft_workers,
             ).swapaxes(2, -1)
-            self._estimate_gapped_windows(coefficients, time_series)
             return self._weight_taper_coefficients(coefficients, time_series)
 
-    def _estimate_gapped_windows(
-        self,
-        coefficients: NDArray[np.complexfloating],
-        windows: NDArray[np.floating],
-    ) -> None:
-        """Replace, in place, the coefficients of the kept trial windows that
-        contain artifact samples; none by default (they are all dropped).
+    def _detrend_gapped_windows(self, windows: NDArray[np.floating]) -> None:
+        """Detrend again, in place, the kept trial windows that contain
+        artifact samples; none by default (they are all dropped).
 
-        Parameters
-        ----------
-        coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
-            Tapered Fourier coefficients of the zero-filled windows.
-        windows : array, shape (n_time_windows, n_trials, n_signals, n_time_samples_per_window)
-            The detrended zero-filled windows; an override may replace those
-            it estimates, for :meth:`_weight_taper_coefficients`.
+        ``windows`` are the detrended zero-filled windows, ``(n_time_windows,
+        n_trials, n_signals, n_time_samples_per_window)``.
         """
+
+    def _window_tapers_for_fft(self) -> NDArray[np.floating]:
+        """The tapers of every window: by default :meth:`_tapers_for_fft`,
+        shared; a subclass may return a set per trial window,
+        ``(n_time_windows, n_trials, 1, n_time_samples_per_window, n_tapers)``."""
+        return self._tapers_for_fft()
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot, ``(n_time_samples_per_window, n_tapers)``."""
@@ -2374,21 +2412,8 @@ class Multitaper(_WindowedFourierTransform):
         "time_halfbandwidth_product",
     )
     # Set by _kept_trial_windows with artifact_handling="missing_data_tapers"
-    # when some window with artifacts is kept: the window and trial indices of
-    # those windows; each one's row in the per-pattern arrays, which hold the
-    # tapers (n_patterns, n_time_samples_per_window, n_tapers), concentrations
-    # (n_patterns, n_tapers), both zero past the ones kept, and valid samples
-    # (n_patterns, n_time_samples_per_window).
-    _gapped_windows: tuple[BackendArray, BackendArray] | None = None
-    _gapped_pattern: BackendArray
-    _gapped_tapers: BackendArray
-    _gapped_concentrations: BackendArray
-    _gapped_valid: BackendArray
-    # Trial windows with artifacts, and those of them kept.
-    _n_gapped_trial_windows: int = 0
-    _n_missing_data_trial_windows: int = 0
-    # What the dropped windows with artifacts look like, for the warnings.
-    _dropped_gap_summary: str = ""
+    # when some trial window has artifacts.
+    _missing_data: _MissingDataTapers | None = None
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Keep transform parameters immutable once construction has completed."""
@@ -2948,22 +2973,20 @@ class Multitaper(_WindowedFourierTransform):
 
         assert self._taper_eigenvalues is not None
         eigenvalues = self._taper_eigenvalues
+        missing_data = self._missing_data if self._rescues_windows else None
+        if missing_data is not None:
+            # Each trial window's own concentrations, zero past its kept tapers.
+            eigenvalues = missing_data.concentrations[missing_data.table_index]
         if self.taper_weighting == "eigen":
             weights: NDArray[np.floating] = xp.sqrt(eigenvalues)
-            weights = weights / xp.sqrt(xp.mean(weights**2))
-            if self._gapped_windows is None:
+            if missing_data is None:
+                weights = weights / xp.sqrt(xp.mean(weights**2))
                 return (
                     coefficients * weights[xp.newaxis, xp.newaxis, :, xp.newaxis, xp.newaxis]
                 )
-            # Each window with missing-data tapers weights its own kept ones,
-            # RMS-normalized over them.
-            window_weights = xp.broadcast_to(weights, coefficients.shape[:3]).copy()
-            gapped = xp.sqrt(self._gapped_concentrations[self._gapped_pattern])
-            n_kept = xp.count_nonzero(gapped, axis=-1)[:, xp.newaxis]
-            window_weights[self._gapped_windows] = gapped / xp.sqrt(
-                xp.sum(gapped**2, axis=-1, keepdims=True) / n_kept
-            )
-            return coefficients * window_weights[..., xp.newaxis, xp.newaxis]
+            n_kept = xp.count_nonzero(eigenvalues, axis=-1)[..., xp.newaxis]
+            weights = weights / xp.sqrt(_mean_square_over_kept(weights, n_kept, axis=-1))
+            return coefficients * weights[..., xp.newaxis, xp.newaxis]
 
         # Thomson's adaptive weights balance the taper periodogram against the
         # process-noise level, which must be on the *same* power-spectral-density
@@ -2974,29 +2997,19 @@ class Multitaper(_WindowedFourierTransform):
         # puts the noise term on the PSD scale; without it the noise is inflated
         # by a factor of ``sampling_frequency`` and the weighting is miscalibrated.
         noise_power_spectral_density = xp.var(windows, axis=-1) / self.sampling_frequency
-        n_used = None
-        if self._gapped_windows is not None:
-            # A window with missing-data tapers has its own concentrations
-            # (zero past the tapers kept) and the variance of its valid samples.
-            valid = self._gapped_valid[self._gapped_pattern][:, xp.newaxis, :]
-            gapped = windows[self._gapped_windows]
-            n_valid = xp.sum(valid, axis=-1)
-            centered = (gapped - (xp.sum(gapped, axis=-1) / n_valid)[..., xp.newaxis]) * valid
-            noise_power_spectral_density[self._gapped_windows] = (
-                xp.sum(centered**2, axis=-1) / n_valid / self.sampling_frequency
+        if missing_data is not None:
+            # A window with missing-data tapers: the variance of its valid samples.
+            valid = missing_data.valid_of_rescued()
+            centered = _detrend_valid_samples(windows[missing_data.windows], valid, "constant")
+            noise_power_spectral_density[missing_data.windows] = (
+                xp.sum(centered**2, axis=-1) / xp.sum(valid, axis=-1) / self.sampling_frequency
             )
-            eigenvalues = xp.broadcast_to(eigenvalues, coefficients.shape[:3]).copy()
-            concentrations = self._gapped_concentrations[self._gapped_pattern]
-            eigenvalues[self._gapped_windows] = concentrations
-            n_used = xp.full(coefficients.shape[:2], coefficients.shape[2])
-            n_used[self._gapped_windows] = xp.count_nonzero(concentrations, axis=-1)
         return _apply_adaptive_taper_weights(
             coefficients,
             eigenvalues,
             noise_power_spectral_density,
             max_iterations=self.adaptive_max_iterations,
             tolerance=self.adaptive_tolerance,
-            n_used=n_used,
         )
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
@@ -3017,7 +3030,6 @@ class Multitaper(_WindowedFourierTransform):
         if self.artifact_handling == "drop" or bool(xp.all(clean)):
             return clean
         window_index, trial_index = np.nonzero(~to_numpy(clean))
-        self._n_gapped_trial_windows = int(window_index.size)
         patterns, pattern_index = np.unique(
             to_numpy(artifact_windows[xp.asarray(window_index), xp.asarray(trial_index)]),
             axis=0,
@@ -3031,28 +3043,56 @@ class Multitaper(_WindowedFourierTransform):
             to_numpy(self._tapers),
             self.sampling_frequency,
         )
+        assert self._taper_eigenvalues is not None  # checked at construction
+        is_kept = n_kept[pattern_index] > 0
+        # Each pattern's row in the tables: 1, 2, ... for the kept ones.
+        pattern_row = np.cumsum(n_kept > 0) * (n_kept > 0)
+        table_index = np.zeros(clean.shape, dtype=np.intp)
+        table_index[window_index, trial_index] = pattern_row[pattern_index]
+        n_time_samples = self.n_time_samples_per_window
+        self._missing_data = _MissingDataTapers(
+            table_index=xp.asarray(table_index),
+            windows=(xp.asarray(window_index[is_kept]), xp.asarray(trial_index[is_kept])),
+            tapers=xp.concatenate(
+                [
+                    self._tapers[xp.newaxis],
+                    xp.asarray(tapers * np.sqrt(self.sampling_frequency)),
+                ]
+            ),
+            concentrations=xp.concatenate(
+                [self._taper_eigenvalues[xp.newaxis], xp.asarray(concentrations)]
+            ),
+            valid=xp.asarray(
+                np.concatenate(
+                    [np.ones((1, n_time_samples), dtype=bool), ~patterns[n_kept > 0]]
+                )
+            ),
+            n_gapped=int(window_index.size),
+            dropped_summary=(
+                "" if is_kept.all() else _dropped_gap_summary(patterns[n_kept == 0])
+            ),
+        )
         counts = np.full(clean.shape, self.n_tapers, dtype=np.intp)
         counts[window_index, trial_index] = n_kept[pattern_index]
-        is_kept = n_kept[pattern_index] > 0
-        self._n_missing_data_trial_windows = int(np.count_nonzero(is_kept))
-        if is_kept.any():
-            self._gapped_windows = (
-                xp.asarray(window_index[is_kept]),
-                xp.asarray(trial_index[is_kept]),
-            )
-            # Each kept pattern's row among the kept patterns.
-            self._gapped_pattern = xp.asarray(
-                (np.cumsum(n_kept > 0) - 1)[pattern_index[is_kept]]
-            )
-            self._gapped_tapers = xp.asarray(tapers * np.sqrt(self.sampling_frequency))
-            self._gapped_concentrations = xp.asarray(concentrations)
-            self._gapped_valid = xp.asarray(~patterns[n_kept > 0])
-        if not is_kept.all():
-            self._dropped_gap_summary = _dropped_gap_summary(patterns[n_kept == 0])
         if np.any(n_kept[pattern_index[is_kept]] < self.n_tapers):
             self._n_kept_tapers = _immutable_array_snapshot(xp.asarray(counts))
         kept_windows: BackendArray = xp.asarray(counts > 0)
         return kept_windows
+
+    @property
+    def _rescues_windows(self) -> bool:
+        """Whether missing-data tapers estimate some trial window."""
+        return self._missing_data is not None and self._missing_data.n_rescued > 0
+
+    @property
+    def _n_gapped_trial_windows(self) -> int:
+        """The trial windows with artifacts, with missing-data tapers."""
+        return 0 if self._missing_data is None else self._missing_data.n_gapped
+
+    @property
+    def _n_missing_data_trial_windows(self) -> int:
+        """The trial windows with artifacts that missing-data tapers keep."""
+        return 0 if self._missing_data is None else self._missing_data.n_rescued
 
     def _dropped_window_notes(self) -> list[tuple[str, str]]:
         """With missing-data tapers, the windows with artifacts dropped anyway."""
@@ -3084,42 +3124,38 @@ class Multitaper(_WindowedFourierTransform):
             f"every 1/(2W) = {recurrence:.3g} samples "
             f"({recurrence / self.sampling_frequency:.3g} s, one over the frequency "
             "resolution), which caps that energy at the fraction of samples valid. "
-            f"{self._dropped_gap_summary}To keep such windows use a larger "
+            f"{'' if self._missing_data is None else self._missing_data.dropped_summary}"
+            "To keep such windows use a larger "
             "time_halfbandwidth_product (a wider band, so that 1/(2W) falls below "
             "the artifacts' spacing) or a longer window (more valid samples around "
             "a long artifact), or artifact_handling='drop', which drops every "
             "window with an artifact."
         )
 
-    def _estimate_gapped_windows(
-        self,
-        coefficients: NDArray[np.complexfloating],
-        windows: NDArray[np.floating],
-    ) -> None:
-        """Estimate each kept window with artifacts from its valid samples.
+    def _detrend_gapped_windows(self, windows: NDArray[np.floating]) -> None:
+        """Detrend each kept window with artifacts over its valid samples.
 
-        Detrends it over its valid samples (which equals detrending the
-        samples before zero-filling, as the fit of the zero-filled window is a
-        constant or line too), writes that back into ``windows`` for
-        :meth:`_weight_taper_coefficients`, and replaces its coefficients by
-        those of its missing-data tapers (zero past the ones kept).
+        That equals detrending the samples before zero-filling, as the fit of
+        the zero-filled window is a constant or line too.
         """
-        if self._gapped_windows is None:
+        if not self._rescues_windows:
             return
-        window_index, trial_index = self._gapped_windows
-        gapped = _detrend_valid_samples(
-            windows[window_index, trial_index],
-            self._gapped_valid[self._gapped_pattern][:, xp.newaxis, :],
-            self.detrend_type,
+        assert self._missing_data is not None
+        rescued = self._missing_data.windows
+        windows[rescued] = _detrend_valid_samples(
+            windows[rescued], self._missing_data.valid_of_rescued(), self.detrend_type
         )
-        windows[window_index, trial_index] = gapped
-        coefficients[window_index, trial_index] = _multitaper_fft(
-            self._gapped_tapers[self._gapped_pattern][:, xp.newaxis],
-            gapped,
-            self.n_fft_samples,
-            self.sampling_frequency,
-            workers=self.fft_workers,
-        ).swapaxes(1, -1)
+
+    def _window_tapers_for_fft(self) -> NDArray[np.floating]:
+        """The DPSS tapers, or, when missing-data tapers estimate some window,
+        each trial window's from the table."""
+        if not self._rescues_windows:
+            return self._tapers
+        assert self._missing_data is not None
+        tapers: NDArray[np.floating] = self._missing_data.tapers[
+            self._missing_data.table_index
+        ][:, :, xp.newaxis]
+        return tapers
 
     def _artifact_samples_details(self) -> str:
         """With missing-data tapers, the trial windows that had artifacts and
@@ -4547,6 +4583,18 @@ def _multitaper_fft(
     return coefficients / sampling_frequency
 
 
+def _mean_square_over_kept(
+    weights: NDArray[np.floating], n_kept: NDArray[np.integer], axis: int
+) -> NDArray[np.floating]:
+    """The mean of ``weights ** 2`` over the ``n_kept`` (broadcasting, with
+    ``axis`` kept) nonzero entries on ``axis``, the others being zero: the
+    plain mean when every entry is kept, as the scale is then exactly 1."""
+    mean_square: NDArray[np.floating] = xp.mean(weights**2, axis=axis, keepdims=True) * (
+        weights.shape[axis] / n_kept
+    )
+    return mean_square
+
+
 def _apply_adaptive_taper_weights(
     coefficients: NDArray[np.complexfloating],
     eigenvalues: NDArray[np.floating],
@@ -4554,15 +4602,13 @@ def _apply_adaptive_taper_weights(
     *,
     max_iterations: int,
     tolerance: float,
-    n_used: NDArray[np.integer] | None = None,
 ) -> NDArray[np.complexfloating]:
     """Apply Thomson adaptive DPSS weights to Fourier coefficients.
 
     ``eigenvalues`` are the tapers' concentrations, ``(n_tapers,)``, or each
     trial window's, ``(n_time_windows, n_trials, n_tapers)``, where a taper
-    of concentration 0 gets weight 0; ``n_used`` ``(n_time_windows,
-    n_trials)`` then counts the others, over which the weights are
-    RMS-normalized (by default all ``n_tapers``).
+    of concentration 0 gets weight 0 and the weights are RMS-normalized over
+    the others.
 
     The iterative spectrum estimate follows Thomson's frequency- and
     signal-specific weighting. The weights are RMS-normalized across the taper
@@ -4636,11 +4682,13 @@ def _apply_adaptive_taper_weights(
             stacklevel=stacklevel_outside_package(),
         )
 
-    mean_square = xp.mean(weights**2, axis=2, keepdims=True)
-    if n_used is not None:
-        mean_square = mean_square * (
-            weights.shape[2] / n_used[:, :, xp.newaxis, xp.newaxis, xp.newaxis]
-        )
+    if eigenvalues.ndim == 1:
+        mean_square = xp.mean(weights**2, axis=2, keepdims=True)
+    else:
+        n_used = xp.count_nonzero(eigenvalues, axis=-1)[
+            ..., xp.newaxis, xp.newaxis, xp.newaxis
+        ]
+        mean_square = _mean_square_over_kept(weights, n_used, axis=2)
     rms = xp.sqrt(mean_square)
     normalized_weights = _divide_where(weights, rms, rms > eps, 1.0)
     return coefficients * normalized_weights
