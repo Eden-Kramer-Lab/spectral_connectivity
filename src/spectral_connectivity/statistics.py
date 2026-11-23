@@ -897,7 +897,7 @@ def _validated_real_valued(
 
 def coherence_significance_pvalue(
     coherency: NDArray[np.complexfloating],
-    n_observations: int,
+    n_observations: int | NDArray[np.integer],
     *,
     real_valued: bool | NDArray[np.bool_] = False,
 ) -> NDArray[np.floating]:
@@ -930,9 +930,14 @@ def coherence_significance_pvalue(
         error (for independent noise, none fell below 0.05 where
         ``coherency()`` gives about the nominal 5%). Take its square root
         first.
-    n_observations : int
+    n_observations : int or NDArray[int]
         Number of independent observations used to estimate the coherency
-        (n_tapers * n_trials).
+        (n_tapers * n_trials), at least 2: one count for every estimate, or an
+        array of counts that broadcasts against ``coherency``, one per estimate.
+        Pass ``Connectivity.n_observations``, or, where observation weights drop
+        observations (``Multitaper(valid_samples=...)``),
+        ``Connectivity.n_valid_observations[..., np.newaxis, np.newaxis]`` for
+        coherency shaped ``(..., n_frequencies, n_signals, n_signals)``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
         array broadcast against ``coherency``; see
@@ -1007,18 +1012,23 @@ def coherence_significance_pvalue(
         2,
         "The zero-coherence null, Beta(1, n_observations - 1), needs at least 2.",
     )
-    if counts.ndim:
-        # The real-valued bins' beta tail below takes one count for the call.
-        msg = (
-            "n_observations must be a single count for coherence_significance_pvalue, "
-            f"got an array of shape {counts.shape}. Call it once per count, or pass "
-            "Connectivity.n_observations."
-        )
-        raise ValueError(msg)
-    n_observations = counts.item()
     magnitude_squared_coherence: NDArray[np.floating] = np.clip(
         np.abs(coherency) ** 2, 0.0, 1.0
     )
+    if counts.ndim:
+        try:
+            np.broadcast_shapes(counts.shape, magnitude_squared_coherence.shape)
+        except ValueError:
+            msg = (
+                f"n_observations has shape {counts.shape}, which does not broadcast "
+                f"against coherency of shape {magnitude_squared_coherence.shape}. "
+                "Pass one count, or one per estimate: "
+                "Connectivity.n_valid_observations[..., np.newaxis, np.newaxis] "
+                "for coherency shaped (..., n_frequencies, n_signals, n_signals)."
+            )
+            raise ValueError(msg) from None
+    # One count keeps its Python scalar, as before arrays were accepted.
+    n_observations = counts.item() if counts.ndim == 0 else counts
     real_valued = _validated_real_valued(
         real_valued, magnitude_squared_coherence.shape, "coherency"
     )
@@ -1032,9 +1042,9 @@ def coherence_significance_pvalue(
         np.broadcast_to(complex_null, shape), dtype=float, copy=True
     )
     p_values[is_real] = scipy.stats.beta.sf(
-        np.broadcast_to(magnitude_squared_coherence, is_real.shape)[is_real],
+        np.broadcast_to(magnitude_squared_coherence, shape)[is_real],
         0.5,
-        (n_observations - 1) / 2,
+        (np.broadcast_to(n_observations, shape)[is_real] - 1) / 2,
     )
     return p_values
 

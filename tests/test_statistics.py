@@ -1434,11 +1434,23 @@ def test_fisher_z_transforms_take_one_second_count_per_estimate(function, first,
     np.testing.assert_allclose(result, expected, rtol=1e-14)
 
 
-def test_coherence_significance_pvalue_takes_one_count():
-    """Its real-valued bins take one count for the call, so an array of counts
-    is rejected, saying so, rather than misaligned."""
-    with pytest.raises(ValueError, match=r"must be a single count .* shape \(2,\)"):
-        coherence_significance_pvalue(_COHERENCY, np.array([5, 6]), real_valued=True)
+@pytest.mark.parametrize("real_valued", [False, np.array([False, True])])
+def test_coherence_significance_pvalue_takes_one_count_per_estimate(real_valued):
+    """An array of counts is read entry by entry, in the complex and the real
+    null alike, as the scalar calls read it."""
+    counts = np.array([5, 9])
+    result = coherence_significance_pvalue(_COHERENCY, counts, real_valued=real_valued)
+    is_real = np.broadcast_to(real_valued, counts.shape)
+    expected = [
+        coherence_significance_pvalue(_COHERENCY[index], counts[index], real_valued=real)
+        for index, real in enumerate(is_real)
+    ]
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_coherence_significance_pvalue_rejects_counts_that_do_not_broadcast():
+    with pytest.raises(ValueError, match=r"n_observations has shape \(3,\)"):
+        coherence_significance_pvalue(_COHERENCY, np.array([5, 6, 7]))
 
 
 @pytest.mark.parametrize("bad_power", [-1.0, np.nan, np.inf])
