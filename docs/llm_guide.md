@@ -170,12 +170,13 @@ Prefer the wrapper's labeled results so you never index these by hand.
   settings. Each old form still works through 3.x with a
   `DeprecationWarning`.
 - **Artifacts and NaN.** Do not let NaN reach the transform: pass
-  `transform_kwargs={"valid_samples": "finite"}`, or a boolean mask that is
-  `True` at the samples to keep (invert an artifact mask with `~`). A trial's
-  window touching an invalid sample is dropped whole, so use windows that fit
-  between artifacts. Give the statistics functions
-  `Connectivity.n_valid_observations`, the per-bin counts, not
-  `n_observations`. See the
+  `transform_kwargs={"artifact_samples": "nonfinite"}`, or a boolean mask that
+  is `True` at the artifacts, the samples to leave out (as MNE `BAD_`
+  annotations mark them; invert a mask of valid samples with `~`). A trial's
+  window touching an artifact is dropped whole, so use windows that fit
+  between artifacts. The outputs mark what is kept: `Multitaper.valid_windows`,
+  and `Connectivity.n_valid_observations`, the per-bin counts to give the
+  statistics functions instead of `n_observations`. See the
   [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
 
   ```python
@@ -184,7 +185,7 @@ Prefer the wrapper's labeled results so you never index these by hand.
   >>> multitaper_connectivity(
   ...     with_gap, sampling_frequency=500, time_window_duration=0.5,
   ...     method="pairwise_phase_consistency",
-  ...     transform_kwargs={"valid_samples": "finite"},
+  ...     transform_kwargs={"artifact_samples": "nonfinite"},
   ... ).sizes["time"]
   4
 

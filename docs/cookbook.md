@@ -271,63 +271,68 @@ mapping to use, and is removed in 4.0.
 
 ## Leave out artifacts and missing samples
 
-Mark the samples to leave out with `valid_samples`, a `Multitaper` setting
-(so in `transform_kwargs` for the wrapper). `True` marks a sample to **keep**;
-a mask that marks artifacts as `True` must be inverted (`~artifacts`).
-`"finite"` leaves out every NaN or infinite sample:
+Mark the samples to leave out with `artifact_samples`, a `Multitaper` setting
+(so in `transform_kwargs` for the wrapper). `True` marks an **artifact**, a
+sample to leave out, as MNE's `BAD_` annotations, FieldTrip's artifact
+definitions, and NumPy masked arrays do; a mask that marks the valid samples
+as `True` must be inverted (`~mask`). `"nonfinite"` leaves out every NaN or
+infinite sample:
 
 ```python
->>> artifacts = time_series.copy()
->>> artifacts[600:650, 1, :] = np.nan  # a gap in trial 1, 1.2-1.3 s
+>>> with_gap = time_series.copy()
+>>> with_gap[600:650, 1, :] = np.nan  # a gap in trial 1, 1.2-1.3 s
 >>> ppc = multitaper_connectivity(
-...     artifacts,
+...     with_gap,
 ...     sampling_frequency=500,
 ...     time_window_duration=0.5,
 ...     method="pairwise_phase_consistency",
-...     transform_kwargs={"valid_samples": "finite"},
+...     transform_kwargs={"artifact_samples": "nonfinite"},
 ... )
 >>> bool(np.isfinite(ppc.isel(source=0, target=1)).all())
 True
 
 ```
 
-A trial's window is used only if all its samples are valid, so choose windows
-that fit between artifacts: here the 50-sample gap drops all 250 samples of
-trial 1's third 0.5 s window, a quarter of that window's data, and a 1 s window
-would drop half the recording of trial 1. Each time window averages the trials
-it keeps, a window keeping none is NaN in every measure, and dropping more than
-half of the trial windows warns. `Multitaper.valid_windows` shows which are
-kept, and the result's `transform_parameters_json` records the kind of mask and
-the numbers of invalid samples and dropped trial windows
-(`n_observations` stays the raw count).
+A trial's window is used only if none of its samples is an artifact, so choose
+windows that fit between artifacts: here the 50-sample gap drops all 250
+samples of trial 1's third 0.5 s window, a quarter of that window's data, and a
+1 s window would drop half the recording of trial 1. Each time window averages
+the trials it keeps, a window keeping none is NaN in every measure, and
+dropping more than half of the trial windows warns. The outputs mark what is
+kept: `Multitaper.valid_windows` is `True` at the kept trial windows, and the
+result's `transform_parameters_json` records the kind of mask and the numbers
+of artifact samples and dropped trial windows (`n_observations` stays the raw
+count).
 
-To mark artifact intervals given in seconds, build a boolean mask with the time
-series' `(n_time_samples, n_trials)` layout:
+Artifact intervals given in seconds (an MNE `BAD_` annotation's onset and
+duration, a FieldTrip artifact matrix's `[begin, end]` rows converted to
+seconds) become a mask that is `True` inside each one, with the time series'
+`(n_time_samples, n_trials)` layout:
 
 ```python
 >>> sampling_frequency = 500
 >>> times = np.arange(time_series.shape[0]) / sampling_frequency
->>> valid_samples = np.ones(time_series.shape[:2], dtype=bool)
+>>> artifact_samples = np.zeros(time_series.shape[:2], dtype=bool)
 >>> for trial, start, stop in [(1, 1.2, 1.3), (3, 0.1, 0.15)]:  # (trial, s, s)
-...     valid_samples[(times >= start) & (times < stop), trial] = False
+...     artifact_samples[(times >= start) & (times < stop), trial] = True
 >>> coherence = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=sampling_frequency,
 ...     time_window_duration=0.5,
 ...     method="magnitude_squared_coherence",
-...     transform_kwargs={"valid_samples": valid_samples},
+...     transform_kwargs={"artifact_samples": artifact_samples},
 ... )
 >>> coherence.sizes["time"]
 4
 
 ```
 
-A mask may also mark each channel, with the time series' own
-`(n_time_samples, n_trials, n_signals)` shape: a sample invalid in one channel
-is then left out of every channel, since every cross-spectrum needs both
-channels at the same samples. For a 2-D `(n_time_samples, n_channels)` time
-series give the wrapper a `(n_time_samples,)` or `(n_time_samples, n_channels)`
-mask.
+A `(n_time_samples,)` mask is shared by every trial. A mask may also mark each
+channel, with the time series' own `(n_time_samples, n_trials, n_signals)`
+shape: an artifact in one channel then leaves the sample out of every channel,
+since every cross-spectrum needs both channels at the same samples. For a 2-D
+`(n_time_samples, n_channels)` time series give the wrapper a
+`(n_time_samples,)` or `(n_time_samples, n_channels)` mask.
 
 The measures that count observations (pairwise phase consistency, the
 debiased phase-lag measures, the zero-coherence test of `delay` and
@@ -342,7 +347,7 @@ time window and frequency, for the statistics functions:
 ...     time_series,
 ...     sampling_frequency=sampling_frequency,
 ...     time_window_duration=0.5,
-...     valid_samples=valid_samples,
+...     artifact_samples=artifact_samples,
 ... )
 >>> connectivity = Connectivity.from_transform(multitaper)
 >>> connectivity.n_valid_observations[:, 0].tolist()  # of 4 trials x 5 tapers

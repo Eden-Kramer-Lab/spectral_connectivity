@@ -42,14 +42,17 @@ The migration guide for code written against 2.x is
 
 ### Added
 
-- `Multitaper(valid_samples=...)` leaves out artifacts, gaps, and missing
-  samples: a boolean mask, `True` at the samples to keep, of shape
-  `(n_time_samples,)`, `(n_time_samples, n_trials)`, or the time series' own
-  (a sample invalid in any signal is then invalid for all), or `"finite"` for
-  every NaN or infinite sample. A trial's window is used only if all its
-  samples are valid, so each time window averages the trials it keeps.
+- `Multitaper(artifact_samples=...)` leaves out artifacts, gaps, and missing
+  samples: a boolean mask, `True` at an artifact (a sample to leave out, as
+  MNE `BAD_` annotations, FieldTrip artifact definitions, and NumPy masked
+  arrays mark them), of shape `(n_time_samples,)`,
+  `(n_time_samples, n_trials)`, or the time series' own (an artifact in any
+  signal then leaves the sample out of all), or `"nonfinite"` for every NaN
+  or infinite sample. A trial's window is used only if none of its samples is
+  an artifact, so each time window averages the trials it keeps.
   `multitaper_connectivity` takes it in `transform_kwargs`. New
-  `Multitaper.valid_samples`, `valid_windows`, and `observation_weights`.
+  `Multitaper.artifact_samples`, `valid_windows` (`True` at the kept trial
+  windows), and `observation_weights`.
 - `Connectivity.n_valid_observations`: the observations each bin (time window
   and frequency, by default) averages; `n_observations` stays the raw count.
   Where zero observation weights drop observations, the debiased squared
