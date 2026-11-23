@@ -367,6 +367,49 @@ def test_the_wrapper_takes_valid_samples_in_transform_kwargs(recording):
     assert '"valid_samples":"mask"' in result.attrs["transform_parameters_json"]
 
 
+@pytest.mark.parametrize("shared", [True, False], ids=["shared", "per_signal"])
+def test_the_wrapper_reads_a_mask_of_2d_input_in_its_layout(shared):
+    """(n_time, n_signals) input: the mask is (n_time,) or (n_time, n_signals)."""
+    time_series = np.random.default_rng(7).standard_normal((200, 2))
+    valid = np.ones(200 if shared else (200, 2), dtype=bool)
+    valid[60] = False
+    with pytest.warns(UserWarning, match="leaves 1 of 4 time windows"):
+        result = multitaper_connectivity(
+            time_series,
+            SAMPLING_FREQUENCY,
+            method="power",
+            transform_kwargs={"n_time_samples_per_window": WINDOW, "valid_samples": valid},
+        )
+    power = result.values
+    assert np.isnan(power[1]).all()
+    assert np.isfinite(power[[0, 2, 3]]).all()
+
+
+def test_the_wrapper_transposes_a_labeled_mask_like_its_labeled_input(recording):
+    xr = pytest.importorskip("xarray")
+    time_series, valid = recording
+    labeled = xr.DataArray(
+        np.transpose(time_series, (2, 0, 1)), dims=("channel", "time", "trial")
+    )
+    labeled_mask = xr.DataArray(valid.T.copy(), dims=("trial", "time"))
+    transform_kwargs = {"n_time_samples_per_window": WINDOW}
+    from_labels = _quietly(
+        multitaper_connectivity,
+        labeled,
+        SAMPLING_FREQUENCY,
+        method="power",
+        transform_kwargs={**transform_kwargs, "valid_samples": labeled_mask},
+    )
+    from_arrays = _quietly(
+        multitaper_connectivity,
+        time_series,
+        SAMPLING_FREQUENCY,
+        method="power",
+        transform_kwargs={**transform_kwargs, "valid_samples": valid},
+    )
+    np.testing.assert_array_equal(from_labels.values, from_arrays.values)
+
+
 # Monte Carlo: replicate datasets on the window axis, one window each; every
 # window drops a different number of its 8 trials, up to 7.
 N_REPLICATES = 800

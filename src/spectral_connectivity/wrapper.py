@@ -24,6 +24,7 @@ from spectral_connectivity._frequency_bands import (
 from spectral_connectivity._input_handling import (
     _UNSET,
     _is_real_numeric_dtype,
+    _resolve_dataarray_dimensions,
     _SignalLabel,
     _SignalMetadata,
     _unwrap_fourier_input,
@@ -1702,6 +1703,15 @@ def multitaper_connectivity(
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
+    if "valid_samples" in transform_settings:
+        transform_settings["valid_samples"] = _valid_samples_in_core_layout(
+            transform_settings["valid_samples"],
+            time_series,
+            time_series_data.ndim,
+            time_dim=time_dim,
+            trial_dim=trial_dim,
+            signal_dim=signal_dim,
+        )
     if time_series_data.ndim == 2:
         time_series_data = time_series_data[:, np.newaxis, :]
     try:
@@ -1778,6 +1788,51 @@ def multitaper_connectivity(
     _warn_label_orientation_changed(method)
     _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", kwargs)
     return result
+
+
+def _valid_samples_in_core_layout(
+    valid_samples: Any,
+    time_series: Any,
+    n_dimensions: int,
+    **dimensions: Hashable | None,
+) -> Any:
+    """``valid_samples`` in Multitaper's ``(n_time_samples, n_trials[, n_signals])``.
+
+    A mask of a DataArray time series that is itself a DataArray is
+    transposed by its dimension names to the order the time series is (its
+    time, trial and signal dimensions; it may lack the trial and signal ones).
+    The mask of a 2-D ``(n_time_samples, n_signals)`` time series has that
+    layout, ``(n_time_samples,)`` or ``(n_time_samples, n_signals)``, and
+    gains the trial axis the time series does. Any other value is passed on.
+    """
+    if valid_samples is None or isinstance(valid_samples, str):
+        return valid_samples
+    if isinstance(valid_samples, xr.DataArray) and isinstance(time_series, xr.DataArray):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # its notice was given for the data
+            order = _resolve_dataarray_dimensions(time_series, **dimensions)
+        extra = [dimension for dimension in valid_samples.dims if dimension not in order]
+        if extra:
+            msg = (
+                f"valid_samples has dimension(s) {extra!r} that time_series, with "
+                f"dimensions {time_series.dims!r}, does not; name its axes as the "
+                "time series names its time, trial and signal axes."
+            )
+            raise ValueError(msg)
+        valid_samples = valid_samples.transpose(
+            *[dimension for dimension in order if dimension in valid_samples.dims]
+        ).data
+    if n_dimensions == 2:
+        mask = np.asarray(valid_samples)
+        if mask.ndim not in (1, 2):
+            msg = (
+                f"valid_samples has shape {mask.shape}; for a 2-D time series "
+                "(n_time_samples, n_signals) it must be (n_time_samples,), shared by "
+                "every signal, or (n_time_samples, n_signals)."
+            )
+            raise ValueError(msg)
+        return mask[:, np.newaxis] if mask.ndim == 1 else mask[:, np.newaxis, :]
+    return valid_samples
 
 
 # Every Multitaper setting, in its signature's order; the ones that
