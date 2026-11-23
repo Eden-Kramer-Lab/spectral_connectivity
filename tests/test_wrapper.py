@@ -4429,6 +4429,134 @@ def test_every_result_coordinate_is_described():
             assert coordinate.attrs.get("long_name"), name
 
 
+@pytest.fixture
+def regions():
+    """Four channels with a ``region`` coordinate grouping them in two."""
+    rng = np.random.default_rng(52)
+    return xr.DataArray(
+        rng.standard_normal((1000, 4, 4)),
+        dims=("time", "trial", "channel"),
+        coords={
+            "time": np.arange(1000) / 500,
+            "channel": ["a", "b", "c", "d"],
+            "region": ("channel", ["CA1", "CA1", "PFC", "PFC"]),
+            "depth": ("channel", [1.0, 2.0, 3.0, 4.0]),
+        },
+    )
+
+
+def test_group_labels_can_name_a_signal_coordinate(regions):
+    """group_labels="region" reads the labels from the input's region
+    coordinate: the result is the one the labels themselves give, whether the
+    name is passed directly or in connectivity_kwargs."""
+    labels = ["CA1", "CA1", "PFC", "PFC"]
+    by_labels = multitaper_connectivity(
+        regions, method="canonical_coherence", group_labels=labels
+    )
+    by_name = multitaper_connectivity(
+        regions, method="canonical_coherence", group_labels="region"
+    )
+    in_kwargs = multitaper_connectivity(
+        regions, method="canonical_coherence", connectivity_kwargs={"group_labels": "region"}
+    )
+    xr.testing.assert_identical(by_name, by_labels)
+    xr.testing.assert_identical(in_kwargs, by_labels)
+    assert by_name.source_group.values.tolist() == ["CA1", "PFC"]
+
+
+def test_fourier_connectivity_group_labels_can_name_a_signal_coordinate(regions):
+    multitaper = Multitaper(regions.values, sampling_frequency=500)
+    coefficients = xr.DataArray(
+        multitaper.fft(),
+        dims=("time", "trial", "taper", "frequency", "channel"),
+        coords={
+            "frequency": multitaper.frequencies,
+            "channel": regions.channel.values,
+            "region": ("channel", regions.region.values),
+        },
+    )
+    by_name = fourier_connectivity(
+        coefficients, method="canonical_coherence", group_labels="region"
+    )
+    by_labels = fourier_connectivity(
+        coefficients, method="canonical_coherence", group_labels=["CA1", "CA1", "PFC", "PFC"]
+    )
+    xr.testing.assert_identical(by_name, by_labels)
+
+
+def test_group_labels_naming_a_missing_coordinate_lists_the_ones_there(regions):
+    with pytest.raises(
+        ValueError,
+        match=r"names no 1-D coordinate along the signal dimension 'channel'.*'region', 'depth'",
+    ):
+        multitaper_connectivity(regions, method="canonical_coherence", group_labels="area")
+    # The index labels each signal: one group per signal is not a grouping.
+    with pytest.raises(ValueError, match="'channel' itself labels each signal"):
+        multitaper_connectivity(regions, method="canonical_coherence", group_labels="channel")
+
+
+@pytest.mark.parametrize(
+    ("dims", "signal_dim"),
+    [(("channel", "trial", "time"), None), (("electrode", "time", "trial"), "electrode")],
+    ids=["transposed", "named_signal_dim"],
+)
+def test_group_labels_coordinate_follows_the_signal_axis(regions, dims, signal_dim):
+    """The coordinate is read from the signal dimension, wherever it lies and
+    whatever it is called, and stays aligned with the signals."""
+    regions = regions.assign_coords(region=("channel", ["CA1", "PFC", "CA1", "PFC"]))
+    expected = multitaper_connectivity(
+        regions, method="canonical_coherence", group_labels=["CA1", "PFC", "CA1", "PFC"]
+    )
+    renamed = regions.rename(channel=dims[0]) if dims[0] != "channel" else regions
+    result = multitaper_connectivity(
+        renamed.transpose(*dims),
+        method="canonical_coherence",
+        group_labels="region",
+        signal_dim=signal_dim,
+    )
+    np.testing.assert_array_equal(result.values, expected.values)
+    assert result.source_group.values.tolist() == ["CA1", "PFC"]
+
+
+@pytest.mark.parametrize(
+    "wrapper", ["multitaper_connectivity", "fourier_connectivity", "connectivity_to_xarray"]
+)
+def test_group_labels_naming_a_coordinate_needs_a_dataarray(regions, wrapper):
+    """A plain array, or a transform, has no coordinates to read the labels
+    from; the error says to pass the labels themselves."""
+    time_series = regions.values
+    if wrapper == "multitaper_connectivity":
+
+        def call():
+            return multitaper_connectivity(
+                time_series,
+                sampling_frequency=500,
+                method="canonical_coherence",
+                group_labels="region",
+            )
+    elif wrapper == "fourier_connectivity":
+        multitaper = Multitaper(time_series, sampling_frequency=500)
+
+        def call():
+            return fourier_connectivity(
+                multitaper.fft(),
+                frequencies=multitaper.frequencies,
+                method="canonical_coherence",
+                group_labels="region",
+            )
+    else:
+
+        def call():
+            return connectivity_to_xarray(
+                Multitaper(time_series, sampling_frequency=500),
+                "canonical_coherence",
+                group_labels="region",
+            )
+
+    with pytest.raises(TypeError, match=r"group_labels='region' names a coordinate, but"):
+        call()
+
+
 def test_spectral_densities_carry_units_derived_from_the_input(labeled_channels):
     result = multitaper_connectivity(
         labeled_channels, sampling_frequency=500, method=["power", "cross_spectral_density"]

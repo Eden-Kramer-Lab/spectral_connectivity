@@ -292,6 +292,23 @@ instead of by signal.
 
 ```
 
+When the input is a DataArray whose signals carry a coordinate naming their
+group, pass that coordinate's name instead of the labels:
+
+```python
+>>> import xarray as xr
+>>> labeled = xr.DataArray(
+...     time_series,
+...     dims=("time", "trial", "channel"),
+...     coords={"channel": ["a", "b", "c"], "region": ("channel", ["CA1", "CA1", "PFC"])},
+... )
+>>> multitaper_connectivity(
+...     labeled, sampling_frequency=500, method="canonical_coherence", group_labels="region"
+... ).identical(between_areas)
+True
+
+```
+
 The component measures (`canonical_coherency`,
 `maximized_imaginary_coherency_components`) return a Dataset with one
 `connection` per pair of groups. Each connection names its
