@@ -588,7 +588,7 @@ def _check_measure_settings(
     connectivity_kwargs: Mapping[str, Any] | None,
     *,
     function: str,
-    transform_settings_hint: str | None,
+    transform_settings_hint: str,
     frequency_decimation: int = 1,
     frequency_bands: Mapping[str, tuple[float, float]] | None = None,
 ) -> None:
@@ -802,7 +802,10 @@ def connectivity_to_xarray(
         methods,
         measure_settings,
         function="connectivity_to_xarray",
-        transform_settings_hint=None,
+        transform_settings_hint=(
+            "set it on the transform you pass as m (for example "
+            "Multitaper(..., time_halfbandwidth_product=3))"
+        ),
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )

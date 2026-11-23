@@ -1912,8 +1912,8 @@ def test_transform_setting_in_connectivity_kwargs_points_to_the_fourier_transfor
     assert "multitaper_connectivity" not in message
 
 
-def test_connectivity_to_xarray_gives_no_transform_settings_hint():
-    """Its caller built the transform, so there is no wrapper to point to."""
+def test_connectivity_to_xarray_points_transform_settings_to_the_transform():
+    """Its caller built the transform, so a transform setting goes there."""
     transform = Multitaper(np.random.default_rng(13).standard_normal((256, 2, 3)), 250)
     with pytest.raises(TypeError, match="does not accept keyword argument") as excinfo:
         connectivity_to_xarray(
@@ -1921,7 +1921,13 @@ def test_connectivity_to_xarray_gives_no_transform_settings_hint():
             "magnitude_squared_coherence",
             connectivity_kwargs={"time_halfbandwidth_product": 4},
         )
-    assert "transform setting" not in str(excinfo.value)
+    message = str(excinfo.value)
+    assert (
+        "If 'time_halfbandwidth_product' is a transform setting, set it on the "
+        "transform you pass as m (for example Multitaper(..., "
+        "time_halfbandwidth_product=3))." in message
+    )
+    assert "multitaper_connectivity" not in message
 
 
 @pytest.fixture(scope="module")
@@ -4957,13 +4963,16 @@ def test_connectivity_to_xarray_rejects_what_multitaper_connectivity_rejects(
     four_signals, settings
 ):
     """The same request fails with the same error through both wrappers, except
-    for multitaper_connectivity's hint on where transform settings go."""
+    for each wrapper's own hint on where transform settings go."""
     with pytest.raises((ValueError, TypeError)) as expected:
         multitaper_connectivity(four_signals, _MULTI_SAMPLING_FREQUENCY, **settings)
     with pytest.raises(expected.type) as actual:
         connectivity_to_xarray(Multitaper(four_signals, _MULTI_SAMPLING_FREQUENCY), **settings)
-    transform_hint = "\nconnectivity_kwargs configures the measure only."
-    assert str(actual.value) == str(expected.value).split(transform_hint)[0]
+    transform_hint = " is a transform setting, "
+    assert (
+        str(actual.value).split(transform_hint)[0]
+        == str(expected.value).split(transform_hint)[0]
+    )
 
 
 def test_connectivity_to_xarray_ignores_squeeze_for_a_list(four_signals):
