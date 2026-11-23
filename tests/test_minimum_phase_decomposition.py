@@ -980,8 +980,26 @@ def test_is_not_minimum_phase_flags_an_all_pass_rotation_of_the_factor(n_fft):
     np.testing.assert_allclose(factors @ _conjugate_transpose(factors), spectra, atol=1e-12)
 
     flagged = to_host(mpd_module._is_not_minimum_phase(to_device(factors), to_device(spectra)))
+    winding = to_host(mpd_module._determinant_winding_number(to_device(factors)))
 
     np.testing.assert_array_equal(flagged, [False, False, True])
+    # det(G U) = b det G, and b(z) = (z - a) / (1 - a z) winds once round 0.
+    np.testing.assert_allclose(winding, [0, 0, 1], atol=1e-12)
+
+
+def test_winding_number_is_not_counted_where_the_phase_jumps_between_bins():
+    """A determinant whose phase turns by pi / 2 or more between bins cannot
+    be counted reliably (an aliased count of 2 came with turns of 1.9-3.1), so
+    it is NaN, not tested, rather than a spurious winding."""
+    n_fft = 8
+    omega = 2 * np.pi * np.arange(n_fft) / n_fft
+    slow = np.exp(1j * omega)[np.newaxis, :, np.newaxis, np.newaxis]
+    fast = np.exp(3j * omega)[np.newaxis, :, np.newaxis, np.newaxis]
+    winding = to_host(
+        mpd_module._determinant_winding_number(to_device(np.concatenate([slow, fast])))
+    )
+    assert winding[0] == pytest.approx(1)
+    assert np.isnan(winding[1])
 
 
 def test_unscaled_factor_of_signals_of_very_different_power_warns(monkeypatch):

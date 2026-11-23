@@ -21,6 +21,9 @@ logger = getLogger(__name__)
 # Connectivity matches to drop them for NaN or Inf coefficients.
 CHOLESKY_FALLBACK_WARNING_START = "Computing the initial conditions using the Cholesky failed"
 NONCONVERGENCE_WARNING_START = "Wilson minimum-phase decomposition did not converge"
+NOT_MINIMUM_PHASE_WARNING_START = (
+    "Wilson minimum-phase decomposition converged to a factor that is not minimum phase"
+)
 
 # A minimum-phase factor's impulse response is causal; on the FFT grid it
 # reaches the negative lags only by wrapping around, as the spectrum's
@@ -30,6 +33,33 @@ NONCONVERGENCE_WARNING_START = "Wilson minimum-phase decomposition did not conve
 # minimum phase. The largest ratio measured across the test suite was 35.
 ANTICAUSAL_ENERGY_MARGIN = 100
 ANTICAUSAL_ENERGY_FLOOR = 1e-6
+# The winding number of det G is counted only where its phase changes by less
+# than this between neighbouring bins. Factors that were not minimum phase
+# changed by at most 0.31 per bin; aliased counts on coarse grids (a winding
+# of 2 for factors whose zero-padded winding is 0) came with changes of 1.9 to
+# 3.1.
+WINDING_MAX_PHASE_INCREMENT = np.pi / 2
+
+
+def _not_minimum_phase_message(where: str) -> str:
+    """The warning for factors that converged but are not minimum phase.
+
+    ``where`` names what was factored, e.g. "3 of 10 sub-spectra" or a
+    measure's signal pairs.
+    """
+    return (
+        f"{NOT_MINIMUM_PHASE_WARNING_START} for {where}: its impulse response has "
+        "far more energy at negative lags than the spectrum's wrap-around on the "
+        "FFT grid explains, or its determinant winds around zero. The factor "
+        "reproduces the spectrum, but its transfer function and noise covariance, "
+        "and every directed measure read from them (spectral Granger, DTF, PDC, "
+        "etc.), are wrong there. This is a numerical failure of the factorization "
+        "that a tighter tolerance or more iterations do not fix; treat those "
+        "values as unreliable and report the case, with the spectrum that "
+        "produced it, at https://github.com/Eden-Kramer-Lab/spectral_connectivity/"
+        "issues. The check is best effort: a factor can fail to be minimum phase "
+        "without being caught."
+    )
 
 
 def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) -> bool:
@@ -391,6 +421,54 @@ def _lag_energy_share(
     return share
 
 
+def _determinant_winding_number(
+    factor: NDArray[np.complexfloating],
+    n_fft_samples: int | None = None,
+) -> NDArray[np.floating]:
+    """Times ``det G(e^{iω})`` winds around zero as ``ω`` goes once round the circle.
+
+    The phase increments between neighbouring bins, each wrapped to
+    ``(-π, π]``, summed and divided by ``2π``. A minimum-phase factor's
+    determinant has no zeros or poles outside the unit disk (in ``z⁻¹``), so
+    its winding number is 0; rescaling the signals multiplies ``det G`` by a
+    positive constant and leaves it unchanged. The count is reliable only if
+    the phase changes by much less than ``π`` between neighbouring bins, so a
+    factor whose largest increment reaches ``WINDING_MAX_PHASE_INCREMENT`` is
+    reported as NaN (not tested).
+
+    Parameters
+    ----------
+    factor : NDArray[complexfloating],
+        shape (..., n_frequencies, n_signals, n_signals)
+        Factors on every bin of the grid, or on the non-negative half of a
+        conjugate-symmetric one of ``n_fft_samples`` bins.
+    n_fft_samples : int, optional
+        Two-sided length of a half spectrum.
+
+    Returns
+    -------
+    NDArray[floating], shape (...,)
+        The winding number, or NaN for a non-finite factor or one whose phase
+        changes too fast between bins to count.
+    """
+    determinant = xp.linalg.det(factor)
+    if n_fft_samples is not None:
+        n_nonnegative = determinant.shape[-1]
+        determinant = xp.concatenate(
+            (
+                determinant,
+                xp.conj(determinant[..., n_fft_samples - n_nonnegative : 0 : -1]),
+            ),
+            axis=-1,
+        )
+    increments = xp.angle(xp.roll(determinant, -1, axis=-1) * xp.conj(determinant))
+    resolved = xp.max(xp.abs(increments), axis=-1) < WINDING_MAX_PHASE_INCREMENT
+    winding: NDArray[np.floating] = xp.where(
+        resolved, xp.sum(increments, axis=-1) / (2 * np.pi), xp.nan
+    )
+    return winding
+
+
 def _is_not_minimum_phase(
     factor: NDArray[np.complexfloating],
     cross_spectral_matrix: NDArray[np.complexfloating],
@@ -405,9 +483,15 @@ def _is_not_minimum_phase(
     autocovariance past a quarter of the grid. A factor is flagged when its
     share of energy at negative lags exceeds both
     ``ANTICAUSAL_ENERGY_MARGIN`` times the spectrum's share beyond a quarter
-    of the grid and ``ANTICAUSAL_ENERGY_FLOOR``. Both shares depend on the
-    signals' scales, so pass the scaled spectrum and its factor, in which
-    every signal counts equally. A non-finite sub-spectrum is not flagged.
+    of the grid and ``ANTICAUSAL_ENERGY_FLOOR``, or when ``det G`` winds
+    around zero (see :func:`_determinant_winding_number`). Both energy shares
+    depend on the signals' scales, so pass the scaled spectrum and its
+    factor, in which every signal counts equally. A non-finite sub-spectrum
+    is not flagged.
+
+    The check is best effort. A factor that is causal but not minimum phase
+    passes it unless its determinant winds around zero on a grid fine enough
+    to count, and so does one whose anticausal part is within the allowance.
 
     Parameters
     ----------
@@ -436,7 +520,8 @@ def _is_not_minimum_phase(
     anticausal = _lag_energy_share(factor, negative_lags, n_fft_samples)
     wrapped = _lag_energy_share(cross_spectral_matrix, beyond_a_quarter, n_fft_samples)
     allowed = xp.maximum(ANTICAUSAL_ENERGY_MARGIN * wrapped, ANTICAUSAL_ENERGY_FLOOR)
-    is_flagged: NDArray[np.bool_] = anticausal > allowed
+    winding = _determinant_winding_number(factor, n_fft_samples)
+    is_flagged: NDArray[np.bool_] = (anticausal > allowed) | (xp.abs(winding) > 0.5)
     return is_flagged
 
 
@@ -751,16 +836,18 @@ def minimum_phase_decomposition(
     signal with zero or non-finite power keeps a scale of 1.
 
     Every factor ``G`` with ``G Gᴴ = S`` is a fixed point of the iteration, so
-    each converged factor is then checked for being minimum phase. Such a
-    factor is causal: its impulse response reaches the negative lags only by
-    wrapping around the grid, as the spectrum's autocovariance does past a
-    quarter of the grid. A sub-spectrum whose scaled factor has more of its
+    each converged factor is then checked, on a best-effort basis, for being
+    minimum phase. Such a factor is causal: its impulse response reaches the
+    negative lags only by wrapping around the grid, as the spectrum's
+    autocovariance does past a quarter of the grid; and its determinant does
+    not wind around zero. A sub-spectrum whose scaled factor has more of its
     energy at negative lags than 100 times the scaled spectrum's share past a
-    quarter of the grid, and more than 1e-6, gives a ``UserWarning``; its
-    factor is returned as computed. The check catches the anticausal factors
-    that the unscaled iteration converged to for signals of very different
-    power. A factor that is causal but not minimum phase, or whose anticausal
-    part is within that allowance, passes it. It costs less than one iteration.
+    quarter of the grid (and more than 1e-6), or whose ``det G(e^{iω})``
+    winds around zero where its phase turns by less than ``π / 2`` between
+    bins, gives a ``UserWarning``; its factor is returned as computed. A
+    factor that is causal but not minimum phase passes the check unless its
+    determinant winds countably, and so does one whose anticausal part is
+    within the allowance. It costs less than one iteration.
 
     Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
     computed once, which lets sub-spectra with near-collinear channels converge.
@@ -818,7 +905,46 @@ def minimum_phase_decomposition(
            information flow in brain networks with nonparametric Granger
            causality. NeuroImage, 41(2), 354-362.
     """
-    # _warn_on_failure=False is private to the spectral Granger measures, which
+    factor, not_minimum_phase = _minimum_phase_factor_and_flags(
+        cross_spectral_matrix,
+        tolerance,
+        max_iterations,
+        warn_on_failure=_warn_on_failure,
+    )
+    if _warn_on_failure:
+        _warn_not_minimum_phase(not_minimum_phase)
+    return factor
+
+
+def _warn_not_minimum_phase(not_minimum_phase: NDArray[np.bool_]) -> None:
+    """Warn, counting the sub-spectra whose factor is not minimum phase."""
+    n_not_minimum_phase = int(not_minimum_phase.sum())
+    if n_not_minimum_phase:
+        warnings.warn(
+            _not_minimum_phase_message(
+                f"{n_not_minimum_phase} of {not_minimum_phase.size} sub-spectrum/spectra"
+            ),
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
+
+def _minimum_phase_factor_and_flags(
+    cross_spectral_matrix: NDArray[np.complexfloating],
+    tolerance: float,
+    max_iterations: int,
+    *,
+    warn_on_failure: bool,
+) -> tuple[NDArray[np.complexfloating], NDArray[np.bool_]]:
+    """:func:`minimum_phase_decomposition`, and which factors are not minimum phase.
+
+    Returns the factor and a per-sub-spectrum mask (shape
+    ``cross_spectral_matrix.shape[:-3]``) of converged factors that
+    :func:`_is_not_minimum_phase` flags, without warning about them; the
+    callers name what was flagged. ``warn_on_failure`` controls only the
+    non-convergence warning.
+    """
+    # warn_on_failure=False is private to the spectral Granger measures, which
     # report the NaN signal pairs themselves instead of this pair-less warning.
     if not np.isfinite(tolerance) or tolerance <= 0:
         msg = f"tolerance must be a finite positive number, got {tolerance}."
@@ -945,7 +1071,7 @@ def minimum_phase_decomposition(
             xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
             minimum_phase_factor,
         )
-        if _warn_on_failure:
+        if warn_on_failure:
             reason = (
                 "a sub-spectrum became singular (rank-deficient / duplicated channels)"
                 if singular_factor
@@ -967,24 +1093,7 @@ def minimum_phase_decomposition(
     not_minimum_phase = _is_not_minimum_phase(
         minimum_phase_factor, working_cross_spectral_matrix, half_spectrum_n_fft
     )
-    n_not_minimum_phase = int(not_minimum_phase.sum())
-    if n_not_minimum_phase:
-        warnings.warn(
-            "Wilson minimum-phase decomposition converged to a factor that is not "
-            f"minimum phase for {n_not_minimum_phase} of {n_units} "
-            "sub-spectrum/spectra: its impulse "
-            "response has far more energy at negative lags than the spectrum's "
-            "wrap-around on the FFT grid explains. The factor reproduces the "
-            "spectrum, but its transfer function and noise covariance, and so "
-            "every directed measure (spectral Granger, DTF, PDC, etc.), are wrong "
-            "for those sub-spectra. A tighter tolerance or more iterations do not "
-            "help. Check for signals with a very slow drift or near-unit-root "
-            "dynamics (detrend or high-pass filter them), and for signals whose "
-            "spectra span many orders of magnitude.",
-            UserWarning,
-            stacklevel=stacklevel_outside_package(),
-        )
     minimum_phase_factor = signal_scale[..., xp.newaxis, :, xp.newaxis] * minimum_phase_factor
     if half_spectrum_n_fft is not None:
         minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)
-    return minimum_phase_factor
+    return minimum_phase_factor, not_minimum_phase

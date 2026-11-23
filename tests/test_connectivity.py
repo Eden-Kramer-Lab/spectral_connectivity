@@ -3133,8 +3133,8 @@ def test_conditional_granger_factorizes_each_channel_set_once():
     # The full model and every reduced model are factorized through _granger.
     with patch.object(
         _granger,
-        "minimum_phase_decomposition",
-        wraps=_granger.minimum_phase_decomposition,
+        "_minimum_phase_factor_and_flags",
+        wraps=_granger._minimum_phase_factor_and_flags,
     ) as factorize:
         conn.conditional_spectral_granger_prediction()
     assert factorize.call_count == shape[-1] + 1

@@ -41,6 +41,7 @@ from spectral_connectivity._granger import (
     _var_model_from_factor,
     _var_model_from_spectrum,
     _warn_nan_granger_pairs,
+    _warn_not_minimum_phase_pairs,
 )
 from spectral_connectivity._multivariate import (
     GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
@@ -5452,14 +5453,17 @@ class Connectivity:
         csm = self._expectation_cross_spectral_matrix()
         if time_reversed:
             csm = xp.swapaxes(csm, -1, -2)
+        not_minimum_phase = np.zeros((self.n_signals, self.n_signals), dtype=bool)
         result = _estimate_spectral_granger_prediction(
             self._power,
             csm,
             combinations(range(self.n_signals), 2),
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+            not_minimum_phase=not_minimum_phase,
         )
         _warn_nan_granger_pairs(result, measure)
+        _warn_not_minimum_phase_pairs(not_minimum_phase, measure)
         return result
 
     @_orientation_changed
@@ -5518,6 +5522,7 @@ class Connectivity:
         """
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
+        not_minimum_phase = np.zeros((self.n_signals, self.n_signals), dtype=bool)
         result = _estimate_subset_spectral_granger_prediction(
             self._power,
             self._subset_cross_spectral_matrix(pairs),
@@ -5525,11 +5530,15 @@ class Connectivity:
             n_signals=self._fourier_coefficients.shape[-1],
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+            not_minimum_phase=not_minimum_phase,
         )
         requested = np.zeros((self.n_signals, self.n_signals), dtype=bool)
         requested[pairs[:, 0], pairs[:, 1]] = requested[pairs[:, 1], pairs[:, 0]] = True
         _warn_nan_granger_pairs(
             result, "subset_pairwise_spectral_granger_prediction", requested=requested
+        )
+        _warn_not_minimum_phase_pairs(
+            not_minimum_phase, "subset_pairwise_spectral_granger_prediction"
         )
         return result
 
@@ -5694,6 +5703,7 @@ class Connectivity:
             spectrum = xp.swapaxes(spectrum, -1, -2)
         tolerance = self._minimum_phase_tolerance
         max_iterations = self._minimum_phase_max_iterations
+        not_minimum_phase = np.zeros((self.n_signals, self.n_signals), dtype=bool)
         if self.n_signals == 2:
             # No conditioning set: the measure is pairwise Geweke Granger.
             result = _estimate_blockwise_spectral_granger(
@@ -5701,30 +5711,38 @@ class Connectivity:
                 [np.array([0]), np.array([1])],
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
+                not_minimum_phase=not_minimum_phase,
             )
         else:
             # The forward full model is the instance's cached factorization
             # (the same CSM, tolerance and iteration cap), shared with the
-            # other directed measures, whose failure warning it keeps. The
+            # other directed measures, whose failure warnings it keeps. The
             # reversed one is factored here for this measure alone, so its
-            # failures are reported only by the warning naming the NaN pairs.
-            transfer_function, noise_covariance = (
-                _var_model_from_spectrum(
-                    spectrum,
-                    minimum_phase_tolerance=tolerance,
-                    minimum_phase_max_iterations=max_iterations,
+            # failures are reported only by the warnings naming the pairs.
+            if time_reversed:
+                transfer_function, noise_covariance, full_not_minimum_phase = (
+                    _var_model_from_spectrum(
+                        spectrum,
+                        minimum_phase_tolerance=tolerance,
+                        minimum_phase_max_iterations=max_iterations,
+                    )
                 )
-                if time_reversed
-                else (self._transfer_function, self._noise_covariance)
-            )
+                not_minimum_phase[:] = bool(xp.any(full_not_minimum_phase))
+            else:
+                transfer_function, noise_covariance = (
+                    self._transfer_function,
+                    self._noise_covariance,
+                )
             result = _estimate_all_conditional_spectral_granger(
                 spectrum,
                 transfer_function,
                 noise_covariance,
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
+                not_minimum_phase=not_minimum_phase,
             )
         _warn_nan_granger_pairs(result, measure)
+        _warn_not_minimum_phase_pairs(not_minimum_phase, measure)
         return result
 
     @_source_first
@@ -5869,13 +5887,16 @@ class Connectivity:
         spectrum = self._expectation_cross_spectral_matrix()
         if time_reversed:
             spectrum = xp.swapaxes(spectrum, -1, -2)
+        not_minimum_phase = np.zeros((len(indices), len(indices)), dtype=bool)
         result = _estimate_blockwise_spectral_granger(
             spectrum,
             indices,
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+            not_minimum_phase=not_minimum_phase,
         )
         _warn_nan_granger_pairs(result, measure, names=to_numpy(labels))
+        _warn_not_minimum_phase_pairs(not_minimum_phase, measure, names=to_numpy(labels))
         # Swap on the host, like _source_first: [..., target, source] -> source first.
         return np.swapaxes(to_numpy(result), -1, -2), to_numpy(labels)
 

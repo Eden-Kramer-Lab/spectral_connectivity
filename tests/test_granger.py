@@ -53,3 +53,60 @@ def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
     assert np.isnan(sanitized[3])
     # NaN propagates unchanged.
     assert np.isnan(sanitized[4])
+
+
+@pytest.mark.parametrize(
+    ("measure", "kwargs", "expected_pairs"),
+    [
+        ("pairwise_spectral_granger_prediction", {}, "0 -> 1, 0 -> 2, 1 -> 0"),
+        (
+            "subset_pairwise_spectral_granger_prediction",
+            {"pairs": [(0, 2)]},
+            "2 source -> target signal pair(s) (0-based signal indices) 0 -> 2, 2 -> 0",
+        ),
+        ("conditional_spectral_granger_prediction", {}, "0 -> 1, 0 -> 2, 1 -> 0"),
+        (
+            "blockwise_spectral_granger_prediction",
+            {"group_labels": ["a", "a", "b"]},
+            "'a' -> 'b', 'b' -> 'a'",
+        ),
+    ],
+)
+def test_granger_measures_name_the_pairs_whose_factor_is_not_minimum_phase(
+    measure, kwargs, expected_pairs, monkeypatch
+):
+    """Each Granger measure warns once per call, naming the source -> target
+    pairs whose (pairwise, reduced, or block) factor the check flagged,
+    however many factorizations the measure makes."""
+    import warnings
+
+    from spectral_connectivity import (
+        Connectivity,
+        DirectedOrientationWarning,
+        Multitaper,
+        _granger,
+    )
+    from spectral_connectivity._backend import xp
+
+    signals = np.random.default_rng(0).standard_normal((512, 10, 3))
+    connectivity = Connectivity.from_transform(
+        Multitaper(signals, sampling_frequency=256, time_halfbandwidth_product=2)
+    )
+    # The forward conditional measure uses the cached full model, factored
+    # (and checked) once per instance; factor it before flagging.
+    connectivity._minimum_phase_factor  # noqa: B018
+    original = _granger._minimum_phase_factor_and_flags
+
+    def flag_every_sub_spectrum(*args, **kwargs):
+        factor, flags = original(*args, **kwargs)
+        return factor, xp.ones_like(flags)
+
+    monkeypatch.setattr(_granger, "_minimum_phase_factor_and_flags", flag_every_sub_spectrum)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        getattr(connectivity, measure)(**kwargs)
+    messages = [str(w.message) for w in caught if "not minimum phase" in str(w.message)]
+    assert len(messages) == 1, messages
+    assert messages[0].startswith(f"{measure}: ")
+    assert expected_pairs in messages[0]
