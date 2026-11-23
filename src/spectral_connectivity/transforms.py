@@ -37,6 +37,8 @@ from spectral_connectivity.utils import (
     BackendArray,
     _validate_sampling_frequency,
     both_spellings_message,
+    close_names,
+    did_you_mean,
     is_positive_integer,
     mark_readonly_if_supported,
     numeric_array,
@@ -968,22 +970,24 @@ def _validate_artifact_handling(
     """Raise unless ``artifact_handling`` is an option ``transform`` supports
     and, for ``"missing_data_tapers"``, ``artifact_samples`` marks artifacts."""
     if not isinstance(artifact_handling, str) or artifact_handling not in _ARTIFACT_HANDLINGS:
+        hint = (
+            did_you_mean(close_names(artifact_handling, _ARTIFACT_HANDLINGS))
+            if isinstance(artifact_handling, str)
+            else ""
+        )
         msg = (
-            f"artifact_handling must be 'drop' or 'missing_data_tapers', got "
-            f"{artifact_handling!r}. 'drop' leaves out every trial window containing "
-            "an artifact sample; 'missing_data_tapers' (Multitaper only) estimates "
-            "it from its valid samples, with tapers built for its gaps."
+            "artifact_handling must be 'drop' or 'missing_data_tapers', got "
+            f"{artifact_handling!r}.{hint} See the artifact_handling parameter of "
+            "Multitaper."
         )
         raise ValueError(msg)
     if artifact_handling == "drop":
         return
     if transform != "Multitaper":
         msg = (
-            f"{transform} supports only artifact_handling='drop'. Missing-data "
-            "tapers are the Slepian sequences of a window with gaps, which "
-            "generalize the DPSS tapers of Multitaper; a single window has no such "
-            "family. Use Multitaper(..., artifact_handling='missing_data_tapers'), "
-            "or keep 'drop'."
+            f"{transform} supports only artifact_handling='drop' (it has no DPSS "
+            "taper family to adapt). Use Multitaper(..., "
+            "artifact_handling='missing_data_tapers') or keep 'drop'."
         )
         raise ValueError(msg)
     if artifact_samples is None:
@@ -1839,7 +1843,8 @@ Frequency Analysis
         return (
             f"A trial's window of {window} is dropped if any of its samples is an "
             "artifact; a shorter time_window_duration loses less data around "
-            "artifacts."
+            "artifacts. Alternatively, artifact_handling='missing_data_tapers' "
+            "(Multitaper only) estimates such a window from its valid samples."
         )
 
     def _check_kept_trial_windows(self, valid_windows: BackendArray) -> None:

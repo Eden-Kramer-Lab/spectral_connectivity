@@ -389,13 +389,17 @@ def test_adaptive_weighting_weights_a_gapped_window_as_a_window_of_its_own(recor
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
-        ({"artifact_handling": "interpolate"}, "must be 'drop' or 'missing_data_tapers'"),
+        (
+            {"artifact_handling": "interpolate"},
+            r"must be 'drop' or 'missing_data_tapers', got 'interpolate'\. See",
+        ),
+        ({"artifact_handling": "missing_data_taper"}, "Did you mean 'missing_data_tapers'"),
         ({"artifact_samples": None}, "needs artifact_samples"),
         ({"tapers": np.ones((WINDOW, 2)) / 8}, "custom tapers are not DPSS"),
         ({"is_low_bias": False}, "is_low_bias=False sets no such threshold"),
         ({"n_tapers": 1}, "uses 1, so it would drop"),
     ],
-    ids=["unknown", "no_mask", "custom_tapers", "not_low_bias", "one_taper"],
+    ids=["unknown", "misspelled", "no_mask", "custom_tapers", "not_low_bias", "one_taper"],
 )
 def test_invalid_settings_are_rejected(recording, kwargs, match):
     time_series, artifacts = recording
@@ -451,6 +455,16 @@ def test_artifact_handling_is_immutable_and_reported(recording):
     assert metadata["artifact_handling"] == "missing_data_tapers"
     assert metadata["n_dropped_trial_windows"] == 2
     assert metadata["n_missing_data_taper_trial_windows"] == 3
+
+
+def test_the_drop_warning_names_the_alternative():
+    time_series = np.random.default_rng(7).standard_normal((2 * WINDOW, 1, 2))
+    artifacts = np.zeros((2 * WINDOW, 1), dtype=bool)
+    artifacts[WINDOW + 3] = True
+    with pytest.warns(
+        UserWarning, match=r"Alternatively, artifact_handling='missing_data_tapers'"
+    ):
+        _multitaper(time_series, artifacts, artifact_handling="drop")
 
 
 def test_the_warnings_state_when_a_window_is_dropped():
