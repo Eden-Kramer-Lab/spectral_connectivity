@@ -166,7 +166,10 @@ named arguments: `time_window_duration` (seconds; default the whole trial),
 `detrend_type`. Any other
 `Multitaper` setting goes in `transform_kwargs={...}` (e.g.
 `transform_kwargs={"n_fft_samples": 1024}`), options for the measure itself go
-in `connectivity_kwargs={...}`, and group measures take `group_labels` (see
+in `connectivity_kwargs={...}`, and group measures take `group_labels`. The
+working precision (`dtype`) and the directed measures' Wilson factorization
+settings (`minimum_phase_tolerance`, `minimum_phase_max_iterations`) are named
+arguments of every wrapper (see
 [setting transform and measure options](docs/cookbook.md#set-transform-and-measure-options)
 and the
 [group-measures recipe](docs/cookbook.md#group-measures-canonical-coherence-between-areas)).

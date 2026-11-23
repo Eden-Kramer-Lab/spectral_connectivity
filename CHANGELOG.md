@@ -42,6 +42,12 @@ The migration guide for code written against 2.x is
 
 ### Added
 
+- `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
+  `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
+  `fourier_connectivity` and `Connectivity.from_transform` do: the working
+  precision and the Wilson factorization's tolerance and iteration cap for
+  the directed measures. In `connectivity_kwargs` or `transform_kwargs` they
+  raise `ValueError` naming the argument to use.
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided

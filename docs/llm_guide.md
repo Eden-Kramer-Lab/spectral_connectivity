@@ -97,7 +97,9 @@ Prefer the wrapper's labeled results so you never index these by hand.
   arguments of `multitaper_connectivity`. Put any other `Multitaper` setting in
   `transform_kwargs={...}` and measure settings in `connectivity_kwargs={...}`;
   a misspelled key raises instead of being ignored. Passing those as plain
-  keyword arguments is the deprecated 2.x form.
+  keyword arguments is the deprecated 2.x form. The working precision `dtype`
+  and the directed measures' `minimum_phase_tolerance` and
+  `minimum_phase_max_iterations` are named arguments of every wrapper.
 - Multitaper frequency resolution is the full DPSS concentration bandwidth,
   `2 * time_halfbandwidth_product / time_window_duration` Hz. It describes
   spectral smoothing; FFT bin spacing also depends on the FFT length and

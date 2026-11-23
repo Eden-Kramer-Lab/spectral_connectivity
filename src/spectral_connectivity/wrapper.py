@@ -469,8 +469,8 @@ def _setting_mapping(name: str, value: Mapping[str, Any] | None) -> dict[str, An
 def _unknown_setting_message(
     problem: str, key: Any, *, sampling_frequency_given: bool = False
 ) -> str:
-    """``"<problem> '<key>'."`` and the ``Multitaper`` settings ``key`` most
-    likely misspells.
+    """``"<problem> '<key>'."`` and the ``Multitaper`` or ``Connectivity``
+    settings ``key`` most likely misspells.
 
     A suggestion that is one of ``multitaper_connectivity``'s named settings
     says so, since it goes outside ``transform_kwargs``.
@@ -478,12 +478,15 @@ def _unknown_setting_message(
     message = f"{problem} {key!r}."
     if key in SAMPLING_FREQUENCY_ALIASES:
         return message + sampling_frequency_hint(sampling_frequency_given)
-    close = close_names(str(key), _MULTITAPER_SETTINGS)
+    close = close_names(str(key), (*_MULTITAPER_SETTINGS, *_CONNECTIVITY_SETTINGS))
     message += did_you_mean(close)
-    named = [name for name in close if name in _NAMED_TRANSFORM_SETTINGS]
+    named = [
+        name for name in close if name in (*_NAMED_TRANSFORM_SETTINGS, *_CONNECTIVITY_SETTINGS)
+    ]
     if named:
+        role = "is a named argument" if len(named) == 1 else "are named arguments"
         message += (
-            f" {', '.join(named)} is a named argument of multitaper_connectivity "
+            f" {', '.join(named)} {role} of multitaper_connectivity "
             f"(pass {named[0]}=... directly)."
         )
     return message
@@ -549,7 +552,7 @@ def _transform_settings(
     ]:
         if key in _TRANSFORM_KWARGS_SETTINGS:
             continue
-        if in_mapping and key in _NAMED_TRANSFORM_SETTINGS:
+        if in_mapping and key in (*_NAMED_TRANSFORM_SETTINGS, *_CONNECTIVITY_SETTINGS):
             msg = (
                 f"{key} was given inside transform_kwargs; it is a named argument of "
                 f"multitaper_connectivity, so pass it once, as {key}=..., not in the "
@@ -585,6 +588,7 @@ def _check_measure_settings(
     methods: Sequence[str],
     connectivity_kwargs: Mapping[str, Any] | None,
     *,
+    function: str,
     transform_settings_hint: str | None,
     frequency_decimation: int = 1,
     frequency_bands: Mapping[str, tuple[float, float]] | None = None,
@@ -596,11 +600,20 @@ def _check_measure_settings(
     measure must take every key (``group_labels`` is routed to the group
     measures separately), the frequency options must suit the measures
     (see :func:`_check_frequency_operations`), and ``power`` stays one-sided,
-    as a labelled result describes it. ``transform_settings_hint``
-    says where a transform setting goes instead (see
-    :func:`_check_method_accepts_kwargs`).
+    as a labelled result describes it. A ``Connectivity`` setting (``dtype``
+    and the Wilson factorization's) is a named argument of ``function``, not a
+    measure setting. ``transform_settings_hint`` says where a transform setting
+    goes instead (see :func:`_check_method_accepts_kwargs`).
     """
     settings = _setting_mapping("connectivity_kwargs", connectivity_kwargs)
+    for key in settings:
+        if key in _CONNECTIVITY_SETTINGS:
+            msg = (
+                f"{key} was given inside connectivity_kwargs; it sets up the "
+                f"Connectivity object, not a measure, and is a named argument of "
+                f"{function}, so pass it as {key}=..., not in the mapping."
+            )
+            raise ValueError(msg)
     _check_frequency_operations(
         methods,
         settings,
@@ -642,6 +655,9 @@ def connectivity_to_xarray(
     group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
     frequency_range: tuple[float, float] | None = None,
     connectivity_kwargs: Mapping[str, Any] | None = None,
+    dtype: DTypeLike = np.complex128,
+    minimum_phase_tolerance: float = 1e-8,
+    minimum_phase_max_iterations: int = 500,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """Calculate one connectivity measure and return a labeled array.
@@ -698,6 +714,13 @@ def connectivity_to_xarray(
         ``{"frequency_resolution": 10.0}`` for ``phase_slope_index``. A key the
         measure does not take raises ``TypeError``. There is no
         ``transform_kwargs``: ``m`` is already built.
+    dtype : numpy.dtype, default=complex128
+        Working precision for the connectivity computations.
+    minimum_phase_tolerance : float, default=1e-8
+        Relative convergence tolerance of the Wilson factorization used by the
+        directed measures.
+    minimum_phase_max_iterations : int, default=500
+        Maximum Wilson iterations for the directed measures.
     **kwargs
         Measure settings given directly as keyword arguments.
 
@@ -738,14 +761,24 @@ def connectivity_to_xarray(
     )
     # A misspelled or misplaced setting fails before any work, whichever route
     # it took; frequency_range is a named argument here as in every wrapper.
-    _check_measure_settings([method], measure_settings, transform_settings_hint=None)
+    _check_measure_settings(
+        [method],
+        measure_settings,
+        function="connectivity_to_xarray",
+        transform_settings_hint=None,
+    )
     consumes_range = _consumes_frequency_range(method)
     if consumes_range and frequency_range is not None:
         measure_settings["frequency_range"] = frequency_range
     group_labels, measure_settings, group_methods = _resolve_group_labels(
         [method], measure_settings, group_labels
     )
-    connectivity = Connectivity.from_transform(m)
+    connectivity = Connectivity.from_transform(
+        m,
+        dtype=dtype,
+        minimum_phase_tolerance=minimum_phase_tolerance,
+        minimum_phase_max_iterations=minimum_phase_max_iterations,
+    )
     # The signal-count and missing-labels messages need the signal count,
     # which a custom transform may expose only through its coefficients, so
     # they follow the FFT.
@@ -1168,6 +1201,9 @@ def multitaper_connectivity(
     time_dim: Hashable | None = None,
     trial_dim: Hashable | None = None,
     signal_dim: Hashable | None = None,
+    dtype: DTypeLike = np.complex128,
+    minimum_phase_tolerance: float = 1e-8,
+    minimum_phase_max_iterations: int = 500,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """
@@ -1357,6 +1393,13 @@ def multitaper_connectivity(
     signal_dim : hashable, optional
         DataArray dimension containing signals or channels. Common names such as
         ``"signal"`` and ``"channel"`` are inferred automatically.
+    dtype : numpy.dtype, default=complex128
+        Working precision for the connectivity computations.
+    minimum_phase_tolerance : float, default=1e-8
+        Relative convergence tolerance of the Wilson factorization used by the
+        directed measures.
+    minimum_phase_max_iterations : int, default=500
+        Maximum Wilson iterations for the directed measures.
     **kwargs
         Advanced ``Multitaper`` settings given directly as keyword arguments.
 
@@ -1572,6 +1615,7 @@ def multitaper_connectivity(
     _check_measure_settings(
         method,
         connectivity_kwargs,
+        function="multitaper_connectivity",
         transform_settings_hint=(
             "pass it to multitaper_connectivity: by name for the common settings "
             f"({', '.join(_NAMED_TRANSFORM_SETTINGS)}), otherwise in transform_kwargs"
@@ -1631,7 +1675,12 @@ def multitaper_connectivity(
     # immutable transform. The private formatter below never accepts a separate
     # Multitaper, so data and labels cannot be paired accidentally.
     metadata = m._provenance_metadata()
-    shared_connectivity = Connectivity.from_transform(m)
+    shared_connectivity = Connectivity.from_transform(
+        m,
+        dtype=dtype,
+        minimum_phase_tolerance=minimum_phase_tolerance,
+        minimum_phase_max_iterations=minimum_phase_max_iterations,
+    )
     # Validate labels and build shared provenance once; both are invariant across
     # the requested measures.
     signal_labels = _validated_signal_labels(signal_names, shared_connectivity.n_signals)
@@ -1685,6 +1734,8 @@ _NAMED_TRANSFORM_SETTINGS = tuple(
 _TRANSFORM_KWARGS_SETTINGS = tuple(
     name for name in _MULTITAPER_SETTINGS if name not in _NAMED_TRANSFORM_SETTINGS
 )
+# The Connectivity settings every wrapper takes by name.
+_CONNECTIVITY_SETTINGS = ("dtype", "minimum_phase_tolerance", "minimum_phase_max_iterations")
 
 # Spellings of the frequency units fourier_connectivity accepts without
 # conversion, compared ignoring case and whitespace.
@@ -1915,6 +1966,7 @@ def fourier_connectivity(
     _check_measure_settings(
         methods,
         connectivity_kwargs,
+        function="fourier_connectivity",
         transform_settings_hint="set it on the transform that produced fourier_coefficients",
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
