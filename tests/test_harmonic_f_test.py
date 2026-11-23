@@ -1,6 +1,8 @@
 """Thomson's harmonic F-test, Multitaper.harmonic_f_test."""
 
 import dataclasses
+import inspect
+import warnings
 
 import numpy as np
 import pytest
@@ -289,37 +291,60 @@ def test_rejects_an_fft_shorter_than_the_window(n_fft_samples):
         multitaper.harmonic_f_test(n_fft_samples=n_fft_samples)
 
 
+# Artifact handling lives in other changes; with them present the tests
+# below build the real transform, otherwise they set the attributes the test
+# reads, so the rules are tested in both states.
+_MULTITAPER_PARAMETERS = inspect.signature(Multitaper).parameters
+
+
 def test_left_out_windows_are_nan(monkeypatch):
     """A trial's window that artifact_samples leaves out (valid_windows False)
-    is NaN in every field: its coefficients come from zero-filled samples.
-    ``valid_windows`` exists where artifact handling does; set it here so the
-    rule is tested on every branch."""
+    is NaN in every field: its coefficients come from zero-filled samples."""
     rng = np.random.default_rng(3)
-    multitaper = Multitaper(
-        rng.standard_normal((400, 2, 2)),
-        200,
-        time_window_duration=1.0,
-        time_halfbandwidth_product=3,
-    )
+    time_series = rng.standard_normal((400, 2, 2))
+    settings = {"time_window_duration": 1.0, "time_halfbandwidth_product": 3}
     kept = np.array([[True, False], [True, True]])
-    monkeypatch.setattr(multitaper, "valid_windows", kept, raising=False)
+    if "artifact_samples" in _MULTITAPER_PARAMETERS:
+        artifacts = np.zeros((400, 2), dtype=bool)
+        artifacts[50, 1] = True  # window 0 of trial 1
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            multitaper = Multitaper(time_series, 200, artifact_samples=artifacts, **settings)
+        np.testing.assert_array_equal(to_host(multitaper.valid_windows), kept)
+    else:
+        multitaper = Multitaper(time_series, 200, **settings)
+        monkeypatch.setattr(multitaper, "valid_windows", kept, raising=False)
     result = multitaper.harmonic_f_test()
     for field in (result.f_statistic, result.p_value, result.amplitude, result.phase):
         assert np.isnan(field[0, 1]).all()
-        interior = ~np.isnan(field[1, 0])
-        assert interior.any()
+        assert (~np.isnan(field[1, 0])).any()
 
 
 def test_missing_data_tapers_are_refused(monkeypatch):
     """Per-window missing-data tapers have their own sums and counts, which the
     test's fit and null do not allow."""
     rng = np.random.default_rng(4)
-    multitaper = Multitaper(
-        rng.standard_normal((200, 1, 2)), 200, time_halfbandwidth_product=3
-    )
-    monkeypatch.setattr(multitaper, "artifact_handling", "missing_data_tapers", raising=False)
-    monkeypatch.setattr(
-        multitaper, "artifact_samples", np.zeros((200, 1), bool), raising=False
-    )
-    with pytest.raises(ValueError, match="missing_data_tapers"):
+    time_series = rng.standard_normal((400, 2, 2))
+    settings = {"time_window_duration": 1.0, "time_halfbandwidth_product": 3}
+    if "artifact_handling" in _MULTITAPER_PARAMETERS:
+        artifacts = np.zeros((400, 2), dtype=bool)
+        artifacts[50:53, 1] = True  # a short gap, rescued by missing-data tapers
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            multitaper = Multitaper(
+                time_series,
+                200,
+                artifact_samples=artifacts,
+                artifact_handling="missing_data_tapers",
+                **settings,
+            )
+    else:
+        multitaper = Multitaper(time_series, 200, **settings)
+        monkeypatch.setattr(
+            multitaper, "artifact_handling", "missing_data_tapers", raising=False
+        )
+        monkeypatch.setattr(
+            multitaper, "artifact_samples", np.zeros((400, 2), bool), raising=False
+        )
+    with pytest.raises(ValueError, match="one set of DPSS tapers"):
         multitaper.harmonic_f_test()
