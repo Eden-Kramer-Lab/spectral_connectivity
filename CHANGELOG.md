@@ -42,6 +42,38 @@ The migration guide for code written against 2.x is
 
 ### Added
 
+- `Multitaper(valid_samples=...)` leaves out artifacts, gaps, and missing
+  samples: a boolean `(n_time_samples, n_trials)` mask shared by the signals,
+  a `(n_time_samples, n_trials, n_signals)` mask (a sample invalid in any
+  signal is invalid for all, since the observations are shared across
+  signals), or `"finite"` for every NaN or infinite sample. A trial's window
+  is used only if all its samples are valid; every taper of a dropped one
+  gets observation weight 0, so each time window averages the trials it
+  keeps, and every measure equals its value with the dropped trial windows
+  removed. Invalid samples are zero-filled before detrending, and the NaN
+  warning reports only NaN at samples marked valid. New `valid_samples`,
+  `valid_windows`, and `observation_weights` properties; `multitaper_connectivity`
+  takes it in `transform_kwargs` (for a 2-D input in that input's layout, and
+  a labeled mask of a labeled input by its dimension names). Provenance
+  records the kind of mask and the numbers of invalid samples and dropped
+  trial windows.
+- `Connectivity.n_valid_observations`: the observations with nonzero weight
+  that each bin (kept observation axes and frequency) averages.
+  `n_observations` stays the raw count. Where zero observation weights drop
+  observations, the measures that count observations use each bin's count:
+  the debiased squared (weighted) phase lag index, pairwise phase
+  consistency, the zero-coherence test inside `delay` and `group_delay`, and
+  `jackknife`, which leaves out only the observations a bin keeps and takes
+  its degrees of freedom from their number (`JackknifeResult.n_observations`
+  is then one count per bin). The rank warnings of `partial_coherence`,
+  `canonical_coherence`, and `global_coherence` and the single-observation
+  warning see the bin keeping fewest. A bin keeping one observation is NaN in
+  the debiased measures, and one keeping fewer than three in the jackknife,
+  each with one warning.
+- `coherence_significance_pvalue` takes one count per estimate, an array
+  that broadcasts against the coherency (such as
+  `n_valid_observations[..., np.newaxis, np.newaxis]`); it used to reject an
+  array.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working
@@ -461,6 +493,14 @@ The migration guide for code written against 2.x is
 
 ### Changed
 
+- Observation weights that only keep or drop observations (zero, or one common
+  weight in each bin) are no longer refused by the measures that count
+  observations: a boxcar `MorletWavelet` with `edge_mode="nan"` and an
+  expectation that pools time now gives the debiased phase-lag measures,
+  pairwise phase consistency, and the `delay` and `group_delay` significance
+  test with each frequency's count of valid bins, where it raised
+  `ValueError`. Weights that reweight observations (a smoothing kernel other
+  than a boxcar) are still refused.
 - matplotlib is no longer a required dependency; the package never imported
   it. Install it to run the README example and the tutorials, for example with
   the new `plot` extra: `pip install "spectral-connectivity[plot]"`.

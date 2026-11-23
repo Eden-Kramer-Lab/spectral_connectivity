@@ -269,6 +269,70 @@ Before 3.0, advanced settings were passed as plain keyword arguments, e.g.
 through 3.x, with the same result and a `DeprecationWarning` naming the
 mapping to use, and is removed in 4.0.
 
+## Leave out artifacts and missing samples
+
+Mark the samples to leave out with `valid_samples`, a `Multitaper` setting
+(so in `transform_kwargs` for the wrapper): `"finite"` leaves out every NaN or
+infinite sample, and a boolean array of shape `(n_time_samples, n_trials)`
+(or the time series' own shape) leaves out the samples marked `False`. A
+trial's window is used only if all its samples are valid; the others are
+dropped from every average, so each time window averages the trials it keeps:
+
+```python
+>>> artifacts = time_series.copy()
+>>> artifacts[600:650, 1, :] = np.nan  # a gap in trial 1, 1.2-1.3 s
+>>> ppc = multitaper_connectivity(
+...     artifacts,
+...     sampling_frequency=500,
+...     time_window_duration=0.5,
+...     method="pairwise_phase_consistency",
+...     transform_kwargs={"valid_samples": "finite"},
+... )
+>>> bool(np.isfinite(ppc.isel(source=0, target=1)).all())
+True
+
+```
+
+The measures that count observations (pairwise phase consistency, the
+debiased phase-lag measures, the significance test of `delay` and
+`group_delay`, and `Connectivity.jackknife`) count each window's kept trial
+windows, so they equal their values with the dropped trial windows removed.
+`n_observations` stays the raw count; `n_valid_observations` counts each bin
+(time window and frequency) and is the count to give the statistics functions:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> from spectral_connectivity.statistics import coherence_significance_pvalue
+>>> valid_samples = np.ones((1000, 4), dtype=bool)
+>>> valid_samples[600:650, 1] = False  # the same gap, as a mask
+>>> multitaper = Multitaper(
+...     time_series,
+...     sampling_frequency=500,
+...     time_window_duration=0.5,
+...     valid_samples=valid_samples,
+... )
+>>> multitaper.valid_windows.sum(axis=1).tolist()  # kept trials per window
+[4, 4, 3, 4]
+>>> connectivity = Connectivity.from_transform(multitaper)
+>>> connectivity.n_observations  # 4 trials x 5 tapers
+20
+>>> counts = connectivity.n_valid_observations  # (n_time_windows, n_frequencies)
+>>> counts[:, 0].tolist()
+[20, 20, 15, 20]
+>>> p_values = coherence_significance_pvalue(
+...     connectivity.coherency(),
+...     counts[..., np.newaxis, np.newaxis],
+...     real_valued=connectivity.real_valued_frequencies[:, np.newaxis, np.newaxis],
+... )
+>>> p_values.shape
+(4, 126, 3, 3)
+
+```
+
+A window touching any invalid sample is dropped whole for that trial, so
+choose windows that fit between artifacts. A window that keeps no trial is NaN
+in every measure, with a warning.
+
 ## Group measures: canonical coherence between areas
 
 Group measures (`list_measures(category="group_pairwise")` and
