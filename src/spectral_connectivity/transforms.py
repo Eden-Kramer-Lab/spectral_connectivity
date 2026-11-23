@@ -599,7 +599,8 @@ class SpectralTransform(Protocol):
     Any object with an ``fft()`` method and ``frequencies`` and ``time``
     attributes (plain attributes or properties) satisfies it; no subclassing or
     registration is needed. :class:`Multitaper`, :class:`ShortTimeFourierTransform`,
-    :class:`Welch`, and :class:`MorletWavelet` all satisfy it.
+    :class:`Welch`, :class:`MorletWavelet`, and :class:`VARSpectrum` all
+    satisfy it.
 
     Attributes
     ----------
@@ -3512,6 +3513,548 @@ class MorletWavelet:
         }
 
 
+#: Largest norm of the power ``n_fft_samples / 2`` of a VAR's companion matrix
+#: on a :class:`VARSpectrum` grid: the fraction of the model's autocovariance and
+#: impulse response beyond that lag, which the Wilson factorization of the
+#: directed measures wraps around.
+_VAR_GRID_TOLERANCE = 1e-10
+# A VAR's layouts: coefficient matrices per lag, and innovation covariance.
+_VAR_COEFFICIENTS_LAYOUT = (
+    "(n_lags, n_signals, n_signals) or (n_time_windows, n_lags, n_signals, n_signals)"
+)
+_VAR_NOISE_LAYOUT = "(n_signals, n_signals) or (n_time_windows, n_signals, n_signals)"
+
+
+def _real_var_array(value: Any, name: str, layout: str) -> NDArray[np.float64]:
+    """``value`` as a finite real float64 host array, or ``TypeError``/``ValueError``."""
+    array = to_numpy(
+        numeric_array(
+            value, name, layout, "Give every matrix the same number of rows and columns."
+        )
+    )
+    if array.dtype.kind == "c":
+        msg = (
+            f"{name} must be real, got dtype {array.dtype}. VARSpectrum describes "
+            "real-valued processes, whose spectrum is conjugate-symmetric (S(-f) "
+            "= conj(S(f))); a complex VAR is not supported. Pass the real "
+            "coefficient and covariance matrices."
+        )
+        raise TypeError(msg)
+    if array.dtype.kind not in "iuf":
+        msg = (
+            f"{name} must be a real numeric array of shape {layout}, got dtype {array.dtype}."
+        )
+        raise TypeError(msg)
+    array = array.astype(np.float64)
+    if not np.all(np.isfinite(array)):
+        msg = f"{name} must contain only finite values; it holds NaN or Inf."
+        raise ValueError(msg)
+    return array
+
+
+def _var_companion_matrices(coefficients: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Companion matrices ``[[A_1 ... A_p], [I 0]]`` of each window's model.
+
+    ``coefficients`` is ``(n_windows, n_lags, n_signals, n_signals)``; the
+    result is ``(n_windows, n_lags * n_signals, n_lags * n_signals)``, the
+    transition matrix of the state ``[x(t - 1), ..., x(t - n_lags)]``.
+    """
+    n_windows, n_lags, n_signals, _ = coefficients.shape
+    companion = np.zeros((n_windows, n_lags * n_signals, n_lags * n_signals))
+    if n_lags == 0:
+        return companion
+    companion[:, n_signals:, :-n_signals] = np.eye((n_lags - 1) * n_signals)
+    companion[:, :n_signals] = np.concatenate(list(coefficients.swapaxes(0, 1)), axis=-1)
+    return companion
+
+
+def _companion_power_norm(companion: NDArray[np.float64], power: int) -> float:
+    """Largest Frobenius norm over the windows of ``companion ** power``."""
+    return float(np.linalg.norm(np.linalg.matrix_power(companion, power), axis=(-2, -1)).max())
+
+
+def _decay_lag(companion: NDArray[np.float64]) -> int:
+    """Smallest lag at which every window's companion power has a Frobenius
+    norm of at most ``_VAR_GRID_TOLERANCE``; 0 for a model with no lags.
+
+    Found by doubling, then bisection, so a model close to a unit root costs
+    a few dozen matrix powers. The norm decays as ``rho ** lag`` times a
+    polynomial for repeated eigenvalues; for a nilpotent matrix it reaches 0.
+    """
+    if companion.shape[-1] == 0:
+        return 0
+    high = 1
+    while _companion_power_norm(companion, high) > _VAR_GRID_TOLERANCE:
+        high *= 2
+    low = high // 2  # above the tolerance (the zeroth power is the identity)
+    while high - low > 1:
+        middle = (low + high) // 2
+        if _companion_power_norm(companion, middle) > _VAR_GRID_TOLERANCE:
+            low = middle
+        else:
+            high = middle
+    return high
+
+
+class VARSpectrum:
+    """Exact cross-spectrum of a vector autoregressive (VAR) model, as a transform.
+
+    For a stable VAR ``x(t) = sum_k A_k x(t - k) + e(t)`` with innovation
+    covariance ``Sigma``, the cross-spectral matrix is known exactly:
+    ``S(f) = H(f) Sigma H(f)^H`` with ``H(f) = (I - sum_k A_k exp(-2j pi f k /
+    sampling_frequency))^-1``. ``fft()`` returns coefficients whose mean outer
+    product over the tapers is that matrix in the package's normalization, so
+    :meth:`Connectivity.from_transform
+    <spectral_connectivity.Connectivity.from_transform>` (or
+    :meth:`Connectivity.from_var <spectral_connectivity.Connectivity.from_var>`)
+    gives the model's population connectivity, with no estimation error, for
+    a fitted or a simulated model. Fitting is left to other packages (see
+    Examples).
+
+    .. versionadded:: 3.0
+
+    Parameters
+    ----------
+    coefficients : array, shape (n_lags, n_signals, n_signals) or (n_time_windows, n_lags, n_signals, n_signals)
+        ``coefficients[k - 1]`` is ``A_k``, the influence of the signals ``k``
+        samples earlier on ``x(t)``: ``coefficients[k - 1][i, j]`` is the
+        effect of signal ``j`` on signal ``i``. This is the convention of
+        :func:`~spectral_connectivity.simulate.simulate_MVAR` and of the
+        ``coefs`` of a fitted statsmodels ``VARResults``. With a leading
+        ``n_time_windows`` axis, each window is a model of its own (a
+        time-varying VAR), and the windows go on the time axis of the results.
+        Real values only.
+    noise_covariance : array, shape (n_signals, n_signals) or (n_time_windows, n_signals, n_signals), optional
+        Covariance ``Sigma`` of the innovations ``e(t)`` (statsmodels'
+        ``sigma_u``), symmetric to within a relative ``sqrt(eps)`` (it is then
+        symmetrized) and positive definite. The identity by default, as in
+        ``simulate_MVAR``. A single matrix is shared by every window.
+    sampling_frequency : float
+        Samples per second. Keyword-only and required: it labels the frequency
+        axis and sets the units of power (signal² / Hz).
+    n_fft_samples : int, optional
+        Number of frequency bins, from 0 Hz up and wrapping to the negative
+        frequencies as an FFT does (``numpy.fft.fftfreq``). It must be at least
+        :attr:`minimum_n_fft_samples` (see Notes); by default it is the
+        smallest FFT-friendly length (``scipy.fft.next_fast_len``) that is.
+    time : array, shape (n_time_windows,), optional
+        Time of each window, in seconds. By default the windows are labeled by
+        their indices (``0, 1, ...``), and labeled results say so
+        (``time_coordinate="index"``).
+
+    Raises
+    ------
+    TypeError
+        If the coefficients or covariance are complex or not numeric.
+    ValueError
+        If a shape does not fit the layouts above, a value is not finite, the
+        covariance is not symmetric and positive definite, a model is not
+        stable (the spectral radius of its companion matrix is not below 1),
+        ``time`` does not label every window, or ``n_fft_samples`` is below
+        :attr:`minimum_n_fft_samples`.
+
+    See Also
+    --------
+    spectral_connectivity.Connectivity.from_var : Build the ``Connectivity``
+        in one call.
+    spectral_connectivity.simulate.simulate_MVAR : Simulate the same model.
+
+    Notes
+    -----
+    **Normalization.** As for :class:`Multitaper` and every built-in
+    transform, the taper-mean ``X X^H`` of the coefficients is the two-sided
+    cross-spectral density ``S(f) / sampling_frequency``, in signal² / Hz, so
+    :meth:`Connectivity.power` is the model's one-sided power spectral
+    density ``2 S_ii(f) / sampling_frequency`` (``S_ii(f) /
+    sampling_frequency`` at 0 Hz and Nyquist), the quantity a long multitaper
+    estimate of data simulated from the model converges to.
+
+    **The observations are not samples.** There is one trial and
+    ``n_signals`` tapers: taper ``k`` holds the ``k``-th column of ``H(f) C``,
+    ``C`` the Cholesky factor of ``Sigma``, scaled so the taper mean
+    reproduces ``S(f)``. Every measure that is a function of ``S(f)`` is
+    exact: power, the cross-spectral density, coherency and the coherence
+    family, partial coherence, the group and global measures, the phase slope
+    index, and the spectral Granger and transfer-function families. The
+    measures that use each observation or their count would depend on that
+    arbitrary factor, so they raise ``ValueError``: phase_locking_value,
+    corrected_imaginary_phase_locking_value, phase_lag_index,
+    directed_phase_lag_index, weighted_phase_lag_index,
+    debiased_squared_phase_lag_index,
+    debiased_squared_weighted_phase_lag_index, pairwise_phase_consistency,
+    delay and group_delay (whose coherence significance test counts the
+    observations), as does :meth:`Connectivity.jackknife`
+    (``is_exact_spectrum`` is ``True``). For those, simulate data from the
+    model and estimate them. ``Connectivity.n_observations`` counts these
+    pseudo-observations, ``n_signals`` per window, and means nothing for a
+    significance test or confidence interval.
+
+    **Frequency grid.** Power and the coherence family are exact on any grid.
+    The directed measures factor the spectrum's periodic extension on the
+    grid (see
+    :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`),
+    so the parts of the model's autocovariance and impulse response beyond
+    lag ``n_fft_samples / 2`` wrap around. Both decay as the powers ``J ** k``
+    of the companion matrix ``J``, and the directed measures are off by about
+    the norm of ``J ** (n_fft_samples / 2)``: pairwise spectral Granger
+    prediction of six models of 3 to 5 signals and 1 to 3 lags was off by 0.4
+    to 12 times it, and by at most 1.2e-9 at :attr:`minimum_n_fft_samples`.
+    :attr:`minimum_n_fft_samples` is twice the smallest ``k`` at which
+    that norm (Frobenius, the largest over the windows) is at most 1e-10, and
+    at least 2. The norm is at least ``rho ** k``, for ``rho`` the largest of
+    :attr:`spectral_radius`, so the grid has at least ``2 * ln(1e10) / -ln(rho)``
+    (about ``46 / (1 - rho)``) bins; repeated eigenvalues, as in a chain of
+    signals with the same dynamics, decay more slowly and need more. That
+    grid also resolves every spectral peak: a pole at radius ``r <= rho``
+    gives a peak about ``(1 - r) * sampling_frequency / (2 pi)`` Hz wide on
+    each side, at least 7 bins. Wilson's own tolerance (the
+    ``minimum_phase_tolerance`` of :class:`Connectivity`, 1e-8 by default)
+    then dominates the error. A grid that is a multiple of another
+    transform's FFT length contains its frequencies.
+
+    Examples
+    --------
+    The power of an AR(2) signal whose poles have radius 0.9 and angle 0.15
+    cycles per sample peaks near 0.15 of the sampling frequency:
+
+    >>> import numpy as np
+    >>> from spectral_connectivity import Connectivity, VARSpectrum
+    >>> radius, frequency = 0.9, 0.15  # pole radius, cycles per sample
+    >>> coefficients = np.array(
+    ...     [[[2 * radius * np.cos(2 * np.pi * frequency)]], [[-(radius**2)]]]
+    ... )  # (n_lags, n_signals, n_signals)
+    >>> var = VARSpectrum(coefficients, sampling_frequency=100)
+    >>> var.n_fft_samples, var.minimum_n_fft_samples
+    (448, 446)
+    >>> connectivity = Connectivity.from_transform(var)
+    >>> power = connectivity.power(one_sided=True)
+    >>> power.shape  # (n_time_windows, n_frequencies, n_signals)
+    (1, 225, 1)
+    >>> round(float(connectivity.frequencies[np.argmax(power[0, :, 0])]), 1)  # Hz
+    15.0
+
+    Statsmodels fits a VAR whose ``coefs`` and ``sigma_u`` are these
+    arguments (statsmodels is not a dependency):
+
+    >>> from statsmodels.tsa.api import VAR  # doctest: +SKIP
+    >>> fitted = VAR(data).fit(maxlags=2)  # data: (n_time_samples, n_signals)  # doctest: +SKIP
+    >>> var = VARSpectrum(fitted.coefs, fitted.sigma_u, sampling_frequency=500)  # doctest: +SKIP
+    """
+
+    _transform_name = "var_spectrum"
+    #: The coefficients hold both negative and positive frequencies.
+    is_one_sided = False
+    #: The taper mean of the coefficients' outer products is the model's
+    #: cross-spectral matrix; the observations are not samples.
+    is_exact_spectrum = True
+
+    @reject_sampling_frequency_aliases
+    def __init__(
+        self,
+        coefficients: NDArray[np.floating],
+        noise_covariance: NDArray[np.floating] | None = None,
+        *,
+        sampling_frequency: float,
+        n_fft_samples: int | None = None,
+        time: NDArray[np.floating] | None = None,
+    ) -> None:
+        self._sampling_frequency = _validate_sampling_frequency(sampling_frequency)
+        var_coefficients = _real_var_array(
+            coefficients, "coefficients", _VAR_COEFFICIENTS_LAYOUT
+        )
+        if var_coefficients.ndim not in (3, 4) or (
+            var_coefficients.shape[-1] != var_coefficients.shape[-2]
+        ):
+            hint = (
+                "; for a single lag, pass coefficients[np.newaxis]"
+                if var_coefficients.ndim == 2
+                else ""
+            )
+            msg = (
+                f"coefficients must have shape {_VAR_COEFFICIENTS_LAYOUT}, one "
+                f"square matrix A_k per lag; got shape {var_coefficients.shape}{hint}."
+            )
+            raise ValueError(msg)
+        if var_coefficients.ndim == 3:
+            var_coefficients = var_coefficients[np.newaxis]
+        n_signals = var_coefficients.shape[-1]
+        if noise_covariance is None:
+            covariance = np.eye(n_signals)[np.newaxis]
+        else:
+            covariance = _real_var_array(
+                noise_covariance, "noise_covariance", _VAR_NOISE_LAYOUT
+            )
+            if covariance.ndim not in (2, 3) or covariance.shape[-2:] != (
+                n_signals,
+                n_signals,
+            ):
+                msg = (
+                    f"noise_covariance must have shape {_VAR_NOISE_LAYOUT} with "
+                    f"n_signals = {n_signals}, the size of the coefficient matrices; "
+                    f"got shape {covariance.shape}."
+                )
+                raise ValueError(msg)
+            if covariance.ndim == 2:
+                covariance = covariance[np.newaxis]
+        n_windows = {var_coefficients.shape[0], covariance.shape[0]} - {1}
+        if len(n_windows) > 1:
+            msg = (
+                f"coefficients give {var_coefficients.shape[0]} time windows and "
+                f"noise_covariance {covariance.shape[0]}; give both the same number, "
+                "or one of them without a window axis to share it across windows."
+            )
+            raise ValueError(msg)
+        n_time_windows = n_windows.pop() if n_windows else 1
+        self._coefficients = mark_readonly_if_supported(
+            np.broadcast_to(
+                var_coefficients, (n_time_windows, *var_coefficients.shape[1:])
+            ).copy()
+        )
+        self._noise_covariance = mark_readonly_if_supported(
+            np.broadcast_to(
+                self._symmetric_positive_definite(covariance),
+                (n_time_windows, n_signals, n_signals),
+            ).copy()
+        )
+        companion = _var_companion_matrices(self._coefficients)
+        self._spectral_radius = mark_readonly_if_supported(
+            np.abs(np.linalg.eigvals(companion)).max(axis=-1, initial=0.0)
+        )
+        self._check_stable()
+        self._companion = companion
+        self._minimum_n_fft_samples = max(2, 2 * _decay_lag(companion))
+        if time is None:
+            self._time = None
+        else:
+            time_values = to_numpy(time).astype(float)
+            if time_values.shape != (n_time_windows,) or not np.all(np.isfinite(time_values)):
+                msg = (
+                    f"time must be a finite 1-D array with one time in seconds per "
+                    f"window ({n_time_windows}), got shape {time_values.shape}."
+                )
+                raise ValueError(msg)
+            self._time = mark_readonly_if_supported(time_values)
+        if n_fft_samples is None:
+            self._n_fft_samples = int(default_fft_length(self.minimum_n_fft_samples))
+        elif not is_positive_integer(n_fft_samples):
+            msg = f"n_fft_samples must be a positive integer, got {n_fft_samples!r}."
+            raise ValueError(msg)
+        elif n_fft_samples < self.minimum_n_fft_samples:
+            raise ValueError(self._short_grid_message(int(n_fft_samples)))
+        else:
+            self._n_fft_samples = int(n_fft_samples)
+
+    @staticmethod
+    def _symmetric_positive_definite(
+        covariance: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """``covariance``, ``(n_windows, n, n)``, symmetrized, after checking it
+        is symmetric to rounding and positive definite."""
+        asymmetry = np.abs(covariance - covariance.swapaxes(-1, -2)).max()
+        scale = np.abs(covariance).max()
+        if asymmetry > np.sqrt(np.finfo(float).eps) * scale:
+            msg = (
+                "noise_covariance must be symmetric, but entries [i, j] and [j, i] "
+                f"differ by up to {asymmetry:.3g} (relative {asymmetry / scale:.2g}). "
+                "A covariance matrix is symmetric; pass Cov(e(t)) of the innovations, "
+                "e.g. statsmodels' sigma_u."
+            )
+            raise ValueError(msg)
+        symmetric = (covariance + covariance.swapaxes(-1, -2)) / 2
+        smallest = np.linalg.eigvalsh(symmetric).min(axis=-1)
+        if np.any(smallest <= 0):
+            window = int(np.argmin(smallest))
+            where = f" (window {window})" if covariance.shape[0] > 1 else ""
+            msg = (
+                f"noise_covariance must be positive definite, but its smallest "
+                f"eigenvalue{where} is {smallest[window]:.3g}. A singular innovation "
+                "covariance (an innovation that is an exact combination of others) "
+                "makes the spectrum singular, so coherence and the directed measures "
+                "are undefined. Remove the redundant signal, or add a small "
+                "variance to its diagonal."
+            )
+            raise ValueError(msg)
+        return symmetric
+
+    def _check_stable(self) -> None:
+        """Raise unless every window's model is stable (spectral radius below 1)."""
+        radius = self._spectral_radius
+        unstable = (radius > 1) | np.isclose(radius, 1, rtol=1e-12, atol=0)
+        if not np.any(unstable):
+            return
+        window = int(np.flatnonzero(unstable)[0])
+        where = f" of window {window}" if radius.size > 1 else ""
+        # Scaling A_k by c**k scales every companion eigenvalue by c.
+        scale = 0.9 / radius[window]
+        msg = (
+            f"The VAR coefficients{where} are not stable: the spectral radius of "
+            f"their companion matrix is {radius[window]:.6g}, not below 1, so the "
+            "process has no stationary state and its spectrum and connectivity are "
+            "undefined. Check that coefficients[k - 1] is A_k of x(t) = sum_k A_k "
+            "x(t - k) + e(t) (statsmodels' VARResults.coefs). To scale a model to "
+            "a stable one, multiply each A_k by c**k: coefficients * c ** "
+            "np.arange(1, n_lags + 1)[:, np.newaxis, np.newaxis] with "
+            f"c = {scale:.6g} gives a radius of 0.9."
+        )
+        raise ValueError(msg)
+
+    @property
+    def minimum_n_fft_samples(self) -> int:
+        """Shortest FFT length on which the directed measures are exact to about 1e-10.
+
+        Twice the smallest lag ``k`` at which the Frobenius norm of the
+        ``k``-th power of every window's companion matrix is at most 1e-10,
+        and at least 2; see Notes of :class:`VARSpectrum`.
+        """
+        return self._minimum_n_fft_samples
+
+    def _short_grid_message(self, n_fft_samples: int) -> str:
+        wrapped = _companion_power_norm(self._companion, n_fft_samples // 2)
+        return (
+            f"n_fft_samples={n_fft_samples} is too short for this model. The directed "
+            "measures factor the spectrum's periodic extension on the grid, which "
+            "wraps around the model's autocovariance and impulse response beyond lag "
+            "n_fft_samples / 2. They decay as the powers of its companion matrix, "
+            f"whose power {n_fft_samples // 2} still has norm {wrapped:.2g} (spectral "
+            f"radius {self._spectral_radius.max():.6g}), so the directed measures "
+            f"would be off by about that much. Use n_fft_samples >= "
+            f"{self.minimum_n_fft_samples}, where that norm is at most "
+            f"{_VAR_GRID_TOLERANCE:g}, or omit it for the shortest fast length that "
+            "is. A multiple of another transform's FFT length contains its "
+            "frequencies."
+        )
+
+    @property
+    def coefficients(self) -> NDArray[np.floating]:
+        """The coefficients, ``(n_time_windows, n_lags, n_signals, n_signals)``.
+
+        A read-only host copy, with a window axis even for a single model.
+        """
+        return _readonly_array_copy(self._coefficients)
+
+    @property
+    def noise_covariance(self) -> NDArray[np.floating]:
+        """The innovation covariance, ``(n_time_windows, n_signals, n_signals)``.
+
+        Symmetrized; a read-only host copy, with a window axis even for a
+        single matrix.
+        """
+        return _readonly_array_copy(self._noise_covariance)
+
+    @property
+    def spectral_radius(self) -> NDArray[np.floating]:
+        """Spectral radius of each window's companion matrix, ``(n_time_windows,)``.
+
+        Every value is below 1 (the models are stable); the closer to 1, the
+        sharper the spectral peaks and the longer :attr:`minimum_n_fft_samples`.
+        """
+        return _readonly_array_copy(self._spectral_radius)
+
+    @property
+    def sampling_frequency(self) -> float:
+        """Samples per second, in Hz."""
+        return self._sampling_frequency
+
+    @property
+    def nyquist_frequency(self) -> float:
+        """Half the sampling frequency, in Hz."""
+        return self._sampling_frequency / 2
+
+    @property
+    def n_fft_samples(self) -> int:
+        """Number of frequency bins of :meth:`fft`, negative frequencies included."""
+        return self._n_fft_samples
+
+    @property
+    def n_signals(self) -> int:
+        """Number of signals of the model."""
+        return int(self._coefficients.shape[-1])
+
+    @property
+    def n_lags(self) -> int:
+        """Order of the model, the number of coefficient matrices per window."""
+        return int(self._coefficients.shape[1])
+
+    @property
+    def n_time_windows(self) -> int:
+        """Number of models (time windows)."""
+        return int(self._coefficients.shape[0])
+
+    @property
+    def frequencies(self) -> NDArray[np.floating]:
+        """Frequency of each bin of :meth:`fft` in Hz, in standard FFT order.
+
+        To label a result's frequency axis, use :attr:`Connectivity.frequencies
+        <spectral_connectivity.Connectivity.frequencies>`, the non-negative bins.
+        """
+        return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
+
+    @property
+    def time(self) -> NDArray[np.floating] | None:
+        """Time of each window in seconds, or ``None`` (window indices)."""
+        return None if self._time is None else _readonly_array_copy(self._time)
+
+    def fft(self) -> NDArray[np.complexfloating]:
+        """Fourier coefficients whose taper-mean outer product is the model's spectrum.
+
+        Returns
+        -------
+        fourier_coefficients : array, shape (n_time_windows, 1, n_signals, n_fft_samples, n_signals)
+            One trial and ``n_signals`` tapers (see Notes of
+            :class:`VARSpectrum`). The negative frequencies are the complex
+            conjugates of the positive ones, and 0 Hz and Nyquist are real, as
+            for a real-valued signal.
+        """
+        n_signals, n_fft_samples = self.n_signals, self.n_fft_samples
+        coefficients = xp.asarray(self._coefficients)
+        identity = xp.broadcast_to(
+            xp.eye(n_signals), (self.n_time_windows, 1, n_signals, n_signals)
+        )
+        # I - sum_k A_k exp(-2j pi f k) at the non-negative frequencies,
+        # (n_time_windows, n_nonnegative, n_signals, n_signals).
+        lag_polynomial = rfft(
+            xp.concatenate([identity, -coefficients], axis=1), n=n_fft_samples, axis=1
+        )
+        innovation_factor = xp.linalg.cholesky(xp.asarray(self._noise_covariance))
+        # H(f) C: its columns are the responses to each orthogonalized innovation.
+        factor = xp.matmul(xp.linalg.inv(lag_polynomial), innovation_factor[:, xp.newaxis])
+        # Real at 0 Hz and Nyquist, as the lag polynomial is up to rounding.
+        factor[:, 0] = factor[:, 0].real
+        if n_fft_samples % 2 == 0:
+            factor[:, -1] = factor[:, -1].real
+        factor = factor * np.sqrt(n_signals / self.sampling_frequency)
+        n_nonnegative = factor.shape[1]
+        negative = xp.conj(factor[:, n_fft_samples - n_nonnegative : 0 : -1])
+        two_sided = xp.concatenate([factor, negative], axis=1)
+        # (window, frequency, signal, taper) -> (window, trial, taper, frequency, signal)
+        return xp.ascontiguousarray(xp.transpose(two_sided, (0, 3, 1, 2))[:, xp.newaxis])
+
+    def __repr__(self) -> str:
+        """One line naming the model's size and the grid."""
+        return (
+            f"VARSpectrum(n_signals={self.n_signals}, n_lags={self.n_lags}, "
+            f"n_time_windows={self.n_time_windows}, "
+            f"sampling_frequency={self.sampling_frequency!r}, "
+            f"n_fft_samples={self.n_fft_samples})"
+        )
+
+    def _provenance_metadata(self) -> dict[str, Any]:
+        """The model and grid, serialized by the shared provenance builder."""
+        return {
+            "transform": self._transform_name,
+            "coefficients": self._coefficients,
+            "noise_covariance": self._noise_covariance,
+            "spectral_radius": self._spectral_radius,
+            "n_fft_samples": self.n_fft_samples,
+            "n_lags": self.n_lags,
+            "n_signals": self.n_signals,
+            "n_time_windows": self.n_time_windows,
+            "nyquist_frequency": self.nyquist_frequency,
+            "sampling_frequency": self.sampling_frequency,
+            "time_coordinate": "index" if self._time is None else "provided",
+        }
+
+
 if TYPE_CHECKING:
     # mypy verifies that every built-in transform satisfies the public protocol.
     _BUILTIN_TRANSFORMS: tuple[type[SpectralTransform], ...] = (
@@ -3519,6 +4062,7 @@ if TYPE_CHECKING:
         ShortTimeFourierTransform,
         Welch,
         MorletWavelet,
+        VARSpectrum,
     )
 
 

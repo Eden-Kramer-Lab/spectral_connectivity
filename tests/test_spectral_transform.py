@@ -18,6 +18,7 @@ from spectral_connectivity import (
     Multitaper,
     ShortTimeFourierTransform,
     SpectralTransform,
+    VARSpectrum,
     Welch,
 )
 from tests._backend_helpers import to_host
@@ -55,6 +56,7 @@ def builtin_transforms():
         ),
         Welch(time_series, sampling_frequency=500, segment_duration=0.5),
         MorletWavelet(time_series, sampling_frequency=500, frequencies=[10.0, 20.0]),
+        VARSpectrum(np.array([[[0.5, 0.0], [0.2, 0.3]]]), sampling_frequency=500),
     ]
 
 

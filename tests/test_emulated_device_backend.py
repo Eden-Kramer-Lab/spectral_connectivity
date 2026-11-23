@@ -474,3 +474,24 @@ def test_minimum_phase_decomposition_accepts_host_arrays(xp, monkeypatch):
         minimum_phase_decomposition.minimum_phase_decomposition(cross_spectrum),
         rtol=1e-12,
     )
+
+
+def test_var_spectrum_runs_on_the_device(xp, monkeypatch):
+    """VARSpectrum builds its coefficients with the backend's FFT and linear
+    algebra, and the directed measures of them stay on the device."""
+    from spectral_connectivity import VARSpectrum
+
+    coefficients = np.stack([np.array([[0.5, 0.0], [0.4, 0.5]]), -0.6 * np.eye(2)])
+    noise_covariance = np.array([[1.0, 0.3], [0.3, 2.0]])
+
+    def compute():
+        var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=100)
+        connectivity = Connectivity.from_transform(var)
+        return var.fft(), connectivity.pairwise_spectral_granger_prediction()
+
+    device_fft, device_granger = compute()
+    assert isinstance(device_fft, _DeviceArray)
+    monkeypatch.undo()
+    host_fft, host_granger = compute()
+    np.testing.assert_array_equal(device_fft.get(), host_fft)
+    np.testing.assert_array_equal(device_granger, host_granger)
