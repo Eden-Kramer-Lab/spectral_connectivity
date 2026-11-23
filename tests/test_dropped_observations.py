@@ -8,13 +8,12 @@ that count observations, must equal the measure of the coefficients with the
 dropped observations physically removed.
 """
 
-import warnings
-
 import numpy as np
 import pytest
 
 from spectral_connectivity import Connectivity
 from spectral_connectivity.connectivity import _find_significant_frequencies
+from tests._artifact_helpers import COUNTING_MEASURES, quietly
 
 # Measures of every kind: plain averages, the normalized and phase-lag
 # families, those that count observations, and those that factor or invert the
@@ -46,6 +45,11 @@ def _coefficients(rng, shape):
     return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
 
 
+def _window_trial_weights(valid, shape):
+    """0/1 weights of every taper and frequency from ``valid`` (window, trial)."""
+    return np.broadcast_to(valid[:, :, None, None, None], (*shape[:-1], 1))
+
+
 @pytest.fixture(scope="module")
 def dropped_trials():
     """Three windows of six trials, each window dropping different trials."""
@@ -54,27 +58,19 @@ def dropped_trials():
     valid = np.ones((3, 6), dtype=bool)
     valid[0, [1, 4]] = False
     valid[2, [0, 2, 3]] = False
-    weights = np.broadcast_to(valid[:, :, None, None, None], (*coefficients.shape[:-1], 1))
-    return coefficients, valid, weights
-
-
-def _measure(connectivity, measure):
-    with warnings.catch_warnings():
-        # Few observations for 3 signals: the rank warnings are expected.
-        warnings.simplefilter("ignore", UserWarning)
-        return getattr(connectivity, measure)()
+    return coefficients, valid, _window_trial_weights(valid, coefficients.shape)
 
 
 @pytest.mark.parametrize("measure", MEASURES)
 def test_dropped_trials_match_their_removal(dropped_trials, measure):
     """Each window's value is the value of that window's kept trials alone."""
     coefficients, valid, weights = dropped_trials
-    masked = _measure(Connectivity(coefficients, observation_weights=weights), measure)
+    masked = quietly(getattr(Connectivity(coefficients, observation_weights=weights), measure))
     rtol = 1e-7 if measure in FACTORIZED else 1e-11
     for window in range(coefficients.shape[0]):
         kept = Connectivity(coefficients[[window]][:, valid[window]])
         np.testing.assert_allclose(
-            masked[window], _measure(kept, measure)[0], rtol=rtol, atol=1e-13
+            masked[window], quietly(getattr(kept, measure))[0], rtol=rtol, atol=1e-13
         )
 
 
@@ -124,14 +120,7 @@ def test_n_valid_observations_without_weights_is_n_observations(
     assert (counts == connectivity.n_observations).all()
 
 
-@pytest.mark.parametrize(
-    "measure",
-    [
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-        "pairwise_phase_consistency",
-    ],
-)
+@pytest.mark.parametrize("measure", COUNTING_MEASURES)
 def test_counting_measures_use_each_frequency_count(measure):
     """Weights that drop different observations at different frequencies: each
     (window, frequency) bin counts its own."""
@@ -179,20 +168,19 @@ def test_reweighting_observations_is_still_refused():
         connectivity.pairwise_phase_consistency()
 
 
-@pytest.mark.parametrize(
-    "measure",
-    [
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-        "pairwise_phase_consistency",
-    ],
-)
-def test_a_bin_of_one_observation_is_nan_with_one_warning(measure):
-    rng = np.random.default_rng(4)
-    coefficients = _coefficients(rng, (2, 4, 1, 8, 2))
-    weights = np.ones((*coefficients.shape[:-1], 1))
-    weights[1, 1:] = 0  # window 1 keeps one trial of one taper
-    connectivity = Connectivity(coefficients, observation_weights=weights)
+@pytest.fixture
+def single_observation_window():
+    """Two windows of four trials of one taper; window 1 keeps one trial."""
+    coefficients = _coefficients(np.random.default_rng(4), (2, 4, 1, 8, 2))
+    valid = np.ones((2, 4), dtype=bool)
+    valid[1, 1:] = False
+    weights = _window_trial_weights(valid, coefficients.shape)
+    return Connectivity(coefficients, observation_weights=weights)
+
+
+@pytest.mark.parametrize("measure", COUNTING_MEASURES)
+def test_a_bin_of_one_observation_is_nan_with_one_warning(single_observation_window, measure):
+    connectivity = single_observation_window
     with pytest.warns(UserWarning, match="single observation") as record:
         value = getattr(connectivity, measure)()
     assert len(record) == 1  # one warning, naming this measure
@@ -201,14 +189,9 @@ def test_a_bin_of_one_observation_is_nan_with_one_warning(measure):
     assert np.isfinite(value[0, 1:-1, 0, 1]).all()
 
 
-def test_a_bin_of_one_observation_warns_for_a_normalized_measure():
-    rng = np.random.default_rng(5)
-    coefficients = _coefficients(rng, (2, 4, 1, 8, 2))
-    weights = np.ones((*coefficients.shape[:-1], 1))
-    weights[1, 1:] = 0
-    connectivity = Connectivity(coefficients, observation_weights=weights)
+def test_a_bin_of_one_observation_warns_for_a_normalized_measure(single_observation_window):
     with pytest.warns(UserWarning, match="single observation in some bins"):
-        connectivity.magnitude_squared_coherence()
+        single_observation_window.magnitude_squared_coherence()
 
 
 def test_zero_filled_dropped_observations_do_not_warn_of_zero_magnitude():
@@ -362,7 +345,7 @@ def test_phase_lag_moments_of_many_observations_match_their_removal(measure):
     valid = np.ones((2, 30), dtype=bool)
     valid[0, :4] = False
     valid[1, 10:19] = False
-    weights = np.broadcast_to(valid[:, :, None, None, None], (*coefficients.shape[:-1], 1))
+    weights = _window_trial_weights(valid, coefficients.shape)
     connectivity = Connectivity(coefficients, observation_weights=weights)
     assert connectivity._kept_observations is not None
     value = getattr(connectivity, measure)()

@@ -20,6 +20,7 @@ from spectral_connectivity import (
 )
 from spectral_connectivity.connectivity import _find_significant_frequencies
 from spectral_connectivity.statistics import coherence_significance_pvalue
+from tests._artifact_helpers import COUNTING_MEASURES, quietly
 from tests._backend_helpers import to_host
 
 SAMPLING_FREQUENCY = 200.0
@@ -43,11 +44,20 @@ FACTORIZED = frozenset({"pairwise_spectral_granger_prediction"})
 JACKKNIFED = ("magnitude_squared_coherence", "pairwise_phase_consistency")
 
 
-def _quietly(function, *args, **kwargs):
-    with warnings.catch_warnings():
-        # Few trials for three signals: the rank warnings are expected.
-        warnings.simplefilter("ignore", UserWarning)
-        return function(*args, **kwargs)
+def _multitaper(time_series, artifacts, **kwargs):
+    """A Multitaper of ``WINDOW``-sample windows leaving out ``artifacts``."""
+    kwargs.setdefault("n_time_samples_per_window", WINDOW)
+    return Multitaper(time_series, SAMPLING_FREQUENCY, artifact_samples=artifacts, **kwargs)
+
+
+def _kept_window(time_series, artifacts, start, transform=Multitaper, **kwargs):
+    """The Connectivity of the window at ``start`` with its artifact trials
+    physically removed, one window of the whole of it."""
+    samples = slice(start, start + WINDOW)
+    trials = ~artifacts[samples].any(axis=0)
+    return Connectivity.from_transform(
+        transform(time_series[samples, trials], SAMPLING_FREQUENCY, **kwargs)
+    )
 
 
 @pytest.fixture(scope="module")
@@ -69,33 +79,20 @@ def test_every_measure_equals_that_of_the_kept_trial_windows(recording, step):
     time_series, artifacts = recording
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)  # overlap; few trials
-        multitaper = Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            time_halfbandwidth_product=2,
-            n_time_samples_per_window=WINDOW,
-            n_time_samples_per_step=step,
-            artifact_samples=artifacts,
+        multitaper = _multitaper(
+            time_series, artifacts, time_halfbandwidth_product=2, n_time_samples_per_step=step
         )
         connectivity = Connectivity.from_transform(multitaper)
     starts = np.arange(0, time_series.shape[0] - WINDOW + 1, step)
     assert len(starts) == len(multitaper.time)
     for measure in MEASURES:
-        masked = _quietly(getattr(connectivity, measure))
+        masked = quietly(getattr(connectivity, measure))
         rtol = 1e-7 if measure in FACTORIZED else 1e-10
         for window, start in enumerate(starts):
-            samples = slice(start, start + WINDOW)
-            trials = ~artifacts[samples].any(axis=0)
-            kept = Connectivity.from_transform(
-                Multitaper(
-                    time_series[samples, trials],
-                    SAMPLING_FREQUENCY,
-                    time_halfbandwidth_product=2,
-                )
-            )
+            kept = _kept_window(time_series, artifacts, start, time_halfbandwidth_product=2)
             np.testing.assert_allclose(
                 masked[window],
-                _quietly(getattr(kept, measure))[0],
+                quietly(getattr(kept, measure))[0],
                 rtol=rtol,
                 atol=1e-13,
                 err_msg=f"{measure}, window {window}",
@@ -105,26 +102,15 @@ def test_every_measure_equals_that_of_the_kept_trial_windows(recording, step):
 
 def test_jackknife_equals_that_of_the_kept_trial_windows(recording):
     time_series, artifacts = recording
-    multitaper = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        time_halfbandwidth_product=2,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples=artifacts,
+    connectivity = Connectivity.from_transform(
+        _multitaper(time_series, artifacts, time_halfbandwidth_product=2)
     )
-    connectivity = Connectivity.from_transform(multitaper)
     for method in JACKKNIFED:
-        masked = _quietly(connectivity.jackknife, method)
+        masked = quietly(connectivity.jackknife, method)
         for window in range(4):
-            samples = slice(window * WINDOW, (window + 1) * WINDOW)
-            trials = ~artifacts[samples].any(axis=0)
-            kept = _quietly(
-                Connectivity.from_transform(
-                    Multitaper(
-                        time_series[samples, trials],
-                        SAMPLING_FREQUENCY,
-                        time_halfbandwidth_product=2,
-                    )
+            kept = quietly(
+                _kept_window(
+                    time_series, artifacts, window * WINDOW, time_halfbandwidth_product=2
                 ).jackknife,
                 method,
             )
@@ -152,26 +138,16 @@ def test_without_time_resolution_the_kept_trials_are_used(recording):
     assert trials.sum() == 1  # only trial 4 is clean throughout
     for measure in ("power", "magnitude_squared_coherence"):
         np.testing.assert_allclose(
-            _quietly(getattr(masked, measure)),
-            _quietly(getattr(kept, measure)),
+            quietly(getattr(masked, measure)),
+            quietly(getattr(kept, measure)),
             rtol=1e-10,
         )
 
 
 def test_nonfinite_marks_the_nonfinite_samples_as_artifacts(recording):
     time_series, artifacts = recording
-    nonfinite = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples="nonfinite",
-    )
-    mask = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples=artifacts,
-    )
+    nonfinite = _multitaper(time_series, "nonfinite")
+    mask = _multitaper(time_series, artifacts)
     np.testing.assert_array_equal(to_host(nonfinite.artifact_samples), artifacts)
     np.testing.assert_array_equal(to_host(nonfinite.fft()), to_host(mask.fft()))
     assert np.isfinite(to_host(nonfinite.fft())).all()
@@ -186,18 +162,8 @@ def test_a_per_signal_artifact_leaves_the_sample_out_of_every_signal(recording):
     time_series, artifacts = recording
     per_signal = np.zeros(time_series.shape, dtype=bool)
     per_signal[..., 2] = artifacts  # only signal 2 marks the artifacts
-    shared = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples=artifacts,
-    )
-    reduced = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples=per_signal,
-    )
+    shared = _multitaper(time_series, artifacts)
+    reduced = _multitaper(time_series, per_signal)
     np.testing.assert_array_equal(to_host(reduced.artifact_samples), artifacts)
     np.testing.assert_array_equal(to_host(reduced.fft()), to_host(shared.fft()))
 
@@ -224,12 +190,7 @@ def test_a_mask_without_artifacts_is_the_transform_without_one():
 
 def test_observation_weights_drop_every_taper_of_a_dropped_window(recording):
     time_series, artifacts = recording
-    multitaper = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples=artifacts,
-    )
+    multitaper = _multitaper(time_series, artifacts)
     weights = to_host(multitaper.observation_weights)
     assert weights.shape == (4, 5, multitaper.n_tapers, multitaper.n_fft_samples, 1)
     expected = to_host(multitaper.valid_windows)[:, :, None, None, None]
@@ -243,24 +204,14 @@ def test_nan_outside_the_artifacts_still_warns(recording):
     with pytest.warns(
         UserWarning, match="1 NaN or infinite value at samples artifact_samples does not mark"
     ):
-        Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            artifact_samples=artifacts,
-        )
+        _multitaper(time_series, artifacts)
 
 
 def test_nan_covered_by_the_mask_does_not_warn(recording):
     time_series, artifacts = recording
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        multitaper = Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            artifact_samples=artifacts,
-        )
+        multitaper = _multitaper(time_series, artifacts)
         Connectivity.from_transform(multitaper).magnitude_squared_coherence()
 
 
@@ -281,12 +232,7 @@ def test_a_window_keeping_no_trial_warns_and_is_nan():
     with pytest.warns(
         UserWarning, match=r"leaves 1 of 4 time windows \(0-based indices \[1\]\).*50 samples"
     ):
-        multitaper = Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            artifact_samples=artifacts,
-        )
+        multitaper = _multitaper(time_series, artifacts)
     power = Connectivity.from_transform(multitaper).power()
     assert np.isnan(power[1]).all()
     assert np.isfinite(power[[0, 2, 3]]).all()
@@ -297,12 +243,7 @@ def test_a_time_only_mask_is_shared_by_every_trial_and_signal():
     shared = np.zeros(200, dtype=bool)
     shared[60] = True  # window 1, in every trial
     with pytest.warns(UserWarning, match="leaves 1 of 4 time windows"):
-        from_time = Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            artifact_samples=shared,
-        )
+        from_time = _multitaper(time_series, shared)
     expected = np.broadcast_to(shared[:, None], (200, 3))
     np.testing.assert_array_equal(to_host(from_time.artifact_samples), expected)
 
@@ -315,12 +256,7 @@ def test_dropping_most_trial_windows_warns_and_suggests_an_inverted_mask():
     artifacts[60:65, 0] = True
     inverted = ~(artifacts | (np.arange(200)[:, None] < 50))
     with pytest.warns(UserWarning, match="artifact_samples") as record:
-        Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            artifact_samples=inverted,
-        )
+        _multitaper(time_series, inverted)
     messages = [str(warning.message) for warning in record]
     assert any(
         "drops 75% of trial windows (2 of 8 kept)" in message and "pass ~mask" in message
@@ -329,12 +265,7 @@ def test_dropping_most_trial_windows_warns_and_suggests_an_inverted_mask():
     # Passed the right way round, it drops one trial window and is quiet.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            artifact_samples=artifacts,
-        )
+        _multitaper(time_series, artifacts)
 
 
 def test_a_mask_leaving_no_trial_window_raises():
@@ -342,12 +273,7 @@ def test_a_mask_leaving_no_trial_window_raises():
     artifacts = np.zeros((100, 2), dtype=bool)
     artifacts[[10, 60], :] = True
     with pytest.raises(ValueError, match=r"leaves no trial window.*pass ~mask"):
-        Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=WINDOW,
-            artifact_samples=artifacts,
-        )
+        _multitaper(time_series, artifacts)
 
 
 @pytest.mark.parametrize(
@@ -387,12 +313,7 @@ def test_a_labeled_mask_is_read_by_position():
 
 def test_artifact_samples_is_immutable_and_reported(recording):
     time_series, artifacts = recording
-    multitaper = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples=artifacts,
-    )
+    multitaper = _multitaper(time_series, artifacts)
     with pytest.raises(AttributeError, match="immutable"):
         multitaper.artifact_samples = None
     returned = multitaper.artifact_samples
@@ -409,12 +330,7 @@ def test_artifact_samples_is_immutable_and_reported(recording):
 
 def test_provenance_records_the_kind_and_what_it_dropped(recording):
     time_series, artifacts = recording
-    metadata = Multitaper(
-        time_series,
-        SAMPLING_FREQUENCY,
-        n_time_samples_per_window=WINDOW,
-        artifact_samples=artifacts,
-    )._provenance_metadata()
+    metadata = _multitaper(time_series, artifacts)._provenance_metadata()
     assert metadata["artifact_samples"] == "mask"
     assert metadata["n_artifact_samples"] == int(artifacts.sum())
     assert metadata["n_dropped_trial_windows"] == 4
@@ -426,21 +342,16 @@ def test_provenance_records_the_kind_and_what_it_dropped(recording):
 
 def test_the_wrapper_takes_artifact_samples_in_transform_kwargs(recording):
     time_series, artifacts = recording
-    result = _quietly(
+    result = quietly(
         multitaper_connectivity,
         time_series,
         SAMPLING_FREQUENCY,
         method="pairwise_phase_consistency",
         transform_kwargs={"n_time_samples_per_window": WINDOW, "artifact_samples": artifacts},
     )
-    direct = _quietly(
+    direct = quietly(
         Connectivity.from_transform(
-            Multitaper(
-                time_series,
-                SAMPLING_FREQUENCY,
-                n_time_samples_per_window=WINDOW,
-                artifact_samples=artifacts,
-            )
+            _multitaper(time_series, artifacts)
         ).pairwise_phase_consistency
     )
     np.testing.assert_allclose(result.values, direct, rtol=1e-12, equal_nan=True)
@@ -492,23 +403,13 @@ def test_delay_significance_agrees_window_by_window(recording):
     the frequencies the kept trials alone select."""
     time_series, artifacts = recording
     connectivity = Connectivity.from_transform(
-        Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            time_halfbandwidth_product=2,
-            n_time_samples_per_window=WINDOW,
-            artifact_samples=artifacts,
-        )
+        _multitaper(time_series, artifacts, time_halfbandwidth_product=2)
     )
     coherency = connectivity.coherency()[..., [0], [1]]
     counts = connectivity.n_valid_observations[..., np.newaxis]
     for window in range(4):
-        samples = slice(window * WINDOW, (window + 1) * WINDOW)
-        trials = ~artifacts[samples].any(axis=0)
-        kept = Connectivity.from_transform(
-            Multitaper(
-                time_series[samples, trials], SAMPLING_FREQUENCY, time_halfbandwidth_product=2
-            )
+        kept = _kept_window(
+            time_series, artifacts, window * WINDOW, time_halfbandwidth_product=2
         )
         selected = _find_significant_frequencies(coherency[[window]], counts[[window]])
         assert selected.any()
@@ -528,14 +429,14 @@ def test_the_wrapper_transposes_a_labeled_mask_like_its_labeled_input(recording)
     )
     labeled_mask = xr.DataArray(artifacts.T.copy(), dims=("trial", "time"))
     transform_kwargs = {"n_time_samples_per_window": WINDOW}
-    from_labels = _quietly(
+    from_labels = quietly(
         multitaper_connectivity,
         labeled,
         SAMPLING_FREQUENCY,
         method="power",
         transform_kwargs={**transform_kwargs, "artifact_samples": labeled_mask},
     )
-    from_arrays = _quietly(
+    from_arrays = quietly(
         multitaper_connectivity,
         time_series,
         SAMPLING_FREQUENCY,
@@ -556,15 +457,16 @@ MC_FREQUENCIES = [4, 8, 12, 16, 20, 24, 28]
 
 
 @pytest.fixture(scope="module")
-def independent_signals():
-    """Two independent white-noise signals; window ``w`` drops ``w % 8`` trials."""
+def independent_transform():
+    """The transform of two independent white-noise signals; window ``w``
+    drops ``w % 8`` trials."""
     rng = np.random.default_rng(10)
     time_series = rng.standard_normal((N_REPLICATES * MC_WINDOW, N_TRIALS, 2))
     artifacts = np.zeros(time_series.shape[:2], dtype=bool)
     for window in range(N_REPLICATES):
         dropped = rng.choice(N_TRIALS, size=window % 8, replace=False)
         artifacts[window * MC_WINDOW + MC_WINDOW // 2, dropped] = True
-    multitaper = Multitaper(
+    return Multitaper(
         time_series,
         sampling_frequency=MC_WINDOW,  # 1 Hz bins
         time_halfbandwidth_product=2,
@@ -572,7 +474,13 @@ def independent_signals():
         n_time_samples_per_window=MC_WINDOW,
         artifact_samples=artifacts,
     )
-    return Connectivity.from_transform(multitaper)
+
+
+@pytest.fixture
+def independent_signals(independent_transform):
+    """A fresh Connectivity of the independent signals, so no test sees
+    another's cached intermediates."""
+    return Connectivity.from_transform(independent_transform)
 
 
 def _replicate_mean_and_limit(values):
@@ -582,16 +490,9 @@ def _replicate_mean_and_limit(values):
     return per_replicate.mean(), 5 * per_replicate.std(ddof=1) / np.sqrt(N_REPLICATES)
 
 
-@pytest.mark.parametrize(
-    "measure",
-    [
-        "pairwise_phase_consistency",
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-    ],
-)
+@pytest.mark.parametrize("measure", COUNTING_MEASURES)
 def test_counting_measures_are_unbiased_with_dropped_trials(
-    independent_signals, measure, monkeypatch
+    independent_transform, independent_signals, measure, monkeypatch
 ):
     """Their mean under independence is 0 with each window's kept count; with
     the raw count it would lie many limits away."""
@@ -604,8 +505,8 @@ def test_counting_measures_are_unbiased_with_dropped_trials(
         return self.n_observations
 
     monkeypatch.setattr(Connectivity, "_counts_for_correction", raw_count)
-    independent_signals.clear_cache()
-    biased, _ = _replicate_mean_and_limit(getattr(independent_signals, measure)())
+    raw_counted = Connectivity.from_transform(independent_transform)
+    biased, _ = _replicate_mean_and_limit(getattr(raw_counted, measure)())
     # Four limits: twenty standard errors.
     assert abs(biased) > 4 * limit, (biased, limit)
 
@@ -634,15 +535,13 @@ def test_stft_drops_the_trial_windows_with_artifacts(recording):
     assert to_host(stft.observation_weights).shape == (4, 5, 1, stft.n_fft_samples, 1)
     connectivity = Connectivity.from_transform(stft)
     for measure in ("power", "magnitude_squared_coherence", "pairwise_phase_consistency"):
-        masked = _quietly(getattr(connectivity, measure))
+        masked = quietly(getattr(connectivity, measure))
         for window in range(4):
-            samples = slice(window * WINDOW, (window + 1) * WINDOW)
-            trials = ~artifacts[samples].any(axis=0)
-            kept = Connectivity.from_transform(
-                ShortTimeFourierTransform(time_series[samples, trials], SAMPLING_FREQUENCY)
+            kept = _kept_window(
+                time_series, artifacts, window * WINDOW, transform=ShortTimeFourierTransform
             )
             np.testing.assert_allclose(
-                masked[window], _quietly(getattr(kept, measure))[0], rtol=1e-10, atol=1e-13
+                masked[window], quietly(getattr(kept, measure))[0], rtol=1e-10, atol=1e-13
             )
     assert "artifact_samples='nonfinite' (16 of 20 trial windows kept)" in repr(stft)
     assert "Artifact samples:" in stft.summarize_parameters()
