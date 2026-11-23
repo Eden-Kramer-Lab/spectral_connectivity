@@ -423,7 +423,14 @@ def _determinant_winding_number(
         The winding number, or NaN for a non-finite factor or one whose phase
         changes too fast between bins to count.
     """
-    determinant = xp.linalg.det(factor)
+    if factor.shape[-1] == 2:
+        # Closed form: LAPACK's per-matrix overhead dominates for 2x2 (the
+        # pairwise and subset Granger factors), as in _solve_2x2.
+        determinant = (
+            factor[..., 0, 0] * factor[..., 1, 1] - factor[..., 0, 1] * factor[..., 1, 0]
+        )
+    else:
+        determinant = xp.linalg.det(factor)
     if n_fft_samples is not None:
         n_nonnegative = determinant.shape[-1]
         determinant = xp.concatenate(
