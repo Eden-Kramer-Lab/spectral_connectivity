@@ -1,5 +1,7 @@
 """Error contracts for the high-level xarray wrapper."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -173,3 +175,36 @@ def test_signal_names_length_is_validated():
     m = Multitaper(np.zeros((128, 3, 2)), sampling_frequency=128)
     with pytest.raises(ValueError, match="signal_names must contain 2 names"):
         connectivity_to_xarray(m, signal_names=["only-one"])
+
+
+class _MaskedMultitaper(Multitaper):
+    """A transform whose validity mask has the wrong shape."""
+
+    valid_time_frequency = np.ones((2, 2), dtype=bool)
+
+
+@pytest.mark.parametrize(
+    ("transform", "kwargs", "match"),
+    [
+        pytest.param(_MaskedMultitaper, {}, "valid_time_frequency", id="mask-shape"),
+        pytest.param(
+            Multitaper, {"frequency_decimation": 0}, "frequency_decimation", id="decimation"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "method",
+    ["coherence_magnitude", ["coherence_magnitude", "power"]],
+    ids=["name", "list"],
+)
+def test_connectivity_to_xarray_rejected_call_does_not_warn(transform, kwargs, match, method):
+    """A call that raises does not also warn about a deprecated name it was
+    given: the warning comes only from a call that succeeds."""
+    time_series = np.random.default_rng(0).standard_normal((256, 2, 3))
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match=match):
+            connectivity_to_xarray(
+                transform(time_series, sampling_frequency=100), method, **kwargs
+            )
+    assert record == []
