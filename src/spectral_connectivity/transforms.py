@@ -4119,19 +4119,30 @@ class VARSpectrum:
         lag_polynomial = rfft(
             xp.concatenate([identity, -coefficients], axis=1), n=n_fft_samples, axis=1
         )
+        transfer_function = xp.linalg.inv(lag_polynomial)
+        del lag_polynomial
         innovation_factor = xp.linalg.cholesky(xp.asarray(self._noise_covariance))
         # H(f) C: its columns are the responses to each orthogonalized innovation.
-        factor = xp.matmul(xp.linalg.inv(lag_polynomial), innovation_factor[:, xp.newaxis])
+        factor = xp.matmul(transfer_function, innovation_factor[:, xp.newaxis])
+        del transfer_function
         # Real at 0 Hz and Nyquist, as the lag polynomial is up to rounding.
         factor[:, 0] = factor[:, 0].real
         if n_fft_samples % 2 == 0:
             factor[:, -1] = factor[:, -1].real
-        factor = factor * np.sqrt(n_signals / self.sampling_frequency)
+        factor *= np.sqrt(n_signals / self.sampling_frequency)
         n_nonnegative = factor.shape[1]
-        negative = xp.conj(factor[:, n_fft_samples - n_nonnegative : 0 : -1])
-        two_sided = xp.concatenate([factor, negative], axis=1)
-        # (window, frequency, signal, taper) -> (window, trial, taper, frequency, signal)
-        return xp.ascontiguousarray(xp.transpose(two_sided, (0, 3, 1, 2))[:, xp.newaxis])
+        # (window, frequency, signal, taper) -> (window, taper, frequency, signal),
+        # written into one preallocated (window, trial, taper, frequency, signal).
+        by_taper = xp.transpose(factor, (0, 3, 1, 2))
+        coefficients_fft = xp.empty(
+            (self.n_time_windows, 1, n_signals, n_fft_samples, n_signals), dtype=factor.dtype
+        )
+        coefficients_fft[:, 0, :, :n_nonnegative] = by_taper
+        xp.conj(
+            by_taper[:, :, n_fft_samples - n_nonnegative : 0 : -1],
+            out=coefficients_fft[:, 0, :, n_nonnegative:],
+        )
+        return coefficients_fft
 
     def __repr__(self) -> str:
         """One line naming the model's size and the grid."""
