@@ -2,6 +2,7 @@
 
 import contextlib
 import inspect
+import math
 import re
 import warnings
 from collections.abc import Callable, Iterator, Sequence
@@ -55,6 +56,10 @@ from spectral_connectivity.minimum_phase_decomposition import (
 )
 from spectral_connectivity.statistics import (
     JackknifeResult,
+    SurrogateTestResult,
+    _normalized_axes,
+    _surrogate_statistic,
+    _SurrogateTally,
     _validate_alpha,
     _validate_confidence_level,
     adjust_for_multiple_comparisons,
@@ -63,6 +68,7 @@ from spectral_connectivity.statistics import (
 )
 from spectral_connectivity.utils import (
     BackendArray,
+    _generator,
     _validated_flag,
     did_you_mean,
     is_positive_integer,
@@ -85,8 +91,27 @@ _NONFINITE_COEFFICIENTS_WARNING = "fourier_coefficients contains NaN or Inf valu
 
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
-# jackknife validation cannot drift apart.
-_NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife"})
+# the resampling drivers' validation cannot drift apart.
+_NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife", "surrogate_test"})
+# Connectivity.surrogate_test: the surrogate constructions and alternatives it
+# takes, and the measures it refuses by name, with why.
+_SURROGATE_KINDS = ("trial_shuffle", "phase_rotation", "conjugation")
+_SURROGATE_ALTERNATIVES = ("greater", "less", "two-sided")
+_SURROGATE_REFUSED_MEASURES = {
+    "power": (
+        "it describes one signal, and every surrogate keeps each signal's "
+        "spectrum, so its null distribution is the estimate itself. Test a "
+        "measure of the relation between signals."
+    ),
+    "delay": (
+        "it returns candidate delays at the frequencies its own coherence test "
+        "selects, not a statistic. Test magnitude_squared_coherence, or "
+        "phase_slope_index for the direction of a lag."
+    ),
+}
+# Measures that sum over a frequency band (frequency_range) instead of
+# returning one value per frequency.
+_BAND_SUMMED_MEASURES = frozenset({"phase_slope_index"})
 # Measure names released in 2.x and replaced in 3.0, mapped to the canonical
 # name. Each still works through 3.x with a DeprecationWarning and is removed
 # in 4.0; the canonical measure is the one registered and listed.
@@ -1045,6 +1070,8 @@ class Connectivity:
     ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
     :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
     wrappers return an ``xarray.Dataset`` for each of these instead.
+    :meth:`surrogate_test` returns a
+    :class:`~spectral_connectivity.statistics.SurrogateTestResult`.
 
     >>> import numpy as np
     >>> rng = np.random.default_rng(0)
@@ -2815,6 +2842,633 @@ class Connectivity:
                 confidence_interval=(np.maximum(lower, 0.0), upper),
             )
         return result
+
+    def surrogate_test(
+        self,
+        method: str,
+        *,
+        kind: Literal["trial_shuffle", "phase_rotation", "conjugation"],
+        n_surrogates: int = 999,
+        alternative: Literal["greater", "less", "two-sided"] = "greater",
+        fwer_axis: int | tuple[int, ...] | None = None,
+        half_bandwidth: float | None = None,
+        random_state: int | np.random.Generator | None = None,
+        **method_kwargs: Any,
+    ) -> SurrogateTestResult:
+        """Test a measure against surrogate data that satisfy a null hypothesis.
+
+        Each surrogate is the coefficients changed in a way that leaves their
+        distribution unchanged when the null hypothesis of ``kind`` holds. The
+        method is recomputed for ``n_surrogates`` surrogates, and each element
+        of the estimate gets a Monte Carlo p-value (the rank of the estimate
+        among the surrogates' values) and a p-value adjusted for testing every
+        element of its family (the maximum statistic over the family).
+
+        Parameters
+        ----------
+        method : str
+            Name of a public, real-valued connectivity measure of pairs of
+            signals, e.g. ``"magnitude_squared_coherence"``. Complex-valued,
+            tuple-valued and structured measures are refused, as are
+            ``power`` (every surrogate keeps each signal's spectrum) and
+            ``delay`` (candidate delays, not a statistic).
+        kind : {"trial_shuffle", "phase_rotation", "conjugation"}
+            The surrogate construction, which sets the null hypothesis:
+
+            - ``"trial_shuffle"``: permute each signal's trials independently
+              (signal 0 keeps its order), keeping every trial's coefficients
+              for that signal intact across time windows, tapers and
+              frequencies. Null: the signals are independent from trial to
+              trial; each signal keeps its own spectrum and whatever it does
+              at the same time in every trial. Valid for every measure,
+              including the directed ones. Needs an expectation that averages
+              trials and at least 2 trials; with ``n_trials! <
+              n_surrogates`` (fewer than 7 trials for the default) a warning
+              says how coarse the p-values are.
+            - ``"phase_rotation"``: multiply each signal's coefficients by an
+              independent random phase per independent observation (see
+              Notes), the same at every positive frequency (and conjugate at
+              the negative ones, so a real signal stays real). Null: the
+              signals are independent. Works with a single trial. The
+              coefficients within ``half_bandwidth`` of 0 Hz and Nyquist are
+              not circular, so rotating them does not give valid surrogates;
+              those frequencies are not tested.
+            - ``"conjugation"``: replace each independent observation (every
+              signal and frequency of it together) by its complex conjugate
+              with probability 1/2, which for a real signal amounts to
+              reversing that observation in time. Null: the coherency is real at every
+              frequency, as for instantaneous (zero-lag) mixing such as
+              volume conduction of independent sources; exact for circular
+              Gaussian coefficients. Use it to test for lagged interaction
+              (``imaginary_coherence``, the phase-lag indices,
+              ``phase_slope_index``) or for Granger causality beyond what
+              instantaneous mixing produces.
+        n_surrogates : int, default=999
+            Number of surrogates. The smallest p-value is ``1 / (n_surrogates
+            + 1)``; the computation takes ``n_surrogates`` times as long as
+            the measure.
+        alternative : {"greater", "less", "two-sided"}, default="greater"
+            Which values are evidence against the null: large values of the
+            measure (``"greater"``), small values (``"less"``), or large
+            magnitudes of a signed measure (``"two-sided"``, e.g. for
+            ``imaginary_coherency`` or ``phase_slope_index``).
+        fwer_axis : int or tuple of int or None, default=None
+            The axes of the measure's result whose elements form one family
+            for ``fwer_p_value``, as in
+            :func:`~spectral_connectivity.statistics.adjust_for_multiple_comparisons`:
+            each slice along the remaining axes is its own family. ``None``
+            (the default) makes every tested element one family. For a
+            pairwise result ``(n_time, n_frequencies, n_signals,
+            n_signals)``, ``fwer_axis=(1, 2, 3)`` corrects across
+            frequencies and pairs separately in each time window.
+        half_bandwidth : float, optional
+            Required for ``kind="phase_rotation"`` and refused otherwise: the
+            half-width of the transform's spectral smoothing, in the units of
+            ``frequencies``. For a :class:`~spectral_connectivity.Multitaper`
+            transform it is ``frequency_resolution / 2``
+            (``time_halfbandwidth_product / time_window_duration``). The
+            frequencies below it and above Nyquist minus it are not tested.
+        random_state : int, numpy.random.Generator, or None
+            Seed or generator of the surrogates' random numbers. ``None``
+            draws a fresh seed.
+        **method_kwargs
+            Keyword arguments forwarded to ``method`` on the data and every
+            surrogate.
+
+        Returns
+        -------
+        SurrogateTestResult
+            The estimate, the element-wise ``p_value`` and the family-wise
+            ``fwer_p_value``, each with the measure's own shape (for a
+            pairwise measure ``(n_time, n_nonnegative_frequencies, n_signals,
+            n_signals)``), and the surrogate maxima of each family. The
+            diagonal, non-finite estimates and (for ``"phase_rotation"``) the
+            frequencies near 0 Hz and Nyquist are not tested: their p-values
+            are NaN. For directed measures ``[..., i, j]`` is ``i -> j``.
+
+        Raises
+        ------
+        ValueError
+            If ``kind``, ``n_surrogates``, ``alternative``, ``fwer_axis`` or
+            ``half_bandwidth`` is invalid; if the expectation does not average
+            what ``kind`` randomizes (trials for ``"trial_shuffle"``,
+            independent observations otherwise) or there are fewer than 2 of
+            them; if ``"trial_shuffle"`` meets observation weights that differ
+            between trials; if ``"phase_rotation"`` meets one-sided
+            coefficients, or a measure that does not return one value per
+            frequency, or a ``phase_slope_index`` band within
+            ``half_bandwidth`` of 0 Hz or Nyquist; or if ``method`` is not a
+            measure this test can use.
+        TypeError
+            If ``method`` is not a string, or the measure's result is not a
+            real array ending in a ``(n_signals, n_signals)`` pair.
+
+        Notes
+        -----
+        **What a rejection means.** A p-value at or below ``alpha`` rejects
+        the null hypothesis of ``kind`` at that element, not "no
+        connectivity" in general. Under the null, the probability of a
+        p-value at or below ``alpha`` is at most ``alpha`` (exactly
+        ``floor(alpha * (n_surrogates + 1)) / (n_surrogates + 1)`` when the
+        surrogates are exchangeable with the data and there are no ties).
+        Ties count against rejection, including values within rounding (one
+        part in a million) of the estimate, and a surrogate the measure
+        returns NaN for counts as exceeding it.
+
+        **Independent observations.** ``"phase_rotation"`` and
+        ``"conjugation"`` draw one phase or flip for each independent
+        observation the expectation averages: each trial-taper observation
+        for ``"trials_tapers"``, each time window too when the expectation
+        averages time. Observations that are not independent share one draw,
+        since randomizing them separately would destroy their correlation and
+        make the null too narrow: the tapers of one trial when
+        ``observations_are_independent`` is ``False`` (a ``MorletWavelet``
+        smoothing neighborhood, ``Welch`` segments overlapping by more than
+        half), and the time windows when ``time_bins_are_independent`` is
+        ``False``. With Welch segments overlapping by 75% (13 per trial, 5
+        trials), randomizing each segment rejected independent signals in
+        19.6% of datasets at nominal 5% (magnitude-squared coherence and
+        pairwise Granger), against 5.0-5.2% with one phase per trial. The
+        axes the expectation keeps (each time window by default) share the
+        draws, so the surrogates keep the dependence between them that the
+        family maximum depends on.
+
+        **Shared stimulus-locked responses.** A response locked to a
+        stimulus, the same in every trial and common to the signals, is in
+        some nulls and not others. ``"trial_shuffle"`` keeps each signal's
+        response in every surrogate, so a shared response is in its null:
+        the test asks about trial-by-trial covariation beyond it.
+        ``"phase_rotation"`` randomizes each trial's and taper's phase, which
+        destroys stimulus-locked timing, so a shared response alone is
+        significant. ``"conjugation"`` keeps a response shared at zero lag in
+        its null (its coherency is real) and rejects one that reaches the
+        signals at different times. Measured with two independent AR(2)
+        noise signals plus the same 10 Hz burst in each of 10 trials (2 s
+        windows, 7 tapers, 600 datasets), rejection at 5-15 Hz: with the
+        burst at zero lag, 4.5-5.6% for the trial shuffle, 4.7-5.9% for
+        conjugation, and 72-74% (magnitude-squared coherence) and 62-64%
+        (pairwise Granger) for phase rotation (3.5-4.1% for the imaginary
+        coherence, which a zero-lag response does not change); with the burst 15 ms later in
+        one signal, 4.2-6.0% for the trial shuffle and 64-86% for the other
+        two. To ask about interaction beyond a common drive, use
+        ``"trial_shuffle"``. Subtracting each signal's mean across trials
+        before the transform removes the response but leaves every trial's
+        residual correlated with the others (by ``-1 / (n_trials - 1)``),
+        which per-trial randomization ignores: with 10 trials phase
+        rotation and conjugation then rejected 6.2-7.7% at nominal 5%, at
+        every frequency (7.0% and 6.5% for magnitude-squared coherence of
+        independent signals with no response, 400 datasets), while the
+        trial shuffle kept 4.9-6.1%; with 40 trials, 5.4% and 5.1%.
+
+        **Multiple comparisons.** ``fwer_p_value`` controls the family-wise
+        error rate within each family, not across families: choose the
+        families before looking at the results, to match the claims you will
+        make (see the Notes of
+        :func:`~spectral_connectivity.statistics.adjust_for_multiple_comparisons`).
+        The raw maximum is dominated by the elements whose null distribution
+        is widest, so elements with a narrow null (frequencies with fewer
+        effective observations, or a measure with a smaller range there) lose
+        power to the others. The diagonal is never in a family. Each pair of
+        a symmetric measure appears twice, which does not change the
+        maximum. For a false discovery rate instead, pass ``p_value`` to
+        :func:`~spectral_connectivity.statistics.adjust_for_multiple_comparisons`.
+
+        **Measures that combine frequencies.** For ``"phase_rotation"`` the
+        frequencies near 0 Hz and Nyquist are left untested in the output, but
+        the measures that factor the whole spectrum (the spectral Granger
+        family, the transfer-function measures) still use them, which
+        spreads a small excess past ``half_bandwidth``: with one trial of 7
+        tapers (6000 datasets), pairwise spectral Granger rejected 5.8% from
+        ``half_bandwidth`` to 1.5 times it from an edge, 5.5% up to twice
+        it, and 5.1% farther away; with 5 trials, 5.3% and 4.8%. Exclude
+        those frequencies from a claim if that matters.
+        ``phase_slope_index`` sums over its ``frequency_range``, so that band
+        must avoid the untested frequencies.
+
+        **Measured size and power.** Monte Carlo at nominal 5% with 99
+        surrogates per dataset, AR signals sampled at 200 Hz, multitaper
+        transforms:
+
+        - ``"trial_shuffle"``, three independent AR(1) signals, 10 trials,
+          1 s windows with 5 tapers, 2100 datasets: 4.9-5.1% for
+          magnitude-squared and imaginary coherence and pairwise spectral
+          Granger, including 0 Hz and Nyquist.
+        - ``"phase_rotation"``, independent signals, 2 s windows with 7
+          tapers (half bandwidth 2 Hz), 1 or 5 trials, 2000 datasets each:
+          5.0-5.1% for magnitude-squared and imaginary coherence and
+          4.9-5.1% for pairwise spectral Granger at frequencies more than
+          2.5 half bandwidths from an edge, against up to 8.5% (coherence)
+          and 8.2% (Granger) within one half bandwidth of 0 Hz or Nyquist,
+          which is why those are not tested.
+        - ``"conjugation"``, instantaneous mixing of two independent AR(2)
+          sources (cross-weights 0.7), 10 trials, 400 datasets: 5.1% for
+          ``imaginary_coherence``, 4.4% for pairwise spectral Granger and
+          5.0% for a two-sided ``phase_slope_index`` over 10-30 Hz, where the
+          trial shuffle finds Granger causality in 96% of datasets. With a
+          3-sample lag instead (one source driving the other at half
+          weight), conjugation rejects the imaginary coherence at its 20 Hz
+          peak, and the phase slope index, in every dataset, and pairwise
+          Granger in 94% (10-90 Hz).
+        - Family-wise error under the global null, the same 2100 datasets
+          with every tested frequency and pair one family: some element was
+          rejected in 5.0-5.1% of datasets with ``"trial_shuffle"``,
+          3.6-3.8% with ``"phase_rotation"`` and 3.9-5.2% with
+          ``"conjugation"``, against every dataset with the uncorrected
+          p-values. Conjugation rejected pairwise Granger at 0 Hz in 6.5% of
+          these datasets (5.8% under the mixing above).
+
+        References
+        ----------
+        .. [1] Nichols, T. E., and Holmes, A. P. (2002). Nonparametric
+               permutation tests for functional neuroimaging: a primer with
+               examples. Human Brain Mapping 15, 1-25.
+
+        Examples
+        --------
+        Signal 1 is signal 0 delayed by 3 samples (6 ms), plus noise; signal 2
+        is independent. Conjugation tests for lagged interaction:
+
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(1)
+        >>> leader = rng.standard_normal((503, 10))
+        >>> signals = np.stack(
+        ...     [leader[3:], leader[:-3], rng.standard_normal((500, 10))], axis=-1
+        ... )  # (time, trials, signals)
+        >>> signals += rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500, time_halfbandwidth_product=2)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> result = connectivity.surrogate_test(
+        ...     "imaginary_coherence", kind="conjugation", n_surrogates=199, random_state=0
+        ... )
+        >>> result.p_value.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 251, 3, 3)
+        >>> significant = result.fwer_p_value <= 0.05  # one family: every frequency and pair
+        >>> bool(significant[0, 40, 0, 1]), bool(significant[..., [0, 1], [2, 2]].any())
+        (True, False)
+
+        Phase rotation needs the transform's half bandwidth:
+
+        >>> rotated = connectivity.surrogate_test(
+        ...     "magnitude_squared_coherence",
+        ...     kind="phase_rotation",
+        ...     half_bandwidth=multitaper.frequency_resolution / 2,
+        ...     n_surrogates=199,
+        ...     random_state=0,
+        ... )
+        >>> bool(np.isnan(rotated.p_value[0, :2, 0, 1]).all())  # within 2 Hz of 0 Hz
+        True
+        """
+        if kind not in _SURROGATE_KINDS:
+            msg = (
+                f"kind must be one of {', '.join(map(repr, _SURROGATE_KINDS))}, got "
+                f"{kind!r}. Each tests a different null hypothesis; see "
+                "Connectivity.surrogate_test."
+            )
+            raise ValueError(msg)
+        if not is_positive_integer(n_surrogates):
+            msg = (
+                f"n_surrogates must be a positive integer, got {n_surrogates!r}. "
+                "The smallest p-value is 1 / (n_surrogates + 1), e.g. 0.001 for 999."
+            )
+            raise ValueError(msg)
+        n_surrogates = int(n_surrogates)
+        if alternative not in _SURROGATE_ALTERNATIVES:
+            msg = (
+                "alternative must be one of "
+                f"{', '.join(map(repr, _SURROGATE_ALTERNATIVES))}, got {alternative!r}."
+            )
+            raise ValueError(msg)
+        if kind == "phase_rotation":
+            half_bandwidth = self._validated_half_bandwidth(half_bandwidth)
+        elif half_bandwidth is not None:
+            msg = (
+                f"half_bandwidth applies only to kind='phase_rotation', whose "
+                f"surrogates are invalid near 0 Hz and Nyquist; kind={kind!r} "
+                "tests every frequency. Drop half_bandwidth."
+            )
+            raise ValueError(msg)
+        unit_axes = self._surrogate_unit_axes(kind, n_surrogates)
+        method, measure = self._resampled_measure(method, "surrogate_test")
+        if method in _SURROGATE_REFUSED_MEASURES:
+            msg = (
+                f"surrogate_test cannot test {method!r}: {_SURROGATE_REFUSED_MEASURES[method]}"
+            )
+            raise ValueError(msg)
+        estimate = _real_array_result(measure(**method_kwargs), method, "surrogate_test")
+        if estimate.shape[-2:] != (self.n_signals, self.n_signals):
+            msg = (
+                "surrogate_test tests relations between pairs of signals, so the "
+                f"measure must end in a (n_signals, n_signals) = ({self.n_signals}, "
+                f"{self.n_signals}) pair; {method!r} returned shape {estimate.shape}."
+            )
+            raise TypeError(msg)
+        family_axes = (
+            tuple(range(estimate.ndim))
+            if fwer_axis is None
+            else _normalized_axes(fwer_axis, estimate.ndim, "fwer_axis")
+        )
+        tested = np.isfinite(estimate) & ~np.eye(self.n_signals, dtype=bool)
+        if kind == "phase_rotation":
+            assert half_bandwidth is not None  # validated above
+            tested &= self._rotation_valid_frequencies(
+                method, estimate, half_bandwidth, method_kwargs
+            )
+        tally = _SurrogateTally(
+            _surrogate_statistic(estimate, alternative), tested, family_axes, n_surrogates
+        )
+        rng = _generator(random_state)
+        for _ in range(n_surrogates):
+            surrogate_connectivity = Connectivity(
+                self._surrogate_coefficients(kind, unit_axes, rng),
+                expectation_type=self.expectation_type,
+                frequencies=self._frequencies,
+                time=self.time,
+                dtype=self._dtype,
+                minimum_phase_tolerance=self._minimum_phase_tolerance,
+                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+                is_one_sided=self._is_one_sided,
+                observation_weights=self._observation_weights,
+                observations_are_independent=self._observations_are_independent,
+                time_bins_are_independent=self._time_bins_are_independent,
+                _adopt_fourier_coefficients=True,
+            )
+            token = _emit_migration_notices.set(False)
+            try:
+                values = getattr(surrogate_connectivity, method)(**method_kwargs)
+            finally:
+                _emit_migration_notices.reset(token)
+            tally.add(
+                _surrogate_statistic(
+                    _real_array_result(values, method, "surrogate_test"), alternative
+                )
+            )
+        p_value, fwer_p_value = tally.p_values()
+        return SurrogateTestResult(
+            estimate=estimate,
+            p_value=p_value,
+            fwer_p_value=fwer_p_value,
+            null_maxima=tally.null_maxima,
+            n_surrogates=n_surrogates,
+            kind=kind,
+            alternative=alternative,
+            fwer_axis=family_axes,
+        )
+
+    def _validated_half_bandwidth(self, half_bandwidth: Any) -> float:
+        """``half_bandwidth`` for ``kind="phase_rotation"``, or the error it raises."""
+        if self._is_one_sided:
+            msg = (
+                "surrogate_test(kind='phase_rotation') needs two-sided coefficients: "
+                "its surrogates are invalid within the half-bandwidth of 0 Hz and of "
+                "Nyquist, and one-sided coefficients (e.g. MorletWavelet) state "
+                "neither the Nyquist frequency nor one bandwidth for every "
+                "frequency. Use kind='trial_shuffle' (at least 2 trials) or "
+                "kind='conjugation', or a two-sided transform such as Multitaper."
+            )
+            raise ValueError(msg)
+        if (
+            half_bandwidth is None
+            or isinstance(half_bandwidth, (bool, np.bool_))
+            or not isinstance(half_bandwidth, (int, float, np.integer, np.floating))
+            or not np.isfinite(half_bandwidth)
+            or half_bandwidth <= 0
+        ):
+            msg = (
+                "surrogate_test(kind='phase_rotation') needs half_bandwidth, the "
+                "half-width of the transform's spectral smoothing in the units of "
+                f"frequencies, as a positive number; got {half_bandwidth!r}. Rotated "
+                "coefficients within it of 0 Hz or Nyquist are not valid "
+                "surrogates, so those frequencies are not tested. For a Multitaper "
+                "transform pass half_bandwidth=multitaper.frequency_resolution / 2."
+            )
+            raise ValueError(msg)
+        return float(half_bandwidth)
+
+    def _surrogate_unit_axes(self, kind: str, n_surrogates: int) -> tuple[int, ...]:
+        """Observation axes indexing the independent units a surrogate randomizes.
+
+        For ``trial_shuffle`` the trials (axis 1). For ``phase_rotation`` and
+        ``conjugation`` the averaged axes whose observations are independent:
+        trials always, tapers unless ``observations_are_independent`` is
+        False, time windows unless ``time_bins_are_independent`` is False.
+        Coefficients sharing a unit get the same phase or flip.
+
+        Raises
+        ------
+        ValueError
+            If the expectation leaves no such axis, or there are fewer than 2
+            units.
+        """
+        shape = self._fourier_coefficients.shape
+        averaged = self._expectation_axes
+        if kind == "trial_shuffle":
+            if 1 not in averaged:
+                msg = (
+                    "surrogate_test(kind='trial_shuffle') pairs each signal's trials "
+                    "with other signals' trials, so the expectation must average "
+                    f"trials; this Connectivity has expectation_type="
+                    f"{self.expectation_type!r}. Build it with "
+                    "expectation_type='trials_tapers' (the default), or use "
+                    "kind='phase_rotation' or 'conjugation', which randomize single "
+                    "observations."
+                )
+                raise ValueError(msg)
+            n_trials = shape[1]
+            if n_trials < 2:
+                msg = (
+                    "surrogate_test(kind='trial_shuffle') needs at least 2 trials to "
+                    f"shuffle; got {n_trials}. With one trial use "
+                    "kind='phase_rotation' (independence) or kind='conjugation' (no "
+                    "lagged interaction)."
+                )
+                raise ValueError(msg)
+            weights = self._observation_weights
+            if weights is not None and not bool(xp.all(weights == weights[:, :1])):
+                msg = (
+                    "surrogate_test(kind='trial_shuffle') moves each signal's trials, "
+                    "but observation_weights differ between trials and are shared by "
+                    "the signals, so a shuffled trial would take another trial's "
+                    "weight. Use weights equal across trials, or "
+                    "kind='phase_rotation' or 'conjugation'."
+                )
+                raise ValueError(msg)
+            # Two signals' trials can be aligned in n_trials! ways; a
+            # Monte Carlo p-value cannot resolve finer than that.
+            if math.lgamma(n_trials + 1) < math.log(n_surrogates):
+                warnings.warn(
+                    f"surrogate_test(kind='trial_shuffle'): {n_trials} trials can be "
+                    f"aligned with another signal's in only {math.factorial(n_trials)} "
+                    f"ways, fewer than n_surrogates={n_surrogates}, so surrogates "
+                    "repeat and no p-value is below about "
+                    f"1 / {math.factorial(n_trials)}. The p-values remain valid. "
+                    "Collect more trials for a finer test.",
+                    UserWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
+            return (1,)
+        independent = {
+            0: self._time_bins_are_independent,
+            1: True,
+            2: self._observations_are_independent,
+        }
+        unit_axes = tuple(axis for axis in averaged if independent[axis])
+        n_units = int(np.prod([shape[axis] for axis in unit_axes]))
+        if n_units < 2:
+            msg = (
+                f"surrogate_test(kind={kind!r}) randomizes each independent "
+                "observation the expectation averages, and this Connectivity has "
+                f"{n_units if unit_axes else 'none'}"
+            )
+            if not self._observations_are_independent and 2 in averaged:
+                msg += (
+                    " (its tapers are correlated, observations_are_independent is "
+                    "False, so only whole trials are independent)"
+                )
+            if not self._time_bins_are_independent and 0 in averaged:
+                msg += (
+                    " (its time bins are correlated, time_bins_are_independent is "
+                    "False, so they are not independent units)"
+                )
+            msg += (
+                f", expectation_type={self.expectation_type!r}. It needs at least 2: "
+                "average more independent observations (more trials, or "
+                "expectation_type='trials_tapers' with independent tapers)."
+            )
+            raise ValueError(msg)
+        if kind == "conjugation" and n_units - 1 < math.log2(n_surrogates):
+            # Flipping every unit conjugates the whole spectrum, which leaves
+            # the measures symmetric under conjugation unchanged.
+            n_distinct = 2 ** (n_units - 1)
+            warnings.warn(
+                f"surrogate_test(kind='conjugation'): {n_units} independent "
+                f"observations give only {n_distinct} distinct surrogates for a "
+                f"measure unchanged by conjugating every observation, fewer than "
+                f"n_surrogates={n_surrogates}, so surrogates repeat and no p-value is "
+                f"below about 1 / {n_distinct}. The p-values remain valid.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return unit_axes
+
+    def _surrogate_coefficients(
+        self,
+        kind: str,
+        unit_axes: tuple[int, ...],
+        rng: np.random.Generator,
+    ) -> BackendArray:
+        """One surrogate of the coefficients, a fresh array of their shape.
+
+        Random numbers are drawn on the host from ``rng``, so a seed gives the
+        same surrogates on every backend.
+        """
+        coefficients = self._fourier_coefficients
+        n_trials, n_frequencies, n_signals = (
+            coefficients.shape[1],
+            coefficients.shape[3],
+            coefficients.shape[4],
+        )
+        if kind == "trial_shuffle":
+            # One permutation of the trials per signal, the same in every time
+            # window, taper and frequency; signal 0 keeps its order.
+            order = np.tile(np.arange(n_trials), (n_signals, 1))
+            order[1:] = rng.permuted(order[1:], axis=-1)
+            index = xp.asarray(order.T[np.newaxis, :, np.newaxis, np.newaxis, :])
+            shuffled: BackendArray = xp.take_along_axis(coefficients, index, axis=1)
+            return shuffled
+        unit_shape = tuple(
+            coefficients.shape[axis] if axis in unit_axes else 1 for axis in range(3)
+        )
+        if kind == "conjugation":
+            # One flip per unit, shared by every signal and frequency.
+            flip = xp.asarray(rng.random((*unit_shape, 1, 1)) < 0.5)
+            conjugated: BackendArray = xp.where(flip, xp.conj(coefficients), coefficients)
+            return conjugated
+        # phase_rotation: one phase per unit and signal. A real signal's
+        # coefficients at -f are the conjugates of those at +f, so -f turns the
+        # other way and the surrogate stays the coefficients of a real signal
+        # (that of the analytic signal rotated by the phase); the real 0 Hz and
+        # Nyquist bins get the sign of its cosine.
+        phase = rng.uniform(0.0, 2 * np.pi, (*unit_shape, 1, n_signals))
+        rotation = np.exp(1j * phase)
+        side = np.zeros(n_frequencies)
+        side[1 : (n_frequencies + 1) // 2] = 1
+        side[n_frequencies // 2 + 1 :] = -1
+        side = side[:, np.newaxis]
+        factor = np.where(
+            side > 0,
+            rotation,
+            np.where(side < 0, np.conj(rotation), np.where(rotation.real < 0, -1.0, 1.0)),
+        )
+        rotated: BackendArray = coefficients * xp.asarray(factor.astype(coefficients.dtype))
+        return rotated
+
+    def _rotation_valid_frequencies(
+        self,
+        method: str,
+        estimate: NDArray[np.floating],
+        half_bandwidth: float,
+        method_kwargs: dict[str, Any],
+    ) -> NDArray[np.bool_]:
+        """Where ``kind="phase_rotation"`` gives valid surrogates, broadcastable to ``estimate``.
+
+        Rotated coefficients within ``half_bandwidth`` of 0 Hz or Nyquist are
+        not valid surrogates (the coefficients there are not circular), so
+        the frequencies there are not tested. A measure that sums over a band
+        (``phase_slope_index``) is tested only if its band avoids them.
+
+        Raises
+        ------
+        ValueError
+            If no frequency is valid, or the band of a band-summed measure
+            includes an invalid one.
+        """
+        frequencies = self.frequencies
+        all_frequencies = to_numpy(self._frequencies)
+        n_fft_samples = all_frequencies.shape[0]
+        spacing = float(all_frequencies[1]) if n_fft_samples > 1 else 0.0
+        nyquist = n_fft_samples * spacing / 2
+        valid = (frequencies >= half_bandwidth) & (frequencies <= nyquist - half_bandwidth)
+        if not valid.any():
+            msg = (
+                f"surrogate_test(kind='phase_rotation') tests no frequency: every "
+                f"frequency lies within half_bandwidth={half_bandwidth!r} of 0 or of "
+                f"Nyquist ({nyquist!r}). Check half_bandwidth is in the units of "
+                "frequencies (half the transform's frequency resolution)."
+            )
+            raise ValueError(msg)
+        if method in _BAND_SUMMED_MEASURES:
+            band = _select_measure_frequencies(
+                frequencies,
+                method_kwargs.get("frequency_range"),
+                method_kwargs.get("frequencies_of_interest"),
+            ).mask
+            if not valid[band].all():
+                msg = (
+                    f"surrogate_test(kind='phase_rotation') cannot test {method!r} over "
+                    f"a band within half_bandwidth={half_bandwidth!r} of 0 Hz or "
+                    f"Nyquist ({nyquist!r}), where rotated coefficients are not valid "
+                    "surrogates. Pass frequency_range=(low, high) with "
+                    f"low >= {half_bandwidth!r} and high <= {nyquist - half_bandwidth!r}."
+                )
+                raise ValueError(msg)
+            return np.ones((), dtype=bool)
+        frequency_axis = len(self._kept_observation_axes)
+        if estimate.ndim < frequency_axis + 3 or estimate.shape[frequency_axis] != len(
+            frequencies
+        ):
+            msg = (
+                "surrogate_test(kind='phase_rotation') leaves untested the frequencies "
+                "within half_bandwidth of 0 Hz and Nyquist, so the measure must "
+                f"return one value per frequency on axis {frequency_axis}; {method!r} "
+                f"returned shape {estimate.shape}. Use kind='trial_shuffle' or "
+                "kind='conjugation'."
+            )
+            raise ValueError(msg)
+        valid_by_frequency: NDArray[np.bool_] = valid.reshape(
+            -1, *([1] * (estimate.ndim - frequency_axis - 1))
+        )
+        return valid_by_frequency
 
     @_asnumpy
     def power(self, *, one_sided: bool | None = None) -> NDArray[np.floating]:
@@ -7027,17 +7681,17 @@ def _real_array_result(
     if isinstance(result, tuple):
         msg = f"{caller} does not support tuple-valued measure {method!r}."
         raise TypeError(msg)
-    result = np.asarray(result)
-    if result.dtype == object:
+    values: NDArray[np.floating] = np.asarray(result)
+    if values.dtype == object:
         msg = (
             f"{caller} requires a real array result from {method!r}; it "
             f"returned a structured result.{structured_hint}"
         )
         raise TypeError(msg)
-    if np.iscomplexobj(result):
+    if np.iscomplexobj(values):
         msg = f"{caller} requires a real-valued measure; {method!r} is complex."
         raise TypeError(msg)
-    return result
+    return values
 
 
 def _divide_masking_zero_denominator(

@@ -474,3 +474,21 @@ def test_minimum_phase_decomposition_accepts_host_arrays(xp, monkeypatch):
         minimum_phase_decomposition.minimum_phase_decomposition(cross_spectrum),
         rtol=1e-12,
     )
+
+
+@pytest.mark.parametrize("kind", ["trial_shuffle", "phase_rotation", "conjugation"])
+def test_surrogate_test_runs_on_the_device(xp, monkeypatch, kind):
+    """Surrogates are drawn on the host and applied to device coefficients;
+    the p-values match the host computation exactly (same random numbers)."""
+    coefficients = _coefficients(np.random.default_rng(13), shape=(2, 6, 3, 16, 3))
+    extra = {"half_bandwidth": 0.07} if kind == "phase_rotation" else {}
+    kwargs = {"kind": kind, "n_surrogates": 9, "random_state": 0, **extra}
+    on_device = Connectivity(xp.asarray(coefficients)).surrogate_test(
+        "magnitude_squared_coherence", **kwargs
+    )
+
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    host = Connectivity(coefficients).surrogate_test("magnitude_squared_coherence", **kwargs)
+    assert isinstance(on_device.p_value, np.ndarray)
+    np.testing.assert_array_equal(on_device.p_value, host.p_value)
+    np.testing.assert_array_equal(on_device.fwer_p_value, host.fwer_p_value)
