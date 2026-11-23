@@ -789,6 +789,14 @@ def connectivity_to_xarray(
     >>> bands["magnitude_squared_coherence"].dims
     ('time', 'band', 'source', 'target')
     """
+    if method is None:
+        msg = (  # type: ignore[unreachable]  # user input
+            "method=None is not accepted by connectivity_to_xarray, whose default "
+            "is 'magnitude_squared_coherence'. For the set multitaper_connectivity "
+            "computes by default, pass method=spectral_connectivity.DEFAULT_METHODS; "
+            "to see all measure names, call spectral_connectivity.list_measures()."
+        )
+        raise TypeError(msg)
     methods, output_names, return_dataarray = _requested_methods(method, None)
     measure_settings = _merge_legacy_settings(
         "connectivity_to_xarray",

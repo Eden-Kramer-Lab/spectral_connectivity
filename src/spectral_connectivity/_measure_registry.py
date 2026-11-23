@@ -785,14 +785,16 @@ def _requested_methods(
 ) -> tuple[list[str], dict[str, str], bool]:
     """The measures a wrapper call requests, resolved once to canonical names.
 
-    ``None`` requests ``defaults``; ``defaults=None`` is
-    ``connectivity_to_xarray``'s, which has no default set, so ``None`` raises
-    ``TypeError`` there. A string requests that one measure, whose result is
-    returned as a DataArray rather than a Dataset. An empty request, an
-    unknown name, or a measure named under both its deprecated and its
-    canonical name (one estimate under two variable names) raises. A deprecated name is resolved without a warning here: the wrapper
-    calls :func:`_warn_deprecated_measure_names` just before it returns, so a
-    call rejected for any reason raises only its error.
+    ``None`` requests ``defaults``. ``defaults=None`` marks a wrapper with no
+    default set (``connectivity_to_xarray``, which rejects ``None`` itself)
+    and leaves ``None`` out of the type error's list of accepted values. A
+    string requests that one measure, whose result is returned as a DataArray
+    rather than a Dataset. An empty request, an unknown name, or a measure
+    named under both its deprecated and its canonical name (one estimate under
+    two variable names) raises. A deprecated name is resolved without a
+    warning here: the wrapper calls :func:`_warn_deprecated_measure_names`
+    just before it returns, so a call rejected for any reason raises only its
+    error.
 
     Returns
     -------
@@ -810,14 +812,7 @@ def _requested_methods(
         else "a measure name (str), a list of names, or None (the default measures)"
     )
     if method is None:
-        if defaults is None:
-            msg = (
-                "method=None is not accepted by connectivity_to_xarray, whose default "
-                "is 'magnitude_squared_coherence'. For the set multitaper_connectivity "
-                "computes by default, pass method=spectral_connectivity.DEFAULT_METHODS; "
-                "to see all measure names, call spectral_connectivity.list_measures()."
-            )
-            raise TypeError(msg)
+        assert defaults is not None  # a wrapper without defaults rejects None itself
         requested = list(defaults)
     elif isinstance(method, str):
         requested = [method]
