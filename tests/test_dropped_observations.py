@@ -251,3 +251,60 @@ def test_delay_significance_counts_the_kept_observations(measure):
         _find_significant_frequencies(coherency, 7),
         _find_significant_frequencies(coherency, masked.n_observations),
     )
+
+
+@pytest.mark.parametrize(
+    "method", ["magnitude_squared_coherence", "pairwise_phase_consistency", "power"]
+)
+def test_jackknife_leaves_out_only_kept_observations(dropped_trials, method):
+    """Each window's interval is the jackknife of its kept trials alone: a
+    dropped trial is no replicate there, and the degrees of freedom count the
+    kept trials and tapers."""
+    coefficients, valid, weights = dropped_trials
+    masked = Connectivity(coefficients, observation_weights=weights).jackknife(method)
+    n_tapers = coefficients.shape[2]
+    expected_counts = valid.sum(axis=1) * n_tapers
+    np.testing.assert_array_equal(np.ravel(masked.n_observations), expected_counts)
+    for window in range(coefficients.shape[0]):
+        kept = Connectivity(coefficients[[window]][:, valid[window]]).jackknife(method)
+        assert kept.n_observations == expected_counts[window]
+        for field in ("estimate", "bias_corrected", "standard_error"):
+            np.testing.assert_allclose(
+                getattr(masked, field)[window],
+                getattr(kept, field)[0],
+                rtol=1e-9,
+                atol=1e-13,
+                err_msg=field,
+            )
+        for bound, kept_bound in zip(
+            masked.confidence_interval, kept.confidence_interval, strict=True
+        ):
+            np.testing.assert_allclose(bound[window], kept_bound[0], rtol=1e-9, atol=1e-13)
+
+
+def test_jackknife_skips_a_unit_dropped_everywhere():
+    rng = np.random.default_rng(8)
+    coefficients = _coefficients(rng, (2, 5, 1, 8, 2))
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[:, 0] = 0  # trial 0 is dropped in every window
+    masked = Connectivity(coefficients, observation_weights=weights)
+    kept = Connectivity(coefficients[:, 1:])
+    result = masked.jackknife("magnitude_squared_coherence")
+    assert result.n_observations == 4
+    np.testing.assert_allclose(
+        result.standard_error,
+        kept.jackknife("magnitude_squared_coherence").standard_error,
+        rtol=1e-10,
+    )
+
+
+def test_jackknife_is_nan_in_a_bin_of_too_few_observations():
+    rng = np.random.default_rng(9)
+    coefficients = _coefficients(rng, (2, 5, 1, 8, 2))
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[1, 2:] = 0  # window 1 keeps two trials
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    with pytest.warns(UserWarning, match="fewer than 3 observations in 1 of 2 bins"):
+        result = connectivity.jackknife("magnitude_squared_coherence")
+    assert np.isnan(result.standard_error[1]).all()
+    assert np.isfinite(result.standard_error[0, :, 0, 1]).all()

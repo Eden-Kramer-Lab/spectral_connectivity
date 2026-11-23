@@ -73,9 +73,12 @@ class JackknifeResult:
         ``[lower, pi] U (-pi, upper]``, and a bin whose half-width reaches
         ``pi`` (the whole circle, phase unresolved) is reported as
         ``(-pi, pi)``.
-    n_observations : int
+    n_observations : int or array of int
         Number of leave-one-out replicates; the interval's critical value has
-        ``n_observations - 1`` degrees of freedom.
+        ``n_observations - 1`` degrees of freedom. Where observation weights
+        drop different observations in different bins (see
+        ``Connectivity.n_valid_observations``), one count per bin, an array
+        that broadcasts against the estimate.
     transformation : str
         Variance-stabilizing transformation used for the interval.
     """
@@ -84,7 +87,7 @@ class JackknifeResult:
     bias_corrected: NDArray[np.floating]
     standard_error: NDArray[np.floating]
     confidence_interval: tuple[NDArray[np.floating], NDArray[np.floating]]
-    n_observations: int
+    n_observations: int | NDArray[np.integer]
     transformation: str
 
 
@@ -191,6 +194,7 @@ def jackknife_confidence_interval(
         "identity", "log", "fisher", "fisher_squared", "circular"
     ] = "identity",
     _saturated_by_construction: NDArray[np.bool_] | bool = False,
+    _replicate_is_valid: NDArray[np.bool_] | None = None,
 ) -> JackknifeResult:
     """Summarize leave-one-out replicates with a jackknife confidence interval.
 
@@ -343,18 +347,32 @@ def jackknife_confidence_interval(
         inverse = _wrap_phase
         derivative = np.ones_like(estimate_array)
 
-    replicate_mean = np.mean(transformed_replicates, axis=0)
-    bias_corrected_transformed = (
-        n_observations * transformed_estimate - (n_observations - 1) * replicate_mean
-    )
-    transformed_standard_error = np.sqrt(
-        (n_observations - 1)
-        / n_observations
-        * np.sum((transformed_replicates - replicate_mean) ** 2, axis=0)
-    )
+    # _replicate_is_valid is private to Connectivity.jackknife: which replicates
+    # count in each estimate (broadcast against leave_one_out), where zero
+    # observation weights drop different observations in different bins. A
+    # replicate leaving out an observation the bin never had is not one.
+    counts: Any = n_observations
+    if _replicate_is_valid is None:
+        replicate_mean = np.mean(transformed_replicates, axis=0)
+        squared_deviations = np.sum((transformed_replicates - replicate_mean) ** 2, axis=0)
+    else:
+        valid = np.broadcast_to(_replicate_is_valid, replicates.shape)
+        counts = np.sum(_replicate_is_valid, axis=0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            replicate_mean = (
+                np.sum(np.where(valid, transformed_replicates, 0.0), axis=0) / counts
+            )
+            squared_deviations = np.sum(
+                np.where(valid, (transformed_replicates - replicate_mean) ** 2, 0.0), axis=0
+            )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        bias_corrected_transformed = (
+            counts * transformed_estimate - (counts - 1) * replicate_mean
+        )
+        transformed_standard_error = np.sqrt((counts - 1) / counts * squared_deviations)
     # Student t on n - 1 degrees of freedom: the jackknife variance is estimated
     # from n replicates, and the normal quantile under-covers at small n.
-    critical_value = scipy.stats.t.ppf(0.5 + confidence_level / 2, df=n_observations - 1)
+    critical_value = scipy.stats.t.ppf(0.5 + confidence_level / 2, df=counts - 1)
     half_width = critical_value * transformed_standard_error
     lower = inverse(transformed_estimate - half_width)
     upper = inverse(transformed_estimate + half_width)
@@ -365,7 +383,7 @@ def jackknife_confidence_interval(
         bias_corrected=inverse(bias_corrected_transformed),
         standard_error=np.abs(derivative) * transformed_standard_error,
         confidence_interval=(lower, upper),
-        n_observations=n_observations,
+        n_observations=counts,
         transformation=transformation,
     )
 

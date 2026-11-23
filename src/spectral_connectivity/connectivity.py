@@ -623,7 +623,9 @@ def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[No
     filters invalidates each module's record of warnings already shown, so a
     warning shown once under the "default" action can be shown again. Only
     NaN or Inf coefficients (``ignore``) take this path;
-    finite input never touches the filters. Recording the warnings and
+    finite input never touches the filters (nor do the jackknife replicates
+    of a bin with too few kept observations, whose single-observation
+    warnings it ignores, on any other input). Recording the warnings and
     re-emitting the others would need ``catch_warnings`` as well, so it would
     not be safer.
     """
@@ -637,6 +639,13 @@ def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[No
 
 
 _ABSENT = object()
+
+# The warnings of a bin that zero weights leave a single observation; the
+# jackknife ignores them in its replicates (see Connectivity.jackknife).
+_SINGLE_KEPT_OBSERVATION_WARNINGS = (
+    ".*computed from a single observation in some bins",
+    ".*observation_weights keep a single observation in",
+)
 
 
 def _optional_transform_attribute(transform: Any, name: str, default: Any) -> Any:
@@ -2640,6 +2649,15 @@ class Connectivity:
 
         Notes
         -----
+        Where zero ``observation_weights`` drop observations (the invalid
+        windows of ``Multitaper(valid_samples=...)``, say), each bin's
+        interval is the jackknife of the observations it keeps: leaving out an
+        observation the bin does not have gives no replicate there, and the
+        degrees of freedom are its count of kept observations less one
+        (:attr:`n_valid_observations`; ``JackknifeResult.n_observations`` is
+        then one count per bin). A bin keeping fewer than 3 is NaN, with a
+        warning.
+
         Circular confidence bounds are wrapped to ``(-pi, pi]``, so when the
         interval crosses ``+/-pi`` the lower bound exceeds the upper bound;
         the interval is then the arc from ``lower`` up through ``pi`` and on
@@ -2779,18 +2797,37 @@ class Connectivity:
             observation_coefficients = coefficients
             observation_axis = 2 if self.expectation_type == "tapers" else 1
             n_observations = coefficients.shape[observation_axis]
-        if n_observations < 3:
+        # Where zero weights drop observations, which units each kept bin has:
+        # (n_units, *kept observation axes), a unit counting in a bin if it has
+        # a nonzero weight at any frequency there. Leaving out a unit a bin
+        # never had gives no replicate there.
+        unit_is_valid = None
+        if observation_weights is not None:
+            present = xp.any(observation_weights[..., 0] > 0, axis=-1)
+            if self.expectation_type == "trials_tapers":
+                present = present[:, :, 0]
+            present = to_numpy(xp.moveaxis(present, observation_axis, 0))
+            if not present.all():
+                unit_is_valid = present
+        n_valid = n_observations if unit_is_valid is None else int(unit_is_valid.sum(0).max())
+        if n_valid < 3:
             msg = (
-                f"jackknife requires at least 3 observations, got {n_observations}. "
+                f"jackknife requires at least 3 observations, got {n_valid}"
+                f"{'' if unit_is_valid is None else ' with nonzero weight in any bin'}. "
                 "With two, each leave-one-out replicate has a single observation, "
                 "which forces magnitude-normalized measures to 1 and makes the "
                 "interval degenerate (a zero standard error, or NaN under a "
                 "variance-stabilizing transform such as the coherence default)."
             )
             raise ValueError(msg)
+        omitted_units: Sequence[int] = range(n_observations)
+        if unit_is_valid is not None:
+            omitted_units = np.flatnonzero(
+                unit_is_valid.reshape(n_observations, -1).any(axis=1)
+            ).tolist()
 
         replicates: list[NDArray[np.floating]] = []
-        for omitted in range(n_observations):
+        for omitted in omitted_units:
             keep = xp.arange(n_observations) != omitted
             subset = xp.compress(keep, observation_coefficients, axis=observation_axis)
             subset_weights = (
@@ -2815,7 +2852,12 @@ class Connectivity:
             )
             token = _emit_migration_notices.set(False)
             try:
-                replicate = getattr(replicate_connectivity, method)(**method_kwargs)
+                # Only a bin with fewer than 3 kept observations leaves a
+                # replicate a single one, and the interval is NaN there.
+                with _user_warnings_ignored(
+                    _SINGLE_KEPT_OBSERVATION_WARNINGS, unit_is_valid is not None
+                ):
+                    replicate = getattr(replicate_connectivity, method)(**method_kwargs)
             finally:
                 _emit_migration_notices.reset(token)
             if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
@@ -2842,6 +2884,31 @@ class Connectivity:
                 resolved_transformation = "identity"
         else:
             resolved_transformation = transformation
+        replicate_is_valid = None
+        if unit_is_valid is not None and not unit_is_valid[omitted_units].all():
+            # Each bin's replicates lead the measure's own axes.
+            kept_shape = unit_is_valid.shape[1:]
+            replicate_is_valid = unit_is_valid[omitted_units].reshape(
+                (
+                    len(omitted_units),
+                    *kept_shape,
+                    *(1,) * (full_estimate.ndim - len(kept_shape)),
+                )
+            )
+            too_few = unit_is_valid.sum(axis=0) < 3
+            if too_few.any():
+                warnings.warn(
+                    f"jackknife: observation_weights leave fewer than 3 observations "
+                    f"in {int(too_few.sum())} of {too_few.size} bins (see "
+                    "n_valid_observations), too few for a leave-one-out interval, so "
+                    "the bias-corrected estimate, standard error and bounds are NaN "
+                    "there.",
+                    UserWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
+                replicate_is_valid = replicate_is_valid & ~too_few.reshape(
+                    replicate_is_valid.shape[1:]
+                )
         result = jackknife_confidence_interval(
             full_estimate,
             np.stack(replicates, axis=0),
@@ -2853,6 +2920,7 @@ class Connectivity:
                 if method == "phase_locking_value"
                 else False
             ),
+            _replicate_is_valid=replicate_is_valid,
         )
         if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:
             # tanh maps the atanh-scale interval onto [-1, 1], but a magnitude
