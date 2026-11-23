@@ -171,8 +171,8 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `DeprecationWarning`.
 - **Artifacts and NaN.** Do not let NaN reach the transform: pass
   `transform_kwargs={"artifact_samples": "nonfinite"}`, or a boolean mask that
-  is `True` at the artifacts, the samples to leave out (as MNE `BAD_`
-  annotations mark them; invert a mask of valid samples with `~`). A trial's
+  is `True` at the artifacts, the samples to leave out (invert a mask of
+  valid samples with `~`). A trial's
   window touching an artifact is dropped whole, so use windows that fit
   between artifacts. The outputs mark what is kept: `Multitaper.valid_windows`,
   and `Connectivity.n_valid_observations`, the per-bin counts to give the

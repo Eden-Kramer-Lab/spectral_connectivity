@@ -271,8 +271,8 @@ mapping to use, and is removed in 4.0.
 
 ## Leave out artifacts and missing samples
 
-Mark the samples to leave out with `artifact_samples`, a `Multitaper` setting
-(so in `transform_kwargs` for the wrapper). `True` marks an **artifact**, a
+Mark the samples to leave out with `artifact_samples`, a `Multitaper` (and
+`ShortTimeFourierTransform`) setting, so in `transform_kwargs` for the wrapper. `True` marks an **artifact**, a
 sample to leave out, as MNE's `BAD_` annotations, FieldTrip's artifact
 definitions, and NumPy masked arrays do; a mask that marks the valid samples
 as `True` must be inverted (`~mask`). `"nonfinite"` leaves out every NaN or
@@ -334,11 +334,10 @@ since every cross-spectrum needs both channels at the same samples. For a 2-D
 `(n_time_samples, n_channels)` time series give the wrapper a
 `(n_time_samples,)` or `(n_time_samples, n_channels)` mask.
 
-The measures that count observations (pairwise phase consistency, the
-debiased phase-lag measures, the zero-coherence test of `delay` and
-`group_delay`, and `Connectivity.jackknife`) count each bin's kept
-observations. `Connectivity.n_valid_observations` gives those counts, one per
-time window and frequency, for the statistics functions:
+The measures that count observations (listed under
+`Connectivity.n_valid_observations`) count each bin's kept observations.
+`n_valid_observations` gives those counts, one per time window and
+frequency, for the statistics functions:
 
 ```python
 >>> from spectral_connectivity import Connectivity, Multitaper

@@ -2037,17 +2037,16 @@ class Multitaper(_WindowedFourierTransform):
         directly: set the mask ``True`` inside each one (for an MNE ``BAD_``
         annotation, the samples from its onset for its duration; for a row
         ``[begin, end]`` of a FieldTrip artifact matrix, those samples). A
-        trial's window is used only if none of its samples is an artifact;
-        otherwise all its tapers' coefficients are dropped from every
-        expectation (observation weight 0) and the window's other trials are
-        averaged on their own. The outputs mark what is kept instead:
+        trial's window touching any artifact sample is dropped whole: all its
+        tapers' coefficients get observation weight 0 in every expectation,
+        and the window's other trials are averaged on their own, so long
+        windows lose more data; choose the window to fit the gaps between
+        artifacts. The outputs mark what is kept instead:
         :attr:`valid_windows` is ``True`` at the trial windows kept, and
         ``Connectivity.n_valid_observations`` counts what each bin keeps. Every
-        per-bin statistic, including those that count observations (the
-        debiased phase-lag measures, pairwise phase consistency, the
-        zero-coherence p-values of ``delay`` and ``group_delay``, and
-        ``Connectivity.jackknife``), then equals its value for the data with
-        the dropped trial windows removed. (``delay`` and ``group_delay``
+        per-bin statistic, including those that count observations (listed
+        under ``Connectivity.n_valid_observations``), then equals its value for
+        the data with the dropped trial windows removed. (``delay`` and ``group_delay``
         correct those p-values for multiple comparisons jointly over every
         window of the call, so their selected frequencies match a per-window
         computation only window by window.)
@@ -2062,9 +2061,7 @@ class Multitaper(_WindowedFourierTransform):
         - ``"nonfinite"``: every NaN or infinite sample is an artifact.
         - ``None`` (the default): no sample is left out.
 
-        A window touching any artifact sample is dropped whole for that trial,
-        so long windows lose more data: choose the window to fit the gaps
-        between artifacts. Construction warns when more than half of the
+        Construction warns when more than half of the
         trial windows are dropped, and when a window keeps no trial (it is
         NaN in every measure); a mask that leaves no trial window raises
         ``ValueError``. The artifact samples are set to zero before

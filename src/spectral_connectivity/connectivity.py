@@ -2514,14 +2514,12 @@ class Connectivity:
             Product of the lengths of the averaged observation axes (for the
             default ``"trials_tapers"`` expectation, ``n_trials * n_tapers``).
             This is a raw count, not an effective number of independent
-            observations: it ignores ``observation_weights`` (including the
-            observations zero weights drop, such as the windows
-            ``Multitaper(artifact_samples=...)`` drops; see
-            :attr:`n_valid_observations`) and is not reduced when the
+            observations: it ignores ``observation_weights``, so it includes
+            the observations zero weights drop, and is not reduced when the
             transform's observations are correlated (see
             ``observations_are_independent``). Use
-            :attr:`n_valid_observations` when ``artifact_samples`` or edge masking
-            drops observations.
+            :attr:`n_valid_observations` when ``artifact_samples`` or edge
+            masking drops observations.
 
         """
         return int(
