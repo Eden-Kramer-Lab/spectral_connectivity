@@ -8,6 +8,7 @@ window keeping fewer than 2 is dropped. Windows without artifacts are the
 ordinary DPSS estimate, bit for bit.
 """
 
+import inspect
 import warnings
 
 import numpy as np
@@ -599,6 +600,45 @@ def test_a_multitaper_subclass_takes_missing_data_tapers(recording):
 
     subclass = _multitaper(*recording, transform=Subclass)
     np.testing.assert_array_equal(to_host(subclass.n_kept_tapers), EXPECTED_TAPER_COUNTS)
+
+
+@pytest.mark.parametrize("set_first", [True, False], ids=["lines_first", "lines_last"])
+def test_line_removal_is_refused(recording, set_first):
+    """Line removal fits the shared DPSS tapers to every sample of a window,
+    so it is refused whichever setting is stored first. Until Multitaper takes
+    line_frequencies, a subclass that sets it stands in for it."""
+    if "line_frequencies" in inspect.signature(Multitaper).parameters:
+        if not set_first:
+            pytest.skip("Multitaper sets line_frequencies itself")
+        kwargs, transform = {"line_frequencies": [60.0]}, Multitaper
+    else:
+
+        class WithLines(Multitaper):
+            def __init__(self, *args, **kwargs):
+                if set_first:
+                    self.line_frequencies = np.array([60.0])
+                super().__init__(*args, **kwargs)
+                if not set_first:
+                    self.line_frequencies = np.array([60.0])
+
+        kwargs, transform = {}, WithLines
+    with pytest.raises(ValueError, match="line_frequencies cannot be combined with"):
+        _multitaper(*recording, transform=transform, **kwargs)
+    _multitaper(*recording, transform=transform, artifact_handling="drop", **kwargs)
+
+
+def test_a_single_taper_set_is_required_where_a_feature_needs_one(recording, missing_data):
+    with pytest.raises(ValueError, match="harmonic_f_test needs the same DPSS tapers"):
+        missing_data._require_one_taper_set("harmonic_f_test")
+    _multitaper(*recording, artifact_handling="drop")._require_one_taper_set("it")
+
+
+@pytest.mark.skipif(
+    not hasattr(Multitaper, "harmonic_f_test"), reason="harmonic_f_test is not merged"
+)
+def test_the_harmonic_f_test_is_refused(missing_data):
+    with pytest.raises(ValueError, match="needs the same DPSS tapers"):
+        missing_data.harmonic_f_test()
 
 
 def test_the_wrapper_takes_artifact_handling_in_transform_kwargs(recording, missing_data):

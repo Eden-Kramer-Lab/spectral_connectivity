@@ -2325,6 +2325,12 @@ class Multitaper(_WindowedFourierTransform):
     spectral leakage while maximizing energy concentration in the frequency band
     of interest.
 
+    With ``artifact_handling="missing_data_tapers"`` the windows with artifacts
+    have tapers of their own, so features that assume one DPSS taper set for
+    every window refuse such a transform: line removal (``line_frequencies``)
+    at construction, and methods that fit or test lines through the tapers
+    call ``_require_one_taper_set``.
+
     References
     ----------
     .. [1] Thomson, D. J. (1982). Spectrum estimation and harmonic analysis.
@@ -2412,7 +2418,9 @@ class Multitaper(_WindowedFourierTransform):
     _missing_data: _MissingDataTapers | None = None
 
     def __setattr__(self, name: str, value: Any) -> None:
-        """Keep transform parameters immutable once construction has completed."""
+        """Keep transform parameters immutable once construction has completed,
+        and refuse line removal with missing-data tapers whichever is set
+        first."""
         if getattr(self, "_initialized", False) and name in self._IMMUTABLE_PUBLIC_PARAMETERS:
             msg = (
                 f"Multitaper.{name} is immutable after construction; create a new "
@@ -2420,6 +2428,8 @@ class Multitaper(_WindowedFourierTransform):
             )
             raise AttributeError(msg)
         object.__setattr__(self, name, value)
+        if name in ("artifact_handling", "line_frequencies"):
+            self._refuse_line_removal_with_missing_data_tapers()
 
     @reject_sampling_frequency_aliases
     def __init__(
@@ -2645,6 +2655,40 @@ class Multitaper(_WindowedFourierTransform):
         # (a transposed array among them) only raises.
         self._set_artifact_samples(artifact_samples)
         object.__setattr__(self, "_initialized", True)
+
+    def _refuse_line_removal_with_missing_data_tapers(self) -> None:
+        """Raise if line removal (``line_frequencies``, when Multitaper has
+        it) is combined with ``artifact_handling="missing_data_tapers"``;
+        called by :meth:`__setattr__` when either is set."""
+        line_frequencies = getattr(self, "line_frequencies", None)
+        if (
+            getattr(self, "artifact_handling", "drop") != "missing_data_tapers"
+            or line_frequencies is None
+            or np.size(line_frequencies) == 0
+        ):
+            return
+        msg = (
+            "line_frequencies cannot be combined with "
+            "artifact_handling='missing_data_tapers': line removal fits each line "
+            "with the shared DPSS tapers over every sample of the window, so it "
+            "would treat the zero-filled artifact samples as data. Use "
+            "artifact_handling='drop' with line_frequencies, or remove the lines "
+            "before marking the artifacts."
+        )
+        raise ValueError(msg)
+
+    def _require_one_taper_set(self, feature: str) -> None:
+        """Raise if some trial window has its own missing-data tapers, for a
+        ``feature`` that assumes every window shares the DPSS tapers."""
+        if not self._rescues_windows:
+            return
+        msg = (
+            f"{feature} needs the same DPSS tapers in every window, but "
+            "artifact_handling='missing_data_tapers' gives "
+            f"{self._n_missing_data_trial_windows} trial windows with artifacts "
+            "their own tapers. Use artifact_handling='drop' for it."
+        )
+        raise ValueError(msg)
 
     def _check_missing_data_taper_settings(self, artifact_samples: Any) -> None:
         """Raise unless ``artifact_samples`` is given and the tapers are
