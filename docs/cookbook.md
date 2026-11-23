@@ -258,9 +258,9 @@ go in `connectivity_kwargs`:
 Each setting has one route, so a common setting placed in `transform_kwargs`
 raises `ValueError` instead of silently competing with its named argument, and
 a misspelled key in either mapping raises `TypeError`. `connectivity_to_xarray`
-takes an existing transform, so it has `connectivity_kwargs` (and the named
+takes an existing transform, so it has `connectivity_kwargs` and the named
 `group_labels`, `frequency_range`, `frequency_decimation`, `frequency_bands`,
-and `frequency_reduction`) but no `transform_kwargs`. The working
+and `frequency_reduction`, but no `transform_kwargs`. The working
 precision `dtype` and the Wilson factorization's `minimum_phase_tolerance` and
 `minimum_phase_max_iterations`, used by the directed measures, are named
 arguments of every wrapper; in `connectivity_kwargs` they raise `ValueError`.
@@ -413,6 +413,26 @@ bands. The `frequency` axis is replaced by a labeled `band` axis.
 ('time', 'band', 'source', 'target')
 >>> banded.coords["band"].values.tolist()
 ['theta', 'gamma']
+
+```
+
+For `Welch`, `ShortTimeFourierTransform`, `MorletWavelet`, or your own
+transform, `connectivity_to_xarray` takes the transform, a list of measures,
+and the same frequency options:
+
+```python
+>>> from spectral_connectivity import Welch
+>>> from spectral_connectivity.wrapper import connectivity_to_xarray
+>>> welch = Welch(time_series, sampling_frequency=500, segment_duration=0.5)
+>>> welch_bands = connectivity_to_xarray(
+...     welch,
+...     ["power", "magnitude_squared_coherence"],
+...     frequency_bands={"theta": (4, 8), "gamma": (30, 50)},
+... )
+>>> list(welch_bands.data_vars)
+['power', 'magnitude_squared_coherence']
+>>> welch_bands["power"].dims
+('time', 'band', 'source')
 
 ```
 

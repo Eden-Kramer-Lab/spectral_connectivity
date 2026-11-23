@@ -42,18 +42,13 @@ The migration guide for code written against 2.x is
 
 ### Added
 
-- `connectivity_to_xarray` accepts a list of measure names as well as one:
-  `connectivity_to_xarray(transform, ["power", "magnitude_squared_coherence"])`
-  returns a Dataset with one variable per measure, the Dataset
-  `multitaper_connectivity` returns for the same `Multitaper` settings, with
-  the measures sharing one FFT. One name still returns what it did, and the
-  default is still `"magnitude_squared_coherence"`; `method=None` still
-  raises `TypeError` (pass `method=DEFAULT_METHODS` for the default set). It
-  also takes `frequency_decimation`, `frequency_bands`, and
-  `frequency_reduction`, as the other wrappers do, so `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` results can be
-  band-reduced in the call (with `frequency_range`, integrating the uncropped
-  grid) instead of by `frequency_band_reduce` afterwards. The three wrappers
-  now share one path from the computed measures to their labeled result.
+- `connectivity_to_xarray` accepts a list of measure names: it returns a
+  Dataset with one variable per measure, the one `multitaper_connectivity`
+  returns for the same `Multitaper` settings. One name still returns what it
+  did; `method=None` raises `TypeError` (pass `DEFAULT_METHODS`). It also
+  takes `frequency_decimation`, `frequency_bands`, and `frequency_reduction`,
+  so `Welch`, `ShortTimeFourierTransform`, and `MorletWavelet` results can be
+  band-reduced in the call, on the uncropped grid with `frequency_range`.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working

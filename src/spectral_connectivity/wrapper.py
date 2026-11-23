@@ -765,8 +765,8 @@ def connectivity_to_xarray(
         The labeled result with provenance in ``attrs``; see
         :func:`multitaper_connectivity` for the dimensions and orientation
         (``sel(source=a, target=b)`` is the influence ``a -> b``). A single
-        ``method`` name returns what that measure returns alone; a list
-        returns a Dataset with one variable per measure.
+        ``method`` name returns what that measure returns alone; a list,
+        even of one name, returns a Dataset with one variable per measure.
 
     Examples
     --------
