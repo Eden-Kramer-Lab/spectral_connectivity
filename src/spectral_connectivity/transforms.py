@@ -3545,20 +3545,15 @@ def _var_settings_by_keyword(function: Callable[_P, _R]) -> Callable[_P, _R]:
     Only the model (``coefficients``, ``noise_covariance``) is positional; the
     signature is unchanged for ``inspect``.
     """
-    parameters = list(inspect.signature(function).parameters.values())
     n_positional = sum(
-        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        for parameter in inspect.signature(function).parameters.values()
     )
 
     @functools.wraps(function)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         if len(args) > n_positional:
-            owner = args[0] if parameters[0].name == "self" else None
-            name = (
-                type(owner).__name__
-                if owner is not None
-                else getattr(args[0], "__name__", "") + "." + function.__name__
-            )
+            name = function.__qualname__.removesuffix(".__init__")
             msg = (
                 f"{name}() takes only the model by position (coefficients, "
                 f"noise_covariance), but got {args[n_positional]!r} after them. Pass "
@@ -3876,7 +3871,6 @@ class VARSpectrum:
         companion = var_companion_matrices(self._coefficients)
         self._spectral_radius = mark_readonly_if_supported(var_spectral_radius(companion))
         self._check_stable()
-        self._companion = companion
         self._minimum_n_fft_samples = max(2, 2 * _decay_lag(companion))
         if time is None:
             self._time = None
@@ -3895,11 +3889,17 @@ class VARSpectrum:
         if n_fft_samples is None:
             self._n_fft_samples = int(default_fft_length(self.minimum_n_fft_samples))
             if self._n_fft_samples > _VAR_LARGE_GRID:
-                warnings.warn(
-                    self._large_grid_message(),
-                    UserWarning,
-                    stacklevel=stacklevel_outside_package(),
+                gigabytes = 16 * n_time_windows * n_signals**2 * self._n_fft_samples / 1e9
+                msg = (
+                    f"VARSpectrum's default grid has n_fft_samples={self._n_fft_samples} "
+                    f"frequency bins, because the model's spectral radius is "
+                    f"{self._spectral_radius.max():.6g}: its autocovariance decays so "
+                    "slowly that the directed measures need that many bins to be "
+                    f"exact. fft() returns {gigabytes:.2g} GB of coefficients, and the "
+                    "measures need several times that. Power and the coherence family "
+                    "are exact on any grid; for them, pass a smaller n_fft_samples."
                 )
+                warnings.warn(msg, UserWarning, stacklevel=stacklevel_outside_package())
         elif not is_positive_integer(n_fft_samples, minimum=shortest):
             msg = (
                 f"n_fft_samples must be an integer of at least {shortest} (2, and "
@@ -3911,11 +3911,23 @@ class VARSpectrum:
         else:
             self._n_fft_samples = int(n_fft_samples)
             if self._n_fft_samples < self.minimum_n_fft_samples:
-                warnings.warn(
-                    self._short_grid_message(self._n_fft_samples),
-                    UserWarning,
-                    stacklevel=stacklevel_outside_package(),
+                half = self._n_fft_samples // 2
+                msg = (
+                    f"n_fft_samples={self._n_fft_samples} is below this model's "
+                    f"minimum_n_fft_samples ({self.minimum_n_fft_samples}). Power, the "
+                    "cross-spectral density and the coherence family stay exact on any "
+                    "grid, but the directed (Wilson-factorized) measures factor the "
+                    "spectrum's periodic extension, which wraps around the model's "
+                    "autocovariance and impulse response beyond lag n_fft_samples / 2. "
+                    "They decay as the powers of its companion matrix, whose power "
+                    f"{half} still has norm {_companion_power_norm(companion, half):.2g} "
+                    f"(spectral radius {self._spectral_radius.max():.6g}), so the "
+                    "directed measures can be off by about that much. For them, use "
+                    f"n_fft_samples >= {self.minimum_n_fft_samples} (where that norm is "
+                    f"at most {_VAR_GRID_TOLERANCE:g}) or omit it; a multiple of another "
+                    "transform's FFT length contains its frequencies."
                 )
+                warnings.warn(msg, UserWarning, stacklevel=stacklevel_outside_package())
 
     @staticmethod
     def _symmetric_positive_definite(
@@ -3976,35 +3988,6 @@ class VARSpectrum:
         and at least 2; see Notes of :class:`VARSpectrum`.
         """
         return self._minimum_n_fft_samples
-
-    def _short_grid_message(self, n_fft_samples: int) -> str:
-        wrapped = _companion_power_norm(self._companion, n_fft_samples // 2)
-        return (
-            f"n_fft_samples={n_fft_samples} is below this model's minimum_n_fft_samples "
-            f"({self.minimum_n_fft_samples}). Power, the cross-spectral density and "
-            "the coherence family stay exact on any grid, but the directed "
-            "(Wilson-factorized) measures factor the spectrum's periodic extension, "
-            "which wraps around the model's autocovariance and impulse response "
-            "beyond lag n_fft_samples / 2. They decay as the powers of its companion "
-            f"matrix, whose power {n_fft_samples // 2} still has norm {wrapped:.2g} "
-            f"(spectral radius {self._spectral_radius.max():.6g}), so the directed "
-            "measures can be off by about that much. For them, use n_fft_samples >= "
-            f"{self.minimum_n_fft_samples} (where that norm is at most "
-            f"{_VAR_GRID_TOLERANCE:g}) or omit it; a multiple of another transform's "
-            "FFT length contains its frequencies."
-        )
-
-    def _large_grid_message(self) -> str:
-        gigabytes = 16 * self.n_time_windows * self.n_signals**2 * self.n_fft_samples / 1e9
-        return (
-            f"VARSpectrum's default grid has n_fft_samples={self.n_fft_samples} "
-            f"frequency bins, because the model's spectral radius is "
-            f"{self._spectral_radius.max():.6g}: its autocovariance decays so slowly "
-            "that the directed measures need that many bins to be exact. fft() "
-            f"returns {gigabytes:.2g} GB of coefficients, and the measures need "
-            "several times that. Power and the coherence family are exact on any "
-            "grid; for them, pass a smaller n_fft_samples."
-        )
 
     @property
     def coefficients(self) -> NDArray[np.floating]:
