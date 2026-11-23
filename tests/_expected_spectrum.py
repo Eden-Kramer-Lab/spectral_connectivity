@@ -22,7 +22,7 @@ _DETREND_BASIS = {
 
 
 def _expected_tapered_cross_spectrum(
-    coefficients, noise_covariance, tapers, n_fft, detrend_type
+    coefficients, noise_covariance, tapers, n_fft, detrend_type, valid=None
 ):
     """Exact ``E[J(f) J(f)^H]`` of a VAR's tapered Fourier coefficients, averaged
     over tapers, shape ``(n_fft, n_signals, n_signals)`` in FFT order.
@@ -42,6 +42,10 @@ def _expected_tapered_cross_spectrum(
     alone and is the transform of ``Gamma`` times the taper's
     autocorrelation; the others are products of transforms of the taper times
     the basis and times ``E[x(s) beta^T]``.
+
+    With ``valid``, booleans ``(n_time,)``, the fit uses only the valid
+    samples, as for a window with missing samples, whose tapers are zero at
+    the others.
     """
     n_time, n_tapers = tapers.shape
     assert n_fft >= n_time, "the FFT must be at least as long as the window"
@@ -51,7 +55,9 @@ def _expected_tapered_cross_spectrum(
     lags = np.arange(-(n_time - 1), n_time)
     two_sided = np.concatenate([gamma[:0:-1].swapaxes(-1, -2), gamma])
     basis = _DETREND_BASIS[detrend_type](n_time)  # (n_time, n_basis)
-    fit = np.linalg.pinv(basis)  # (n_basis, n_time)
+    fit = np.zeros((basis.shape[1], n_time))  # (n_basis, n_time)
+    valid = np.ones(n_time, dtype=bool) if valid is None else valid
+    fit[:, valid] = np.linalg.pinv(basis[valid])
     # window_fit[j, s] = E[x(s) beta_j^T] = sum_u fit[j, u] Gamma(s - u)
     window_fit = np.array(
         [fftconvolve(two_sided, row[:, None, None], mode="valid", axes=0) for row in fit]
