@@ -5,7 +5,7 @@ import inspect
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import numpy as np
 
@@ -780,9 +780,21 @@ def _method_type_message(accepted: str, received: str) -> str:
     )
 
 
+class _MeasureRequest(NamedTuple):
+    """The measures one wrapper call requests (see :func:`_requested_methods`)."""
+
+    #: The canonical names, in request order, which everything downstream uses.
+    methods: list[str]
+    #: Each canonical name's requested name, which names its result variable
+    #: and its ``measure`` attribute.
+    output_names: dict[str, str]
+    #: Whether ``method`` was a single name, whose result is a DataArray.
+    single: bool
+
+
 def _requested_methods(
     method: str | Iterable[str] | None, defaults: Sequence[str] | None
-) -> tuple[list[str], dict[str, str], bool]:
+) -> _MeasureRequest:
     """The measures a wrapper call requests, resolved once to canonical names.
 
     ``None`` requests ``defaults``. ``defaults=None`` marks a wrapper with no
@@ -792,19 +804,9 @@ def _requested_methods(
     rather than a Dataset. An empty request, an unknown name, or a measure
     named under both its deprecated and its canonical name (one estimate under
     two variable names) raises. A deprecated name is resolved without a
-    warning here: the wrapper calls :func:`_warn_deprecated_measure_names`
-    just before it returns, so a call rejected for any reason raises only its
-    error.
-
-    Returns
-    -------
-    methods : list of str
-        The canonical names, in request order, which everything downstream uses.
-    output_names : dict of str to str
-        Each canonical name's requested name, which names its result variable
-        and its ``measure`` attribute.
-    single : bool
-        Whether ``method`` was a single name.
+    warning here: the wrappers' shared formatter calls
+    :func:`_warn_deprecated_measure_names` as its last step, so a call
+    rejected for any reason raises only its error.
     """
     accepted = (
         "a measure name (str) or a list of names"
@@ -842,7 +844,9 @@ def _requested_methods(
             raise ValueError(msg)
     methods = [_DEPRECATED_MEASURE_NAMES.get(name, name) for name in requested]
     _validate_method_names(methods)
-    return methods, dict(zip(methods, requested, strict=True)), isinstance(method, str)
+    return _MeasureRequest(
+        methods, dict(zip(methods, requested, strict=True)), isinstance(method, str)
+    )
 
 
 def _warn_deprecated_measure_names(output_names: Mapping[str, str]) -> None:
@@ -850,8 +854,8 @@ def _warn_deprecated_measure_names(output_names: Mapping[str, str]) -> None:
     deprecated name.
 
     ``output_names`` maps each canonical name to the requested one, as
-    :func:`_requested_methods` returns it. Wrappers call this just before they
-    return, as for the other deprecated spellings.
+    :func:`_requested_methods` returns it. The wrappers' shared formatter calls
+    this as its last step, so a rejected call does not warn first.
     """
     for canonical, requested in output_names.items():
         if requested != canonical:

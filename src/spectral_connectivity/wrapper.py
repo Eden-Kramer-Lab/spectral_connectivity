@@ -37,6 +37,7 @@ from spectral_connectivity._measure_registry import (
     _format_value_range,
     _is_group_measure,
     _measure_description,
+    _MeasureRequest,
     _reduces_frequency,
     _requested_methods,
     _requires_two_sided,
@@ -797,7 +798,8 @@ def connectivity_to_xarray(
             "to see all measure names, call spectral_connectivity.list_measures()."
         )
         raise TypeError(msg)
-    methods, output_names, return_dataarray = _requested_methods(method, None)
+    request = _requested_methods(method, None)
+    methods = request.methods
     measure_settings = _merge_legacy_settings(
         "connectivity_to_xarray",
         "connectivity_kwargs",
@@ -849,8 +851,7 @@ def connectivity_to_xarray(
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     result = _labeled_measures(
         connectivity,
-        methods,
-        return_dataarray=return_dataarray,
+        request,
         signal_labels=signal_labels,
         squeeze=squeeze,
         transform_metadata=metadata,
@@ -861,10 +862,8 @@ def connectivity_to_xarray(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
-        output_names=output_names,
         valid_time_frequency=getattr(m, "valid_time_frequency", None),
     )
-    _warn_deprecated_measure_names(output_names)
     _warn_label_orientation_changed(methods)
     _warn_legacy_settings("connectivity_to_xarray", "connectivity_kwargs", kwargs)
     return result
@@ -1119,9 +1118,8 @@ def _with_validity_coordinate(
 
 def _labeled_measures(
     connectivity: Connectivity,
-    methods: list[str],
+    request: _MeasureRequest,
     *,
-    return_dataarray: bool,
     signal_labels: NDArray[Any],
     squeeze: bool,
     transform_metadata: Mapping[str, Any],
@@ -1132,7 +1130,6 @@ def _labeled_measures(
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
     frequency_reduction: Literal["mean", "integral"],
-    output_names: Mapping[str, str],
     signal_metadata: _SignalMetadata | None = None,
     valid_time_frequency: Any = None,
 ) -> xr.DataArray | xr.Dataset:
@@ -1145,9 +1142,10 @@ def _labeled_measures(
     and ``input_attrs``, see :func:`_shared_provenance_attrs`), formats each
     measure, crops, decimates, and band-reduces.
 
-    ``methods`` are canonical names; ``output_names`` maps each to the name the
-    caller requested, which names its result variable (see
-    :func:`_requested_methods`). The already-resolved ``group_labels`` (see
+    ``request`` holds the canonical names and the name the caller requested
+    for each, which names its result variable (see :func:`_requested_methods`);
+    the last step warns for each deprecated name requested, so a call that
+    fails raises only its error. The already-resolved ``group_labels`` (see
     :func:`_resolve_group_labels`) reach the group measures only. ``squeeze`` is
     honored only for a single-measure DataArray. A multi-measure batch skips a
     structurally unsupported measure and merges the survivors.
@@ -1160,6 +1158,7 @@ def _labeled_measures(
     becomes a ``valid_time_frequency`` (or, for ``phase_slope_index`` and
     ``group_delay``, ``valid_time``) coordinate.
     """
+    methods, output_names, return_dataarray = request
     shared_attrs = _shared_provenance_attrs(
         connectivity, transform_metadata, input_attrs=input_attrs
     )
@@ -1300,7 +1299,7 @@ def _labeled_measures(
                 if name not in reserved
             }
         )
-    return _decimate_and_reduce_frequencies(
+    result = _decimate_and_reduce_frequencies(
         result,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -1309,6 +1308,8 @@ def _labeled_measures(
         nyquist_frequency=_nyquist_frequency(shared_attrs, frequencies),
         kept=kept,
     )
+    _warn_deprecated_measure_names(output_names)
+    return result
 
 
 def multitaper_connectivity(
@@ -1745,7 +1746,8 @@ def multitaper_connectivity(
     # The default set (DEFAULT_METHODS) is portably serializable; complex,
     # component/group, frequency-reduced, and directed-transfer-function results
     # remain opt-in by name.
-    method, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    request = _requested_methods(method, DEFAULT_METHODS)
+    method = request.methods
     # Every measure setting is checked before the transform runs its FFT.
     _check_measure_settings(
         method,
@@ -1837,8 +1839,7 @@ def multitaper_connectivity(
     ):
         result = _labeled_measures(
             shared_connectivity,
-            method,
-            return_dataarray=return_dataarray,
+            request,
             signal_labels=signal_labels,
             squeeze=squeeze,
             transform_metadata=metadata,
@@ -1849,10 +1850,8 @@ def multitaper_connectivity(
             frequency_decimation=frequency_decimation,
             frequency_bands=frequency_bands,
             frequency_reduction=frequency_reduction,
-            output_names=output_names,
             signal_metadata=signal_metadata,
         )
-    _warn_deprecated_measure_names(output_names)
     _warn_label_orientation_changed(method)
     _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", kwargs)
     return result
@@ -2104,7 +2103,8 @@ def fourier_connectivity(
 
     # No default measure needs a two-sided spectrum, so the defaults suit any input.
     # The request and its settings are checked before the coefficients are copied.
-    methods, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    request = _requested_methods(method, DEFAULT_METHODS)
+    methods = request.methods
     _check_measure_settings(
         methods,
         connectivity_kwargs,
@@ -2242,10 +2242,9 @@ def fourier_connectivity(
         )
         metadata["sampling_frequency"] = float(sampling_frequency)
         metadata["nyquist_frequency"] = float(sampling_frequency) / 2
-    result = _labeled_measures(
+    return _labeled_measures(
         connectivity,
-        methods,
-        return_dataarray=return_dataarray,
+        request,
         signal_labels=signal_labels,
         squeeze=squeeze,
         transform_metadata=metadata,
@@ -2256,8 +2255,5 @@ def fourier_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
-        output_names=output_names,
         signal_metadata=signal_metadata,
     )
-    _warn_deprecated_measure_names(output_names)
-    return result
