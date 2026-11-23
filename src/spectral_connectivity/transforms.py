@@ -889,6 +889,68 @@ def _validate_detrend_type(detrend_type: str | None) -> None:
         raise ValueError(msg)
 
 
+def _validated_valid_samples(
+    valid_samples: Any, time_series: BackendArray
+) -> tuple[str | None, BackendArray | None]:
+    """``Multitaper``'s ``valid_samples`` as its kind and a read-only
+    ``(n_time_samples, n_trials)`` boolean mask shared by the signals.
+
+    The kind is ``"finite"``, ``"mask"``, or ``None`` (not given, and no mask).
+    """
+    if valid_samples is None:
+        return None, None
+    n_time, n_trials, n_signals = time_series.shape
+    if isinstance(valid_samples, str):
+        if valid_samples != "finite":
+            msg = (
+                f"valid_samples must be a boolean array, 'finite', or None, got "
+                f"{valid_samples!r}. 'finite' marks every NaN or infinite sample "
+                "invalid."
+            )
+            raise ValueError(msg)
+        return "finite", _immutable_array_snapshot(xp.all(xp.isfinite(time_series), axis=-1))
+    dimensions = getattr(valid_samples, "dims", None)
+    if dimensions is not None:
+        # Read by position, like time_series: a name saying otherwise is refused.
+        from spectral_connectivity._input_handling import _dimension_role
+
+        misplaced = [
+            f"{dimension!r} is on the {expected} axis"
+            for dimension, expected in zip(dimensions, _INPUT_AXIS_ROLES, strict=False)
+            if _dimension_role(dimension) not in (None, expected)
+        ]
+        if misplaced:
+            msg = (
+                "Multitaper reads valid_samples by position, as (time, trial[, "
+                f"signal]), but its dimensions are named {tuple(dimensions)!r}: "
+                f"{'; '.join(misplaced)}. Transpose it to that order first."
+            )
+            raise ValueError(msg)
+        valid_samples = valid_samples.data
+    mask = xp.asarray(valid_samples)
+    if mask.dtype != bool:
+        msg = (
+            f"valid_samples must be a boolean array (True marks a valid sample), got "
+            f"dtype {mask.dtype}. For 0/1 values pass valid_samples.astype(bool); "
+            "to mark NaN or infinite samples invalid pass valid_samples='finite'."
+        )
+        raise TypeError(msg)
+    shapes = ((n_time, n_trials), (n_time, n_trials, n_signals))
+    if tuple(mask.shape) not in shapes:
+        msg = (
+            f"valid_samples has shape {tuple(mask.shape)}; it must be "
+            f"(n_time_samples, n_trials) = {shapes[0]}, shared by every signal, or "
+            f"the time series' own shape (n_time_samples, n_trials, n_signals) = "
+            f"{shapes[1]}."
+        )
+        raise ValueError(msg)
+    if mask.ndim == 3:
+        # The weights are shared across signals, so a sample invalid in one
+        # signal is invalid in all.
+        mask = xp.all(mask, axis=-1)
+    return "mask", _immutable_array_snapshot(mask)
+
+
 def _validate_window_step(
     time_window_duration: float | None,
     time_window_step: float | None,
@@ -990,12 +1052,20 @@ def _listed_indices(flags: BackendArray, limit: int = 10) -> str:
     return f"[{shown}, ...]" if len(indices) > limit else f"[{shown}]"
 
 
-def _warn_about_unusual_time_series(time_series: BackendArray) -> bool:
+def _warn_about_unusual_time_series(
+    time_series: BackendArray,
+    valid_samples: BackendArray | None = None,
+    *,
+    suggest_valid_samples: bool = False,
+) -> bool:
     """Warn when a ``(n_time_samples, n_trials, n_signals)`` series looks transposed or not finite.
 
     Returns whether every value is finite, so a transform can record that it
     already warned about NaN or Inf in its input (see
-    :meth:`Connectivity.from_transform`).
+    :meth:`Connectivity.from_transform`). With ``valid_samples``, a
+    ``(n_time_samples, n_trials)`` mask, only the samples it marks valid
+    count: the others never reach an estimate. ``suggest_valid_samples``
+    names :class:`Multitaper`'s ``valid_samples`` among the remedies.
     """
     # Warn if data appears to be transposed (very few time points, many signals)
     n_time, _, n_signals = time_series.shape
@@ -1016,6 +1086,8 @@ def _warn_about_unusual_time_series(time_series: BackendArray) -> bool:
         )
 
     is_finite = xp.isfinite(time_series)
+    if valid_samples is not None:
+        is_finite |= ~valid_samples[..., xp.newaxis]
     # One pass and one device synchronization for the common, finite input;
     # the counts and locations are computed only for a warning.
     if bool(xp.all(is_finite)):
@@ -1025,16 +1097,23 @@ def _warn_about_unusual_time_series(time_series: BackendArray) -> bool:
     where = f"signals {_listed_indices(xp.any(is_nonfinite, axis=(0, 1)))}"
     if time_series.shape[1] > 1:
         where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
+    at_valid = "" if valid_samples is None else " at samples valid_samples marks valid"
+    mark_invalid = (
+        "mark them invalid with valid_samples (valid_samples='finite' drops every "
+        "trial window that contains one), "
+        if suggest_valid_samples
+        else ""
+    )
     warnings.warn(
         f"time_series contains {n_nonfinite} NaN or infinite "
-        f"value{'' if n_nonfinite == 1 else 's'} (0-based indices: {where}). They "
+        f"value{'' if n_nonfinite == 1 else 's'}{at_valid} (0-based indices: {where}). They "
         "propagate to the outputs: the power of an affected signal is NaN in every "
         "time window containing one, as is every connectivity value involving that "
         "signal there (every value, for measures that model all signals "
         "jointly, such as partial coherence and Granger prediction; "
         "canonical_coherence and global_coherence raise a ValueError instead). "
-        "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
-        "affected trials or signals before the analysis; "
+        f"Interpolate the affected samples (e.g. with numpy.interp), {mark_invalid}or "
+        "drop the affected trials or signals before the analysis; "
         "for your array x, np.argwhere(~np.isfinite(x)) lists their indices.",
         UserWarning,
         stacklevel=stacklevel_outside_package(),
@@ -1566,7 +1645,7 @@ Frequency Analysis
         """
         logger.info(self)
         time_series = _sliding_window(
-            self._time_series,
+            self._time_series_for_fft(),
             window_size=self.n_time_samples_per_window,
             step_size=self.n_time_samples_per_step,
             axis=0,
@@ -1594,6 +1673,10 @@ Frequency Analysis
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot, ``(n_time_samples_per_window, n_tapers)``."""
         raise NotImplementedError
+
+    def _time_series_for_fft(self) -> BackendArray:
+        """The ``(n_time_samples, n_trials, n_signals)`` samples :meth:`fft` windows."""
+        return self._time_series
 
     def _weight_taper_coefficients(
         self,
@@ -1754,6 +1837,35 @@ class Multitaper(_WindowedFourierTransform):
         Iteration ceiling for Thomson adaptive weighting.
     adaptive_tolerance : float, default=1e-8
         Relative convergence tolerance for the adaptive spectrum estimate.
+    valid_samples : NDArray[bool] or "finite", optional
+        Which samples to use, to leave out artifacts, gaps, or missing values
+        (NaN). A trial's window is used only if every one of its samples is
+        valid; otherwise all its tapers' coefficients are dropped from every
+        expectation (observation weight 0) and the window's other trials are
+        averaged on their own. Every measure, including those that count
+        observations (the debiased phase-lag measures, pairwise phase
+        consistency, the significance test of ``delay`` and ``group_delay``,
+        and ``Connectivity.jackknife``), then equals its value for the data
+        with the dropped trial windows removed;
+        ``Connectivity.n_valid_observations`` counts what each bin keeps.
+
+        - A boolean array of shape ``(n_time_samples, n_trials)``, shared by
+          every signal, or ``(n_time_samples, n_trials, n_signals)``, where a
+          sample invalid in any signal is invalid for all: the observations,
+          and so their weights, are shared across signals, as every
+          cross-spectrum needs both signals of a pair at the same samples.
+          ``True`` marks a valid sample.
+        - ``"finite"``: every NaN or infinite sample is invalid.
+        - ``None`` (the default): every sample is valid.
+
+        The invalid samples are set to zero before detrending and tapering,
+        so the coefficients of a dropped window are finite (and unused); the
+        NaN warning reports only NaN or Inf at samples marked valid. A window
+        with no valid trial is NaN in every measure, with a warning; a mask
+        that leaves no valid trial window raises ``ValueError``. Choose the
+        window to fit the gaps between artifacts: a window touching any
+        invalid sample is dropped whole, so long windows lose more data. The
+        mask is read by position, like ``time_series``.
 
     Attributes
     ----------
@@ -1845,6 +1957,7 @@ class Multitaper(_WindowedFourierTransform):
             "taper_weighting",
             "adaptive_max_iterations",
             "adaptive_tolerance",
+            "valid_samples",
         }
     )
     _PROVENANCE_FIELDS: tuple[str, ...] = (
@@ -1888,6 +2001,7 @@ class Multitaper(_WindowedFourierTransform):
         taper_weighting: Literal["uniform", "eigen", "adaptive"] = "uniform",
         adaptive_max_iterations: int = 50,
         adaptive_tolerance: float = 1e-8,
+        valid_samples: NDArray[np.bool_] | Literal["finite"] | None = None,
     ) -> None:
         object.__setattr__(self, "_initialized", False)
         time_series = _validated_time_series(time_series, type(self).__name__)
@@ -2080,10 +2194,127 @@ class Multitaper(_WindowedFourierTransform):
             # announced where it was made.
             with _transposed_layout_hint(self._time_series):
                 self._tapers, self._taper_eigenvalues = self._dpss_tapers()
+        self._valid_samples_mode, self._valid_samples = _validated_valid_samples(
+            valid_samples, self._time_series
+        )
+        self._valid_windows = self._validated_valid_windows()
         # Warned only once every check has passed, so an invalid Multitaper
-        # (a transposed array among them) only raises.
-        self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
+        # (a transposed array among them) only raises. Only the samples marked
+        # valid can reach an estimate.
+        self._time_series_is_finite = _warn_about_unusual_time_series(
+            self._time_series, self._valid_samples, suggest_valid_samples=True
+        )
         object.__setattr__(self, "_initialized", True)
+
+    def _validated_valid_windows(self) -> BackendArray | None:
+        """Which trial windows ``valid_samples`` keeps, ``(n_time_windows, n_trials)``.
+
+        ``None`` when it keeps them all (or was not given), so the transform
+        is the one without it. Warns of windows with no valid trial and raises
+        if no trial window is valid.
+        """
+        if self._valid_samples is None:
+            return None
+        windows = _sliding_window(
+            self._valid_samples,
+            self.n_time_samples_per_window,
+            self.n_time_samples_per_step,
+            axis=0,
+            is_copy=False,
+        )
+        valid_windows = xp.all(windows, axis=-1)
+        if bool(xp.all(valid_windows)):
+            return None
+        n_windows = int(valid_windows.shape[0])
+        empty = ~xp.any(valid_windows, axis=1)
+        n_empty = int(xp.sum(empty))
+        if n_empty == n_windows:
+            msg = (
+                "valid_samples leaves no valid trial window: every one of the "
+                f"{n_windows} time window{'' if n_windows == 1 else 's'} of "
+                f"{self.n_time_samples_per_window} samples contains an invalid sample in "
+                "every trial, so nothing can be estimated. Mark more samples valid, or "
+                "use a shorter time_window_duration that fits between the invalid "
+                "samples."
+            )
+            raise ValueError(msg)
+        if n_empty:
+            warnings.warn(
+                f"valid_samples leaves {n_empty} of {n_windows} time windows (0-based "
+                f"indices {_listed_indices(empty)}) with no valid trial, so every "
+                "measure is NaN there. A window is used for a trial only if all its "
+                "samples are valid; shorter windows lose less data around invalid "
+                "samples.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return _immutable_array_snapshot(valid_windows)
+
+    @property
+    def valid_samples(self) -> NDArray[np.bool_] | None:
+        """Which samples the transform uses, shared across signals.
+
+        Returns
+        -------
+        NDArray[bool], shape (n_time_samples, n_trials), or None
+            ``valid_samples`` as given, with a per-signal mask reduced over
+            signals (a sample invalid in any signal is invalid for all) and
+            ``"finite"`` resolved to the finite samples; ``None`` when not
+            given. A detached read-only copy.
+        """
+        if self._valid_samples is None:
+            return None
+        return _readonly_array_copy(self._valid_samples)
+
+    @property
+    def valid_windows(self) -> NDArray[np.bool_]:
+        """Which trial windows the transform keeps.
+
+        A trial's window is kept only if ``valid_samples`` marks every one of
+        its samples valid; the coefficients of every taper of a dropped one
+        get observation weight 0.
+
+        Returns
+        -------
+        NDArray[bool], shape (n_time_windows, n_trials)
+            A detached read-only copy, all ``True`` without ``valid_samples``.
+        """
+        if self._valid_windows is None:
+            return mark_readonly_if_supported(
+                xp.ones((len(self.time), self.n_trials), dtype=bool)
+            )
+        return _readonly_array_copy(self._valid_windows)
+
+    @property
+    def observation_weights(self) -> NDArray[np.floating] | None:
+        """Weights consumed by :class:`Connectivity`: 0 for a dropped trial window.
+
+        Returns
+        -------
+        observation_weights : array or None
+            Shape ``(n_time_windows, n_trials, n_tapers, n_fft_samples, 1)``: 1
+            for every taper of a trial window :attr:`valid_windows` keeps and 0
+            for one it drops. ``None`` when every window is kept, so
+            :class:`Connectivity` uses its plain, unweighted expectation.
+        """
+        if self._valid_windows is None:
+            return None
+        weights = self._valid_windows.astype(xp.float64)
+        shape = (*weights.shape, self.n_tapers, self.n_fft_samples, 1)
+        return mark_readonly_if_supported(
+            xp.broadcast_to(weights[:, :, xp.newaxis, xp.newaxis, xp.newaxis], shape)
+        )
+
+    def _time_series_for_fft(self) -> BackendArray:
+        """The samples with the invalid ones set to zero.
+
+        A window with an invalid sample is dropped, so the zeros reach only
+        dropped coefficients, which they keep finite.
+        """
+        if self._valid_windows is None:
+            return self._time_series
+        assert self._valid_samples is not None
+        return xp.where(self._valid_samples[..., xp.newaxis], self._time_series, 0)
 
     @property
     def _n_tapers_to_generate(self) -> int:
@@ -2152,7 +2383,20 @@ class Multitaper(_WindowedFourierTransform):
             f"           detrend_type={self.detrend_type!r}, "
             f"start_time={self.start_time}, "
             f"n_tapers={self.n_tapers}"
-            ")"
+            + (
+                f",\n           valid_samples={self._valid_samples_description()}"
+                if self._valid_samples_mode is not None
+                else ""
+            )
+            + ")"
+        )
+
+    def _valid_samples_description(self) -> str:
+        """``valid_samples`` as given ("finite" or a mask) and the windows it keeps."""
+        given = "'finite'" if self._valid_samples_mode == "finite" else "<mask>"
+        valid_windows = self.valid_windows
+        return (
+            f"{given} ({int(valid_windows.sum())} of {valid_windows.size} trial windows kept)"
         )
 
     def _spectral_bandwidth_metadata(self) -> dict[str, Any]:
@@ -2236,12 +2480,15 @@ class Multitaper(_WindowedFourierTransform):
                 f"{self.n_tapers} (of {self._n_tapers_to_generate} requested; low-bias "
                 "filtering dropped the rest)"
             )
+        spectral_rows: list[tuple[str, Any]] = [
+            ("Time-halfbandwidth product", self.time_halfbandwidth_product),
+            ("Number of tapers", n_tapers),
+        ]
+        if self._valid_samples_mode is not None:
+            spectral_rows.append(("Valid samples", self._valid_samples_description()))
         return self._summary(
             "Multitaper Spectral Analysis Configuration",
-            [
-                ("Time-halfbandwidth product", self.time_halfbandwidth_product),
-                ("Number of tapers", n_tapers),
-            ],
+            spectral_rows,
             ("Frequency resolution", f"{self.frequency_resolution:.1f} Hz"),
         )
 
@@ -2295,6 +2542,14 @@ class Multitaper(_WindowedFourierTransform):
         """
         metadata = super()._provenance_metadata()
         metadata["requested_n_tapers"] = self._n_tapers
+        if self._valid_samples_mode is not None:
+            # The mask itself can be as large as the recording, so its kind and
+            # what it removed are recorded rather than the mask.
+            assert self._valid_samples is not None
+            valid_windows = self.valid_windows
+            metadata["valid_samples"] = self._valid_samples_mode
+            metadata["n_invalid_samples"] = int(xp.sum(~self._valid_samples))
+            metadata["n_dropped_trial_windows"] = int(valid_windows.size - valid_windows.sum())
         return metadata
 
     @property
