@@ -404,6 +404,25 @@ def _source_first(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
     return wrapper
 
 
+def _refused_for_exact_spectrum(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Make ``method`` raise on a ``Connectivity`` of an exact spectrum.
+
+    For the measures that use each trial/taper observation or count them, and
+    for ``jackknife``, which leaves observations out. Apply it outermost, so
+    nothing is computed before the refusal; the measure registry's
+    ``defined_for_exact_spectrum`` records which measures carry it.
+    """
+
+    @wraps(method)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        connectivity = cast("Connectivity", args[0])
+        if connectivity._is_exact_spectrum:
+            connectivity._raise_for_exact_spectrum(method.__name__)
+        return method(*args, **kwargs)
+
+    return wrapper
+
+
 class DirectedOrientationWarning(UserWarning):
     """A directed measure's orientation differs from spectral_connectivity 2.x.
 
@@ -966,6 +985,17 @@ class Connectivity:
         ``MorletWavelet`` samples closer than four wavelet standard
         deviations). The measures that count observations then warn for
         expectations that include time; it has no effect otherwise.
+    is_exact_spectrum : bool, default=False
+        Keyword-only. Whether the taper-mean outer product of the coefficients
+        is an exact (population) cross-spectral matrix and the observations
+        only one factorization of it, not samples, as for
+        :class:`~spectral_connectivity.transforms.VARSpectrum`. The measures
+        that use each observation or count them (the phase-locking and
+        phase-lag families, pairwise phase consistency, ``delay``,
+        ``group_delay``) and ``jackknife`` then raise ``ValueError``, and the
+        expectation must average the tapers.
+
+        .. versionadded:: 3.0
 
     Attributes
     ----------
@@ -1131,6 +1161,7 @@ class Connectivity:
         observations_are_independent: bool = True,
         time_bins_are_independent: bool = True,
         *,
+        is_exact_spectrum: bool = False,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
         # fourier_coefficients and expectation_type are validated in their
@@ -1160,6 +1191,8 @@ class Connectivity:
         self._time_bins_are_independent = _validated_flag(
             "time_bins_are_independent", time_bins_are_independent
         )
+        self._is_exact_spectrum = _validated_flag("is_exact_spectrum", is_exact_spectrum)
+        self._require_tapers_averaged_for_exact_spectrum(self.expectation_type)
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
@@ -1462,6 +1495,9 @@ class Connectivity:
                 error_msg += f"  - '{key}'\n"
             error_msg += "\nMost common: 'trials_tapers' (average over both trials and tapers)"
             raise ValueError(error_msg)
+        # Set in __init__ after the first assignment, which checks it there.
+        if getattr(self, "_is_exact_spectrum", False):
+            self._require_tapers_averaged_for_exact_spectrum(value)
 
         self._expectation_type = value
         self.clear_cache()
@@ -1611,6 +1647,8 @@ class Connectivity:
             init_kwargs["observations_are_independent"] = False
         if not _transform_flag(transform, "time_bins_are_independent", True):
             init_kwargs["time_bins_are_independent"] = False
+        if _transform_flag(transform, "is_exact_spectrum", False):
+            init_kwargs["is_exact_spectrum"] = True
         init_kwargs["fourier_coefficients"] = transform.fft()
         init_kwargs["time"] = transform.time
         init_kwargs["frequencies"] = transform.frequencies
@@ -2419,6 +2457,67 @@ class Connectivity:
         """
         return self._time_bins_are_independent
 
+    @property
+    def is_exact_spectrum(self) -> bool:
+        """Whether the coefficients give an exact cross-spectral matrix, not samples.
+
+        ``True`` for a :class:`~spectral_connectivity.transforms.VARSpectrum`:
+        the taper-mean outer product of its coefficients is the model's
+        cross-spectral matrix, and the individual observations are only one
+        factorization of it. Every measure that is a function of that matrix
+        is then exact; those that use each observation or count them, and
+        :meth:`jackknife`, raise ``ValueError``.
+
+        .. versionadded:: 3.0
+        """
+        return self._is_exact_spectrum
+
+    def _require_tapers_averaged_for_exact_spectrum(self, expectation_type: str) -> None:
+        """Raise unless ``expectation_type`` averages the tapers of an exact spectrum.
+
+        Only the taper mean of an exact spectrum's outer products is its
+        cross-spectral matrix; a single taper is one column of a factor of it.
+        """
+        if not self._is_exact_spectrum or 2 in EXPECTATION_AXES[expectation_type]:
+            return
+        supported = ", ".join(
+            repr(name) for name, axes in EXPECTATION_AXES.items() if 2 in axes
+        )
+        msg = (
+            f"expectation_type={expectation_type!r} keeps the tapers as an output "
+            "axis, but these coefficients are an exact spectrum (is_exact_spectrum "
+            "is True, as for VARSpectrum): only their mean over the tapers is the "
+            "model's cross-spectral matrix, and each taper is one column of an "
+            f"arbitrary factor of it. Use an expectation_type that averages the "
+            f"tapers: {supported}."
+        )
+        raise ValueError(msg)
+
+    def _raise_for_exact_spectrum(self, method: str) -> None:
+        """Raise because ``method`` uses individual observations of an exact spectrum."""
+        # The registry imports this module, so it is imported here.
+        from spectral_connectivity._measure_registry import _EXACT_SPECTRUM_MEASURES, _listed
+
+        what = (
+            "leaves out one observation at a time"
+            if method == "jackknife"
+            else "is computed from each trial/taper observation or counts them"
+        )
+        msg = (
+            f"{method} is not defined for an exact spectrum (is_exact_spectrum is "
+            f"True, as for VARSpectrum). It {what}, but these coefficients are "
+            "not samples: they are one factorization of the model's "
+            "cross-spectral matrix, so the result would depend on an arbitrary "
+            "choice of factor (and an exact spectrum has no sampling error to "
+            "estimate). Use a measure that is a function of the cross-spectral "
+            f"matrix alone: {_listed(list(_EXACT_SPECTRUM_MEASURES))}. For "
+            f"{method}, simulate data from the model (e.g. "
+            "spectral_connectivity.simulate.simulate_MVAR) and estimate it with "
+            "Multitaper."
+        )
+        raise ValueError(msg)
+
+    @_refused_for_exact_spectrum
     def jackknife(
         self,
         method: str,
@@ -4589,6 +4688,7 @@ class Connectivity:
         )
         return self._reduced_cross_spectral_matrix(normalized, dtype=dtype)
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def phase_locking_value(self) -> NDArray[np.floating]:
         """Return the cross-spectrum with power scaled to magnitude 1.
@@ -4638,6 +4738,7 @@ class Connectivity:
         # ulp above 1 (matching the bounds clipping magnitude_squared_coherence applies).
         return xp.clip(xp.abs(self._phase_locking_value()), 0.0, 1.0)
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def corrected_imaginary_phase_locking_value(self) -> NDArray[np.floating]:
         """Return corrected imaginary phase-locking value (ciPLV).
@@ -4988,6 +5089,7 @@ class Connectivity:
             xp.abs(imaginary, out=scratch)
             moments["absolute"][block] = xp.mean(scratch, axis=observation_axes)
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def phase_lag_index(self) -> NDArray[np.floating]:
         """Return non-parametric synchrony measure mitigating power differences.
@@ -5058,6 +5160,7 @@ class Connectivity:
         )
         return pli
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def directed_phase_lag_index(self) -> NDArray[np.floating]:
         """Return the directed phase-lag index (dPLI).
@@ -5120,6 +5223,7 @@ class Connectivity:
         )
         return directed_pli
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return weighted average of phase lag index using imaginary coherency magnitudes.
@@ -5185,6 +5289,7 @@ class Connectivity:
         no_lag = self._has_no_phase_lag(mean_absolute)
         return _divide_where(mean_imaginary, mean_absolute, ~no_lag, 0.0)
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of phase lag index corrected for positive bias.
@@ -5247,6 +5352,7 @@ class Connectivity:
         # the signs are rounding noise; there is no lag to estimate, so 0.
         return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def debiased_squared_weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of weighted phase lag index corrected for bias.
@@ -5318,6 +5424,7 @@ class Connectivity:
         )
         return debiased
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def pairwise_phase_consistency(self) -> NDArray[np.floating]:
         """Return square of phase locking value corrected for bias.
@@ -6533,6 +6640,7 @@ class Connectivity:
         )
         return coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals
 
+    @_refused_for_exact_spectrum
     def group_delay(
         self,
         frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None = None,
@@ -6684,6 +6792,7 @@ class Connectivity:
 
         return delay, slope, r_value
 
+    @_refused_for_exact_spectrum
     @_asnumpy
     def delay(
         self,

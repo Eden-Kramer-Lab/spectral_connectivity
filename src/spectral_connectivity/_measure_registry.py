@@ -121,9 +121,12 @@ class _MeasureSpec(_VariableSpec):
     requirements; the fields of :class:`_VariableSpec` label and interpret the
     measure's own variable. ``value_range`` bounds the values, or their
     magnitude when ``is_complex``. ``quantity`` and ``formula`` define the
-    coherency family's values (``None`` for other measures). ``companions``
-    are the measure's other value variables, in the order the measure returns
-    them after its own.
+    coherency family's values (``None`` for other measures).
+    ``defined_for_exact_spectrum`` says whether the values are a function of
+    the expected cross-spectral matrix alone, and so are defined for an exact
+    spectrum such as :class:`~spectral_connectivity.transforms.VARSpectrum`'s.
+    ``companions`` are the measure's other value variables, in the order the
+    measure returns them after its own.
     """
 
     output_kind: Literal[
@@ -150,6 +153,11 @@ class _MeasureSpec(_VariableSpec):
     # Wilson factorization.
     is_directed: bool = False
     requires_two_sided: bool = False
+    # Stated for every measure, without a default, from reading its
+    # implementation: True when its values are a function of the expected
+    # cross-spectral matrix alone, False when it uses each observation or
+    # their count (see _EXACT_SPECTRUM_MEASURES).
+    defined_for_exact_spectrum: bool
     companions: tuple[tuple[str, _VariableSpec], ...] = ()
 
     @property
@@ -205,6 +213,8 @@ def _wilson_directed_spec(
         is_default=is_default,
         is_directed=True,
         requires_two_sided=True,
+        # The Wilson factorization takes the expected cross-spectral matrix.
+        defined_for_exact_spectrum=True,
     )
 
 
@@ -266,6 +276,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         quantity="squared_magnitude",
         formula=f"|S_st|^2 / (S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_default=True,
+        defined_for_exact_spectrum=True,
     ),
     "coherence_phase": _MeasureSpec(
         "pairwise",
@@ -279,6 +290,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         quantity="phase",
         formula=f"angle(S_st), the angle of coherency, where {_CROSS_SPECTRUM}",
         is_default=True,
+        defined_for_exact_spectrum=True,
     ),
     "debiased_squared_phase_lag_index": _MeasureSpec(
         "pairwise",
@@ -290,6 +302,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_policy="constant",
         diagonal_value=0.0,
         is_default=True,
+        defined_for_exact_spectrum=False,
     ),
     "debiased_squared_weighted_phase_lag_index": _MeasureSpec(
         "pairwise",
@@ -300,6 +313,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_policy="constant",
         diagonal_value=0.0,
         is_default=True,
+        defined_for_exact_spectrum=False,
     ),
     "imaginary_coherence": _MeasureSpec(
         "pairwise",
@@ -314,6 +328,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         quantity="magnitude",
         formula=f"|Im(S_st)| / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_default=True,
+        defined_for_exact_spectrum=True,
     ),
     "pairwise_phase_consistency": _MeasureSpec(
         "pairwise",
@@ -326,6 +341,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_value=1.0,
         nan_for_zero_power_signal=True,
         is_default=True,
+        defined_for_exact_spectrum=False,
     ),
     "pairwise_spectral_granger_prediction": _wilson_directed_spec(
         "pairwise",
@@ -348,6 +364,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_value=0.0,
         sign_convention=_LEADS,
         is_default=True,
+        defined_for_exact_spectrum=False,
     ),
     "phase_locking_value": _MeasureSpec(
         "pairwise",
@@ -360,6 +377,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_value=1.0,
         nan_for_zero_power_signal=True,
         is_default=True,
+        defined_for_exact_spectrum=False,
     ),
     "power": _MeasureSpec(
         "power",
@@ -369,6 +387,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="One-sided power spectral density of each signal.",
         diagonal_policy="not_applicable",
         is_default=True,
+        defined_for_exact_spectrum=True,
     ),
     "weighted_phase_lag_index": _MeasureSpec(
         "pairwise",
@@ -381,6 +400,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_value=0.0,
         sign_convention=_LEADS,
         is_default=True,
+        defined_for_exact_spectrum=False,
     ),
     "coherency": _MeasureSpec(
         "pairwise",
@@ -395,6 +415,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         quantity="complex",
         formula=f"S_st / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_complex=True,
+        defined_for_exact_spectrum=True,
     ),
     "cross_spectral_density": _MeasureSpec(
         "pairwise",
@@ -405,6 +426,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "power. Use coherency for a normalized version.",
         diagonal_policy="estimated",
         is_complex=True,
+        defined_for_exact_spectrum=True,
     ),
     "imaginary_coherency": _MeasureSpec(
         "pairwise",
@@ -416,6 +438,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         sign_convention=_LEADS,
         quantity="signed",
         formula=f"Im(S_st) / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
+        defined_for_exact_spectrum=True,
     ),
     "partial_coherence": _MeasureSpec(
         "pairwise",
@@ -428,6 +451,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         quantity="squared_magnitude",
         formula="|P_st|^2 / (P_ss * P_tt), where P is the (regularized) inverse of the "
         "cross-spectral matrix",
+        defined_for_exact_spectrum=True,
     ),
     "corrected_imaginary_phase_locking_value": _MeasureSpec(
         "pairwise",
@@ -442,6 +466,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_policy="rounding_noise",
         diagonal_value=0.0,
         nan_for_zero_power_signal=True,
+        defined_for_exact_spectrum=False,
     ),
     "directed_phase_lag_index": _MeasureSpec(
         "pairwise",
@@ -454,6 +479,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_value=0.5,
         sign_convention="Above 0.5 at (source=a, target=b) means a leads b; below 0.5, a lags b.",
         is_directed=True,
+        defined_for_exact_spectrum=False,
     ),
     "subset_pairwise_spectral_granger_prediction": _wilson_directed_spec(
         "pairwise",
@@ -574,6 +600,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         formula="max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * "
         "(b^H S_tt b)), with S_st the cross-spectral matrix from the source group's signals "
         "to the target group's",
+        defined_for_exact_spectrum=True,
     ),
     "maximized_imaginary_coherency": _MeasureSpec(
         "group_pairwise",
@@ -583,6 +610,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Largest imaginary coherency between linear combinations of two groups; "
         "blind to zero-lag coupling.",
         diagonal_policy="masked_nan",
+        defined_for_exact_spectrum=True,
     ),
     "multivariate_interaction_measure": _MeasureSpec(
         "group_pairwise",
@@ -592,6 +620,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Total phase-lagged interaction between two groups (the sum of squared "
         "imaginary-coherency components); at most the smaller group's rank.",
         diagonal_policy="masked_nan",
+        defined_for_exact_spectrum=True,
     ),
     "canonical_coherency": _MeasureSpec(
         "multivariate_components",
@@ -611,6 +640,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "/ sqrt((a^T Re(S_ss) a) * (b^T Re(S_tt) b)), times exp(-1j * phi), with S_st the "
         "cross-spectral matrix from the source group's signals to the target group's",
         is_complex=True,
+        defined_for_exact_spectrum=True,
     ),
     "maximized_imaginary_coherency_components": _MeasureSpec(
         "multivariate_components",
@@ -620,6 +650,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="maximized_imaginary_coherency resolved into components, with the spatial "
         "filters and patterns that produce them.",
         diagonal_policy="not_applicable",
+        defined_for_exact_spectrum=True,
     ),
     "delay": _MeasureSpec(
         "delay",
@@ -634,6 +665,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
         is_directed=True,
+        defined_for_exact_spectrum=False,
     ),
     "global_coherence": _MeasureSpec(
         "global",
@@ -646,6 +678,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "unless observations far outnumber signals, so compare values only at matched "
         "numbers of observations and signals.",
         diagonal_policy="not_applicable",
+        defined_for_exact_spectrum=True,
     ),
     "group_delay": _MeasureSpec(
         "group_delay",
@@ -659,6 +692,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
         is_directed=True,
+        defined_for_exact_spectrum=False,
         companions=(
             (
                 "group_delay_slope",
@@ -703,6 +737,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
         is_directed=True,
+        defined_for_exact_spectrum=True,
     ),
 }
 
@@ -717,6 +752,13 @@ _FREQUENCY_RANGE_KINDS = frozenset({"delay", "group_delay", "phase_slope"})
 #: Measures that consume ``frequency_range``, in registry order.
 _FREQUENCY_RANGE_MEASURES: tuple[str, ...] = tuple(
     name for name, spec in _MEASURE_SPECS.items() if spec.consumes_frequency_range
+)
+
+#: Measures that are functions of the expected cross-spectral matrix alone, in
+#: registry order: the only ones defined for an exact spectrum, whose
+#: observations are a factorization of that matrix rather than samples.
+_EXACT_SPECTRUM_MEASURES: tuple[str, ...] = tuple(
+    name for name, spec in _MEASURE_SPECS.items() if spec.defined_for_exact_spectrum
 )
 
 # Dimensions of each category's main variable before any band reduction or

@@ -667,6 +667,12 @@ class SpectralTransform(Protocol):
         Whether successive time windows are independent (e.g. ``False`` for
         windows overlapping by more than half). It affects only expectations that
         average over time.
+    ``is_exact_spectrum`` : bool, default False
+        Whether the taper-mean outer product of the coefficients is an exact
+        (population) cross-spectral matrix, the observations being only one
+        factorization of it rather than samples (as for :class:`VARSpectrum`).
+        The measures that use each observation or count them, and the
+        jackknife, then raise, and the expectation must average the tapers.
 
     ``isinstance`` checks only that ``fft``, ``frequencies``, and ``time``
     exist (on Python 3.11 and earlier it also evaluates the two properties).
