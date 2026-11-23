@@ -1184,6 +1184,16 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   tolerance.
 - *Unreleased:* Subset spectral Granger restores `NaN` on the global
   self-Granger diagonal.
+- *Unreleased:* `partial_coherence` loads each signal's power by
+  `regularization` times itself before inverting, instead of every signal by
+  `regularization` times the matrix's RMS entry, which perturbed a signal far
+  weaker than the others by far more than `regularization` of its own size.
+  It is now invariant under rescaling the signals; before, signal amplitudes
+  from 1e-6 to 1e6 moved the default result by up to 0.36 from that of the same
+  data at one scale. For signals of comparable power the default result
+  changed by at most 1e-12 with 100 observations and 4e-11 with 10 (8 signals,
+  a simulated dense VAR); with fewer observations than signals, where it
+  warns, the loading sets the estimate and it changed by up to 0.45.
 - Wilson initialization and solves isolate rank-deficient sub-spectra instead of
   poisoning a whole batch. A unit whose Cholesky start fails starts from the
   Cholesky factor of `n_signals * I`, which is deterministic; healthy units

@@ -407,25 +407,53 @@ def test_imaginary_coherency_preserves_pair_orientation():
     assert np.isnan(signed[0, 0])
 
 
+def _normalized_precision(spectrum, loading):
+    """``|P_ij|^2 / (P_ii P_jj)`` for ``P = inv(spectrum + diag(loading))``,
+    with a NaN diagonal."""
+    identity = np.eye(spectrum.shape[-1])
+    precision = np.linalg.solve(spectrum + loading[..., None, :] * identity, identity)
+    diagonal = np.diagonal(precision, axis1=-2, axis2=-1).real
+    expected = np.abs(precision) ** 2 / (diagonal[..., :, None] * diagonal[..., None, :])
+    index = np.arange(spectrum.shape[-1])
+    expected[..., index, index] = np.nan
+    return expected
+
+
 def test_partial_coherence_matches_inverse_spectral_matrix_definition():
+    """Each signal's power is loaded by ``regularization`` times itself.
+
+    The signals' scales differ by 1e6 and the loading is large, so loading
+    every signal by the same multiple of the RMS entry would differ."""
     rng = np.random.default_rng(102)
     coefficients = rng.standard_normal((1, 200, 3, 4, 3)) + 1j * (
         rng.standard_normal((1, 200, 3, 4, 3))
     )
+    coefficients[..., 1] += coefficients[..., 0]
+    coefficients *= np.array([1e-3, 1.0, 1e3])
     conn = Connectivity(coefficients)
-    actual = conn.partial_coherence(regularization=1e-10)
+    actual = conn.partial_coherence(regularization=1e-2)
 
-    spectrum = to_host(conn._expectation_cross_spectral_matrix())
-    scale = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=(-2, -1), keepdims=True))
-    identity = np.eye(3)
-    precision = np.linalg.solve(spectrum + 1e-10 * scale * identity, identity)
-    diagonal = np.diagonal(precision, axis1=-2, axis2=-1).real
-    denominator = np.sqrt(diagonal[..., :, None] * diagonal[..., None, :])
-    expected = np.abs(-precision / denominator) ** 2
-    index = np.arange(3)
-    expected[..., index, index] = np.nan
+    spectrum = to_host(conn._expectation_cross_spectral_matrix())[..., :3, :, :]
+    power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
+    np.testing.assert_allclose(
+        actual, _normalized_precision(spectrum, 1e-2 * power), rtol=1e-12, equal_nan=True
+    )
+    rms = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=(-2, -1)))[..., None]
+    uniform = _normalized_precision(spectrum, 1e-2 * rms * np.ones(3))
+    assert np.nanmax(np.abs(actual - uniform)) > 0.1
 
-    np.testing.assert_allclose(actual, expected[..., :3, :, :], equal_nan=True)
+
+def test_partial_coherence_is_invariant_under_rescaling_the_signals():
+    """Rescaling the signals by 1e-6 to 1e6 (powers 1e-12 to 1e12), with
+    arbitrary phases, leaves partial coherence unchanged to rounding."""
+    rng = np.random.default_rng(104)
+    shape = (2, 12, 1, 5, 6)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    coefficients = coefficients @ (np.eye(6) + 0.5 * rng.standard_normal((6, 6)))
+    scales = 10.0 ** np.linspace(-6, 6, 6) * np.exp(1j * rng.uniform(-np.pi, np.pi, 6))
+    original = Connectivity(coefficients).partial_coherence()
+    rescaled = Connectivity(coefficients * scales).partial_coherence()
+    np.testing.assert_allclose(rescaled, original, rtol=0, atol=1e-12, equal_nan=True)
 
 
 def _analytic_partial_coherence(n_fft):

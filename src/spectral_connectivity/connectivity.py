@@ -3200,8 +3200,10 @@ class Connectivity:
         ----------
         regularization : float, default=1e-12
             Non-negative relative diagonal loading applied independently to
-            each time-frequency cross-spectral matrix before inversion.  The
-            absolute loading is ``regularization * rms(abs(S))``. Increase this
+            each time-frequency cross-spectral matrix before inversion: each
+            signal's power ``S_ii`` is increased by ``regularization * S_ii``
+            (a signal with zero power by ``regularization * rms(abs(S))``), so
+            the result does not depend on the signals' scales. Increase this
             value for statistically rank-deficient or ill-conditioned spectra.
 
         Returns
@@ -3288,7 +3290,9 @@ class Connectivity:
             )
         identity = xp.eye(self.n_signals, dtype=cross_spectral_density.dtype)
         safe_spectrum = xp.where(zero_power, identity, cross_spectral_density)
-        precision = _regularized_inverse(safe_spectrum, regularization=regularization)
+        precision = _regularized_inverse(
+            safe_spectrum, regularization=regularization, per_signal=True
+        )
         precision_diagonal = xp.maximum(
             xp.real(xp.diagonal(precision, axis1=-2, axis2=-1)), 0.0
         )
