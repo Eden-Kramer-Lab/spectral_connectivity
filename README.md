@@ -366,8 +366,13 @@ segment-averaged estimate, and `MorletWavelet` for time-resolved analysis at
 specific frequencies. `Welch`'s spectral bandwidth
 (`equivalent_noise_bandwidth`) is `1.5 / segment_duration` Hz for its Hann
 window, so set `segment_duration` explicitly for electrophysiology data.
-`MorletWavelet.valid_time_frequency` identifies bins with full in-record support;
-the xarray wrapper carries it as a two-dimensional coordinate.
+`MorletWavelet.valid_time_frequency` identifies bins with full in-record support.
+For labeled results from any of these transforms, use
+`spectral_connectivity.wrapper.connectivity_to_xarray(transform, method)`, which
+takes one measure name or a list of them and the same `frequency_range`,
+`frequency_decimation`, `frequency_bands`, and `frequency_reduction` as
+`multitaper_connectivity`; it carries `valid_time_frequency` as a
+two-dimensional coordinate.
 
 `Connectivity.from_transform` also accepts your own transform: any object
 satisfying the `SpectralTransform` protocol (an `fft()` method plus
