@@ -4987,3 +4987,57 @@ def test_connectivity_to_xarray_ignores_squeeze_for_a_list(four_signals):
         "source",
         "target",
     )
+
+
+class _CoefficientsOnly:
+    """A SpectralTransform that is not built in: coefficients, no coordinates."""
+
+    def __init__(self, coefficients):
+        self._coefficients = coefficients
+        self.frequencies = None
+        self.time = None
+
+    def fft(self):
+        return self._coefficients.copy()
+
+
+def test_connectivity_to_xarray_lists_measures_of_a_custom_transform(four_signals):
+    """A list from a transform without coordinates or a settings record gives
+    each measure's own result, labeled in normalized frequency and window index,
+    with the provenance that says so."""
+    coefficients = Multitaper(four_signals, _MULTI_SAMPLING_FREQUENCY).fft()
+    methods = ["power", "magnitude_squared_coherence", "delay"]
+    transform = _CoefficientsOnly(coefficients)
+    combined = connectivity_to_xarray(transform, methods)
+    assert list(combined.data_vars) == methods
+    for name in methods:
+        assert combined[name].identical(connectivity_to_xarray(transform, name)), name
+    assert combined.attrs["transform"] == "_CoefficientsOnly"
+    assert combined.attrs["frequency_units"] == "cycles/sample"
+    assert combined.attrs["nyquist_frequency"] == 0.5
+    assert combined.attrs["time_coordinate"] == "index"
+    assert combined.frequency.attrs == {
+        "long_name": "Normalized frequency",
+        "units": "cycles/sample",
+    }
+    assert combined.time.attrs == {"long_name": "Window index"}
+    assert combined["delay"].attrs["units"] == "samples"
+
+
+def test_connectivity_to_xarray_lists_morlet_measures_with_their_validity(morlet):
+    """Each variable of a Morlet list keeps the validity of its own bins: the
+    frequency-resolved ones of the range, phase_slope_index every bin it sums."""
+    band = (11.0, 25.0)
+    validity = to_host(morlet.valid_time_frequency)
+    in_band = (morlet.frequencies >= band[0]) & (morlet.frequencies <= band[1])
+    combined = connectivity_to_xarray(
+        morlet,
+        ["magnitude_squared_coherence", "delay", "phase_slope_index"],
+        frequency_range=band,
+    )
+    np.testing.assert_array_equal(combined.frequency, [12.0, 16.0, 20.0, 24.0])
+    np.testing.assert_array_equal(combined.valid_time_frequency, validity[:, in_band])
+    np.testing.assert_array_equal(combined.valid_time, validity[:, in_band].all(axis=1))
+    assert not combined.valid_time_frequency.all()  # the NaN edges are marked
+    assert "valid_time" in combined["phase_slope_index"].coords
+    assert "frequency" not in combined["phase_slope_index"].dims
