@@ -2421,6 +2421,49 @@ class Connectivity:
         """
         return self._time_bins_are_independent
 
+    def _resampled_measure(self, method: Any, caller: str) -> tuple[str, Callable[..., Any]]:
+        """The canonical name and bound method of the measure ``caller`` recomputes.
+
+        Shared by the drivers that recompute a measure on resampled
+        coefficients, so they accept and refuse the same names. A deprecated
+        name warns, spelled as ``caller`` takes it.
+
+        Raises
+        ------
+        TypeError
+            If ``method`` is not a string.
+        ValueError
+            If ``method`` is not a public measure of this class.
+        """
+        # The registry imports this module, so its helpers are imported here.
+        from spectral_connectivity._measure_registry import (
+            _method_type_message,
+            _suggest_measure_names,
+        )
+
+        if not isinstance(method, str):
+            raise TypeError(
+                _method_type_message(
+                    "a measure name (str)", f"{type(method).__name__} {method!r}"
+                )
+            )
+        method = _resolve_deprecated_measure_name(method, caller + "({!r})")
+        method_attribute = inspect.getattr_static(type(self), method, None)
+        if (
+            method.startswith("_")
+            or method in _NON_MEASURE_METHODS
+            or not inspect.isfunction(method_attribute)
+        ):
+            msg = (
+                f"{method!r} is not a connectivity measure {caller} can "
+                f"compute.{did_you_mean(_suggest_measure_names(method))} Call "
+                "spectral_connectivity.list_measures() to see the measure names."
+            )
+            raise ValueError(msg)
+        # The static check above guarantees ``method`` names a public function
+        # on the class, so the bound attribute is always callable here.
+        return method, getattr(self, method)
+
     def jackknife(
         self,
         method: str,
@@ -2637,34 +2680,7 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
-        # The registry imports this module, so its helpers are imported here.
-        from spectral_connectivity._measure_registry import (
-            _method_type_message,
-            _suggest_measure_names,
-        )
-
-        if not isinstance(method, str):
-            raise TypeError(
-                _method_type_message(
-                    "a measure name (str)", f"{type(method).__name__} {method!r}"
-                )
-            )
-        method = _resolve_deprecated_measure_name(method, "jackknife({!r})")
-        method_attribute = inspect.getattr_static(type(self), method, None)
-        if (
-            method.startswith("_")
-            or method in _NON_MEASURE_METHODS
-            or not inspect.isfunction(method_attribute)
-        ):
-            msg = (
-                f"{method!r} is not a connectivity measure jackknife can "
-                f"compute.{did_you_mean(_suggest_measure_names(method))} Call "
-                "spectral_connectivity.list_measures() to see the measure names."
-            )
-            raise ValueError(msg)
-        # The static check above guarantees ``method`` names a public function
-        # on the class, so the bound attribute is always callable here.
-        measure = getattr(self, method)
+        method, measure = self._resampled_measure(method, "jackknife")
 
         if n_observations < 3:
             if leave_out == "trial":
@@ -2695,22 +2711,15 @@ class Connectivity:
                 )
             raise ValueError(msg)
 
-        full_estimate = measure(**method_kwargs)
-        if isinstance(full_estimate, tuple):
-            msg = f"jackknife does not support tuple-valued measure {method!r}."
-            raise TypeError(msg)
-        full_estimate = np.asarray(full_estimate)
-        if full_estimate.dtype == object:
-            msg = (
-                f"jackknife requires a real array result from {method!r}; it "
-                f"returned a structured result. Jackknife the scalar score "
-                "measure instead (e.g. canonical_coherence rather than "
-                "canonical_coherency)."
-            )
-            raise TypeError(msg)
-        if np.iscomplexobj(full_estimate):
-            msg = f"jackknife requires a real-valued measure; {method!r} is complex."
-            raise TypeError(msg)
+        full_estimate = _real_array_result(
+            measure(**method_kwargs),
+            method,
+            "jackknife",
+            structured_hint=(
+                " Jackknife the scalar score measure instead (e.g. canonical_coherence "
+                "rather than canonical_coherency)."
+            ),
+        )
 
         observation_weights = self._observation_weights
         observation_coefficients = coefficients
@@ -7001,6 +7010,34 @@ class Connectivity:
             xp.conj(bandpassed_coherency[..., :-1, :, :]) * bandpassed_coherency[..., 1:, :, :]
         ).sum(axis=-3)
         return adjacent_product.imag
+
+
+def _real_array_result(
+    result: Any, method: str, caller: str, *, structured_hint: str = ""
+) -> NDArray[np.floating]:
+    """``result`` of ``method`` as a real array, or the error ``caller`` raises.
+
+    Raises
+    ------
+    TypeError
+        If the measure returned a tuple, a structured (object) result, or a
+        complex array. ``structured_hint`` is appended to the structured-result
+        message.
+    """
+    if isinstance(result, tuple):
+        msg = f"{caller} does not support tuple-valued measure {method!r}."
+        raise TypeError(msg)
+    result = np.asarray(result)
+    if result.dtype == object:
+        msg = (
+            f"{caller} requires a real array result from {method!r}; it "
+            f"returned a structured result.{structured_hint}"
+        )
+        raise TypeError(msg)
+    if np.iscomplexobj(result):
+        msg = f"{caller} requires a real-valued measure; {method!r} is complex."
+        raise TypeError(msg)
+    return result
 
 
 def _divide_masking_zero_denominator(
