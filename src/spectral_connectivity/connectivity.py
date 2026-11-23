@@ -95,13 +95,13 @@ _NONFINITE_COEFFICIENTS_WARNING = "fourier_coefficients contains NaN or Inf valu
 _NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife", "surrogate_test"})
 # Connectivity.surrogate_test: the surrogate constructions and alternatives it
 # takes.
-_SURROGATE_KINDS = ("trial_shuffle", "phase_rotation", "conjugation")
 # The question each kind answers, for the message naming them.
 _SURROGATE_QUESTIONS = {
     "trial_shuffle": "do the signals covary from trial to trial (several trials)?",
     "phase_rotation": "are the signals independent at all (one trial suffices)?",
     "conjugation": "is there more than zero-lag mixing such as volume conduction?",
 }
+_SURROGATE_KINDS = tuple(_SURROGATE_QUESTIONS)
 _SURROGATE_ALTERNATIVES = ("auto", "greater", "less", "two-sided")
 # Why surrogate_test refuses a registered measure, keyed by what the registry
 # says of it (see _surrogate_refusal).
@@ -3246,10 +3246,10 @@ class Connectivity:
                 f"{', '.join(map(repr, _SURROGATE_ALTERNATIVES))}, got {alternative!r}."
             )
             raise ValueError(msg)
-        rotation_half_bandwidth = (
-            self._rotation_half_bandwidth(half_bandwidth) if kind == "phase_rotation" else None
-        )
-        if kind != "phase_rotation" and half_bandwidth is not None:
+        rotation_half_bandwidth = None
+        if kind == "phase_rotation":
+            rotation_half_bandwidth = self._rotation_half_bandwidth(half_bandwidth)
+        elif half_bandwidth is not None:
             msg = (
                 f"half_bandwidth applies only to kind='phase_rotation', whose "
                 f"surrogates are invalid near 0 Hz and Nyquist; kind={kind!r} "
