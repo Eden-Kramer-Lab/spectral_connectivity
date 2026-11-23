@@ -3295,8 +3295,11 @@ class Connectivity:
                 fwer_axis,
                 estimate.ndim,
                 "fwer_axis",
-                f"{method}'s result, {_axes_description(self._result_dims(method, estimate.ndim))}"
-                f"shape {estimate.shape}",
+                array_description=(
+                    f"{method}'s result, "
+                    f"{_axes_description(self._result_dims(method, estimate.ndim))}"
+                    f"shape {estimate.shape}"
+                ),
             )
         )
         tested = np.isfinite(estimate) & ~np.eye(self.n_signals, dtype=bool)

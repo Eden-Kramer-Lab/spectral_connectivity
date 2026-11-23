@@ -188,37 +188,6 @@ def _surrogate_statistic(
     return np.abs(values)
 
 
-def _normalized_axes(
-    axis: int | tuple[int, ...],
-    ndim: int,
-    name: str = "axis",
-    array_description: str | None = None,
-) -> tuple[int, ...]:
-    """``axis`` as distinct non-negative axes of an ``ndim``-dimensional array.
-
-    ``array_description`` names the array in the out-of-bounds message.
-    """
-    axes = (axis,) if not isinstance(axis, tuple) else axis
-    normalized = []
-    for value in axes:
-        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
-            msg = f"{name} must be an int, a tuple of ints, or None, got {axis!r}."
-            raise TypeError(msg)
-        if not -ndim <= value < ndim:
-            described = (
-                f"a result with {ndim} dimension(s)"
-                if array_description is None
-                else f"{array_description} ({ndim} dimension(s))"
-            )
-            msg = f"{name} {value} is out of bounds for {described}."
-            raise ValueError(msg)
-        normalized.append(int(value) % ndim)
-    if len(set(normalized)) != len(normalized):
-        msg = f"{name} {axis!r} names the same axis more than once."
-        raise ValueError(msg)
-    return tuple(normalized)
-
-
 class _SurrogateTally:
     """Exceedance counts and family maxima of surrogate statistics.
 
@@ -913,20 +882,36 @@ def adjust_for_multiple_comparisons(
     return np.transpose(is_significant.reshape(moved.shape), np.argsort(order))
 
 
-def _normalized_axes(axis: int | tuple[int, ...], ndim: int) -> tuple[int, ...]:
-    """``axis`` as distinct non-negative axes of an ``ndim``-dimensional array."""
+def _normalized_axes(
+    axis: int | tuple[int, ...],
+    ndim: int,
+    name: str = "axis",
+    *,
+    array_description: str | None = None,
+) -> tuple[int, ...]:
+    """``axis`` as distinct non-negative axes of an ``ndim``-dimensional array.
+
+    ``name`` is the argument's name in the error messages, and
+    ``array_description`` names the array in the out-of-bounds message
+    (``p_values`` when not given).
+    """
     axes = (axis,) if not isinstance(axis, tuple) else axis
     normalized = []
     for value in axes:
         if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
-            msg = f"axis must be an int, a tuple of ints, or None, got {axis!r}."
+            msg = f"{name} must be an int, a tuple of ints, or None, got {axis!r}."
             raise TypeError(msg)
         if not -ndim <= value < ndim:
-            msg = f"axis {value} is out of bounds for p_values with {ndim} dimension(s)."
+            described = (
+                f"p_values with {ndim} dimension(s)"
+                if array_description is None
+                else f"{array_description} ({ndim} dimension(s))"
+            )
+            msg = f"{name} {value} is out of bounds for {described}."
             raise ValueError(msg)
         normalized.append(int(value) % ndim)
     if len(set(normalized)) != len(normalized):
-        msg = f"axis {axis!r} names the same axis more than once."
+        msg = f"{name} {axis!r} names the same axis more than once."
         raise ValueError(msg)
     return tuple(normalized)
 
