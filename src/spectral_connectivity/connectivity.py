@@ -1665,15 +1665,18 @@ class Connectivity:
             init_kwargs["observations_are_independent"] = False
         if not _transform_flag(transform, "time_bins_are_independent", True):
             init_kwargs["time_bins_are_independent"] = False
+        # Unlike the flags, the half bandwidth does not change any measure, so
+        # it is set after construction: a subclass mirroring the older
+        # signature keeps working with a Multitaper, which defines it.
+        half_bandwidth = _optional_transform_attribute(transform, "half_bandwidth", None)
+        if half_bandwidth is not None:
+            half_bandwidth = _validated_half_bandwidth(half_bandwidth)
         init_kwargs["fourier_coefficients"] = transform.fft()
         init_kwargs["time"] = transform.time
         init_kwargs["frequencies"] = transform.frequencies
         weights = _optional_transform_attribute(transform, "observation_weights", None)
         if weights is not None:
             init_kwargs["observation_weights"] = weights
-        half_bandwidth = _optional_transform_attribute(transform, "half_bandwidth", None)
-        if half_bandwidth is not None:
-            init_kwargs["half_bandwidth"] = half_bandwidth
         # The SpectralTransform contract requires fft() to return a freshly
         # built, unshared array, so adopt it in place instead of copying (see
         # Connectivity._adopt_fourier_coefficients). Only pass the private
@@ -1690,7 +1693,9 @@ class Connectivity:
             [re.escape(_NONFINITE_COEFFICIENTS_WARNING)],
             not _optional_transform_attribute(transform, "_time_series_is_finite", True),
         ):
-            return cls(**init_kwargs)
+            connectivity = cls(**init_kwargs)
+        connectivity._half_bandwidth = half_bandwidth
+        return connectivity
 
     @contextlib.contextmanager
     def _decomposition_of_nonfinite_coefficients(self, measure: str) -> Iterator[None]:

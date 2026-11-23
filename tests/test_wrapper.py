@@ -2278,6 +2278,7 @@ def test_from_transform_supports_subclass_overriding_init():
     sub = LegacyConnectivity.from_transform(m)
     assert isinstance(sub, LegacyConnectivity)
     assert sub.marker == "subclass"
+    assert sub.half_bandwidth == m.half_bandwidth  # recorded without the new keyword
     # Fell back to the defensive-copy path (owns its data), and works normally.
     assert sub._fourier_coefficients.base is None
     base = Connectivity.from_transform(m)
