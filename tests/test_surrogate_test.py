@@ -866,22 +866,41 @@ def test_connectivity_refuses_an_invalid_half_bandwidth(value):
         Connectivity(_coefficients(np.random.default_rng(0)), half_bandwidth=value)
 
 
-def test_jackknife_replicates_keep_the_half_bandwidth(lagged_connectivity, monkeypatch):
-    """Every Connectivity the jackknife and surrogate test rebuild carries it."""
-    seen = []
-    original = Connectivity.__init__
+def test_resampled_replicates_keep_the_subclass_and_settings(lagged_connectivity):
+    """jackknife and surrogate_test recompute a subclass's own measure on
+    replicates of the subclass, which keep its attributes and the instance's
+    settings (the half bandwidth, the observation flags)."""
 
-    def recording_init(self, *args, **kwargs):
-        original(self, *args, **kwargs)
-        seen.append(self.half_bandwidth)
+    class Recording(Connectivity):
+        def __init__(self, fourier_coefficients, label, **kwargs):
+            super().__init__(fourier_coefficients, **kwargs)
+            self.label = label
+            self.seen = []
 
-    monkeypatch.setattr(Connectivity, "__init__", recording_init)
-    lagged_connectivity.jackknife("magnitude_squared_coherence")
-    lagged_connectivity.surrogate_test(
-        "magnitude_squared_coherence", kind="conjugation", n_surrogates=2, random_state=0
+        def labelled_coherence(self):
+            self.seen.append((self.label, self.half_bandwidth, self.time_bins_are_independent))
+            return self.magnitude_squared_coherence()
+
+    connectivity = Recording(
+        lagged_connectivity.fourier_coefficients,
+        "recorded",
+        frequencies=lagged_connectivity.all_frequencies,
+        half_bandwidth=2.0,
+        time_bins_are_independent=False,
     )
-    assert seen
-    assert set(seen) == {2.0}
+    jackknifed = connectivity.jackknife(
+        "labelled_coherence", leave_out="trial", transformation="fisher_squared"
+    )
+    expected = connectivity.jackknife("magnitude_squared_coherence", leave_out="trial")
+    np.testing.assert_array_equal(jackknifed.standard_error, expected.standard_error)
+    tested = connectivity.surrogate_test(
+        "labelled_coherence", kind="trial_shuffle", n_surrogates=3, random_state=0
+    )
+    assert tested.p_value.shape == tested.estimate.shape
+    # The replicates' calls were recorded on the replicates, which share the
+    # list with the original, and saw its attributes and settings.
+    assert len(connectivity.seen) == 2 + 10 + 3
+    assert set(connectivity.seen) == {("recorded", 2.0, False)}
 
 
 @pytest.mark.parametrize(

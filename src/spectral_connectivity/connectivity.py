@@ -2535,6 +2535,36 @@ class Connectivity:
         # on the class, so the bound attribute is always callable here.
         return method, getattr(self, method)
 
+    def _with_coefficients(
+        self,
+        coefficients: BackendArray,
+        observation_weights: BackendArray | None,
+    ) -> "Connectivity":
+        """A copy of this instance holding other coefficients, with empty caches.
+
+        For the resampling drivers: ``coefficients`` are fresh and unshared
+        (a subset or a surrogate of this instance's), with the same time
+        windows and frequencies, so they are adopted without a copy, and the
+        coordinates, settings and flags are kept without validating them
+        again. ``observation_weights`` must match their shape. The copy has
+        this instance's type, so a subclass's own measures and attributes
+        are kept.
+        """
+        clone = object.__new__(type(self))
+        clone.__dict__.update(self.__dict__)
+        clone.clear_cache()
+        clone._fourier_coefficients = mark_readonly_chain_if_supported(coefficients)
+        # A subset or surrogate of finite coefficients is finite.
+        clone._coefficients_are_finite = self._coefficients_are_finite or bool(
+            xp.all(xp.isfinite(coefficients))
+        )
+        clone._observation_weights = (
+            None
+            if observation_weights is None
+            else mark_readonly_if_supported(observation_weights)
+        )
+        return clone
+
     def jackknife(
         self,
         method: str,
@@ -2819,22 +2849,7 @@ class Connectivity:
                 if observation_weights is None
                 else xp.compress(keep, observation_weights, axis=observation_axis)
             )
-            # ``subset`` is a fresh, unshared compress() output, so adopt it in
-            # place instead of copying and re-scanning it for every replicate.
-            replicate_connectivity = Connectivity(
-                subset,
-                expectation_type=self.expectation_type,
-                frequencies=self._frequencies,
-                time=self.time,
-                dtype=self._dtype,
-                minimum_phase_tolerance=self._minimum_phase_tolerance,
-                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
-                is_one_sided=self._is_one_sided,
-                observation_weights=subset_weights,
-                observations_are_independent=self._observations_are_independent,
-                half_bandwidth=self._half_bandwidth,
-                _adopt_fourier_coefficients=True,
-            )
+            replicate_connectivity = self._with_coefficients(subset, subset_weights)
             token = _emit_migration_notices.set(False)
             try:
                 replicate = getattr(replicate_connectivity, method)(**method_kwargs)
@@ -3289,20 +3304,8 @@ class Connectivity:
         )
         rng = _generator(random_state)
         for _ in range(n_surrogates):
-            surrogate_connectivity = Connectivity(
-                self._surrogate_coefficients(kind, unit_axes, rng),
-                expectation_type=self.expectation_type,
-                frequencies=self._frequencies,
-                time=self.time,
-                dtype=self._dtype,
-                minimum_phase_tolerance=self._minimum_phase_tolerance,
-                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
-                is_one_sided=self._is_one_sided,
-                observation_weights=self._observation_weights,
-                observations_are_independent=self._observations_are_independent,
-                time_bins_are_independent=self._time_bins_are_independent,
-                half_bandwidth=self._half_bandwidth,
-                _adopt_fourier_coefficients=True,
+            surrogate_connectivity = self._with_coefficients(
+                self._surrogate_coefficients(kind, unit_axes, rng), self._observation_weights
             )
             token = _emit_migration_notices.set(False)
             try:
