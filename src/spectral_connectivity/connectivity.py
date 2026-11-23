@@ -3045,7 +3045,10 @@ class Connectivity:
             trials; if ``"phase_rotation"`` meets one-sided coefficients, or a
             measure that does not return one value per frequency, or a
             ``phase_slope_index`` band within ``half_bandwidth`` of 0 Hz or
-            Nyquist; or if ``method`` is not a measure this test can use.
+            Nyquist; if this ``Connectivity`` holds an exact spectrum
+            (``is_exact_spectrum``, e.g. from a VAR model), which has no
+            sampling error to test against; or if ``method`` is not a measure
+            this test can use.
         TypeError
             If ``method`` is not a string, or the measure's result is not a
             real array ending in a ``(n_signals, n_signals)`` pair.
@@ -3220,6 +3223,21 @@ class Connectivity:
         :meth:`from_transform` recorded (here 2 Hz); the cookbook recipe "Test
         against surrogate data" shows more.
         """
+        # An exact spectrum (Connectivity.from_var / VARSpectrum) has
+        # pseudo-observations, not samples: there is no sampling error for a
+        # surrogate null to describe. The attribute exists only where exact
+        # spectra are supported, so this is a no-op elsewhere.
+        if getattr(self, "_is_exact_spectrum", False):
+            msg = (
+                "surrogate_test needs observed data, but this Connectivity holds "
+                "an exact spectrum (is_exact_spectrum is True, e.g. from "
+                "Connectivity.from_var): its coefficients are one factorization of "
+                "the model's spectrum, not samples, so it has no sampling error "
+                "to test against. To test a VAR model's connectivity, simulate data "
+                "from it (spectral_connectivity.simulate.simulate_MVAR) and run "
+                "surrogate_test on a Multitaper estimate of those data."
+            )
+            raise ValueError(msg)
         if kind not in _SURROGATE_KINDS:
             msg = (
                 f"kind must be one of {', '.join(map(repr, _SURROGATE_KINDS))}, got "

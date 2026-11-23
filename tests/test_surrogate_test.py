@@ -1059,3 +1059,14 @@ def test_rotation_edges_use_the_frequency_range_rule_for_boundary_bins():
         frequency_range=(half_bandwidth, 40.0),
     )
     assert np.isfinite(psi.p_value[0, 0, 1])
+
+
+def test_an_exact_spectrum_is_refused(small_connectivity, monkeypatch):
+    """An exact spectrum (pseudo-observations from a VAR model) has no sampling
+    error to test against. ``_is_exact_spectrum`` is set by Connectivity where
+    exact spectra exist; set it here so the refusal is tested on every branch."""
+    monkeypatch.setattr(small_connectivity, "_is_exact_spectrum", True, raising=False)
+    with pytest.raises(ValueError, match="exact spectrum"):
+        small_connectivity.surrogate_test(
+            "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=3
+        )
