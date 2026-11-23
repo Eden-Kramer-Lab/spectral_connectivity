@@ -877,6 +877,25 @@ def get_normal_distribution_p_values(
     )
 
 
+def _require_broadcastable(
+    name: str,
+    shape: tuple[int, ...],
+    estimates_name: str,
+    estimates_shape: tuple[int, ...],
+    advice: str,
+) -> None:
+    """Raise ``ValueError`` unless ``name``, of ``shape``, broadcasts against
+    the estimates; the message ends with ``advice`` on aligning it."""
+    try:
+        np.broadcast_shapes(shape, estimates_shape)
+    except ValueError:
+        msg = (
+            f"{name} has shape {shape}, which does not broadcast against "
+            f"{estimates_name} of shape {estimates_shape}. {advice}"
+        )
+        raise ValueError(msg) from None
+
+
 def _validated_real_valued(
     real_valued: bool | NDArray[np.bool_],
     estimates_shape: tuple[int, ...] | None = None,
@@ -897,19 +916,16 @@ def _validated_real_valued(
         )
         raise TypeError(msg)
     if estimates_shape is not None:
-        try:
-            np.broadcast_shapes(mask.shape, estimates_shape)
-        except ValueError:
-            msg = (
-                f"real_valued has shape {mask.shape}, which does not broadcast "
-                f"against {estimates_name} of shape {estimates_shape}. Align it "
-                "with their frequency axis: pass "
-                "Connectivity.real_valued_frequencies[:, np.newaxis] for power "
-                "shaped (..., n_frequencies, n_signals), or [:, np.newaxis, "
-                "np.newaxis] for coherency shaped (..., n_frequencies, "
-                "n_signals, n_signals)."
-            )
-            raise ValueError(msg) from None
+        _require_broadcastable(
+            "real_valued",
+            mask.shape,
+            estimates_name,
+            estimates_shape,
+            "Align it with their frequency axis: pass "
+            "Connectivity.real_valued_frequencies[:, np.newaxis] for power shaped "
+            "(..., n_frequencies, n_signals), or [:, np.newaxis, np.newaxis] for "
+            "coherency shaped (..., n_frequencies, n_signals, n_signals).",
+        )
     return mask
 
 
@@ -1033,18 +1049,15 @@ def coherence_significance_pvalue(
     magnitude_squared_coherence: NDArray[np.floating] = np.clip(
         np.abs(coherency) ** 2, 0.0, 1.0
     )
-    if counts.ndim:
-        try:
-            np.broadcast_shapes(counts.shape, magnitude_squared_coherence.shape)
-        except ValueError:
-            msg = (
-                f"n_observations has shape {counts.shape}, which does not broadcast "
-                f"against coherency of shape {magnitude_squared_coherence.shape}. "
-                "Pass one count, or one per estimate: "
-                "Connectivity.n_valid_observations[..., np.newaxis, np.newaxis] "
-                "for coherency shaped (..., n_frequencies, n_signals, n_signals)."
-            )
-            raise ValueError(msg) from None
+    _require_broadcastable(
+        "n_observations",
+        counts.shape,
+        "coherency",
+        magnitude_squared_coherence.shape,
+        "Pass one count, or one per estimate: "
+        "Connectivity.n_valid_observations[..., np.newaxis, np.newaxis] for "
+        "coherency shaped (..., n_frequencies, n_signals, n_signals).",
+    )
     # One count keeps its Python scalar, as before arrays were accepted.
     n_observations = counts.item() if counts.ndim == 0 else counts
     real_valued = _validated_real_valued(

@@ -24,7 +24,6 @@ from spectral_connectivity._frequency_bands import (
 from spectral_connectivity._input_handling import (
     _UNSET,
     _is_real_numeric_dtype,
-    _resolve_dataarray_dimensions,
     _SignalLabel,
     _SignalMetadata,
     _unwrap_fourier_input,
@@ -1706,11 +1705,9 @@ def multitaper_connectivity(
     if "artifact_samples" in transform_settings:
         transform_settings["artifact_samples"] = _artifact_samples_in_core_layout(
             transform_settings["artifact_samples"],
-            time_series,
             tuple(time_series_data.shape),
-            time_dim=time_dim,
-            trial_dim=trial_dim,
-            signal_dim=signal_dim,
+            None if signal_metadata is None else signal_metadata.dimension_order,
+            time_series_dims=getattr(time_series, "dims", None),
         )
     if time_series_data.ndim == 2:
         time_series_data = time_series_data[:, np.newaxis, :]
@@ -1792,37 +1789,39 @@ def multitaper_connectivity(
 
 def _artifact_samples_in_core_layout(
     artifact_samples: Any,
-    time_series: Any,
     shape: tuple[int, ...],
-    **dimensions: Hashable | None,
+    dimension_order: tuple[Hashable, ...] | None,
+    *,
+    time_series_dims: tuple[Hashable, ...] | None,
 ) -> Any:
     """``artifact_samples`` in Multitaper's ``(n_time_samples, n_trials[, n_signals])``.
 
-    A mask of a DataArray time series that is itself a DataArray is
-    transposed by its dimension names to the order the time series is (its
-    time, trial and signal dimensions; it may lack the trial and signal ones).
-    The mask of a 2-D ``(n_time_samples, n_signals)`` time series has that
-    layout, ``(n_time_samples,)`` or ``(n_time_samples, n_signals)``, and
-    gains the trial axis the time series does; ``shape`` is the time series'
-    in ``(n_time_samples[, n_trials], n_signals)`` order. Any other value is
-    passed on, for Multitaper to check.
+    A DataArray mask of a DataArray time series is transposed by its
+    dimension names to ``dimension_order``, the order the time series was
+    transposed to (its time, trial and signal dimensions; the mask may lack
+    the trial and signal ones). The mask of a 2-D ``(n_time_samples,
+    n_signals)`` time series has that layout, ``(n_time_samples,)`` or
+    ``(n_time_samples, n_signals)``, and gains the trial axis the time series
+    does; ``shape`` is the time series' in ``(n_time_samples[, n_trials],
+    n_signals)`` order. Any other value is passed on, for Multitaper to check.
     """
     if artifact_samples is None or isinstance(artifact_samples, str):
         return artifact_samples
-    if isinstance(artifact_samples, xr.DataArray) and isinstance(time_series, xr.DataArray):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # its notice was given for the data
-            order = _resolve_dataarray_dimensions(time_series, **dimensions)
-        extra = [dimension for dimension in artifact_samples.dims if dimension not in order]
+    if isinstance(artifact_samples, xr.DataArray) and dimension_order is not None:
+        extra = [
+            dimension
+            for dimension in artifact_samples.dims
+            if dimension not in dimension_order
+        ]
         if extra:
             msg = (
                 f"artifact_samples has dimension(s) {extra!r} that time_series, with "
-                f"dimensions {time_series.dims!r}, does not; name its axes as the "
+                f"dimensions {time_series_dims!r}, does not; name its axes as the "
                 "time series names its time, trial and signal axes."
             )
             raise ValueError(msg)
         artifact_samples = artifact_samples.transpose(
-            *[dimension for dimension in order if dimension in artifact_samples.dims]
+            *[dimension for dimension in dimension_order if dimension in artifact_samples.dims]
         ).data
     if len(shape) == 2:
         mask = np.asarray(artifact_samples)

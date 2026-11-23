@@ -2,7 +2,7 @@
 
 import contextlib
 import warnings
-from collections.abc import Iterator
+from collections.abc import Hashable, Iterator, Sequence
 from logging import getLogger
 from typing import (
     TYPE_CHECKING,
@@ -719,6 +719,20 @@ _INPUT_AXIS_ROLES = ("time", "trial", "signal")
 _TRANSFORM_LAYOUT = "(n_time_samples, n_trials, n_signals)"
 
 
+def _misplaced_dimensions(dimensions: Sequence[Hashable]) -> list[str]:
+    """Each of ``dimensions`` whose name gives it a role on another axis of
+    the ``(time, trial, signal)`` layout, as "'name' is on the role axis"."""
+    # The naming rules belong to the wrapper's layer, above this module, so
+    # the dependency on them stays local.
+    from spectral_connectivity._input_handling import _dimension_role
+
+    return [
+        f"{dimension!r} is on the {expected} axis"
+        for dimension, expected in zip(dimensions, _INPUT_AXIS_ROLES, strict=False)
+        if _dimension_role(dimension) not in (None, expected)
+    ]
+
+
 def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
     """Reject a labeled input whose dimension names put a role on another axis.
 
@@ -732,18 +746,9 @@ def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
     # A labeled 3-D array; a Dataset also has ``dims`` but no axis order.
     if dimensions is None or getattr(time_series, "ndim", None) != len(_INPUT_AXIS_ROLES):
         return
-    # The naming rules belong to the wrapper's layer, above this module, so
-    # the dependency on them stays local to this check.
-    from spectral_connectivity._input_handling import (
-        _dimension_role,
-        _resolve_dataarray_dimensions,
-    )
+    from spectral_connectivity._input_handling import _resolve_dataarray_dimensions
 
-    misplaced = [
-        f"{dimension!r} is on the {expected} axis"
-        for dimension, expected in zip(dimensions, _INPUT_AXIS_ROLES, strict=True)
-        if _dimension_role(dimension) not in (None, expected)
-    ]
+    misplaced = _misplaced_dimensions(dimensions)
     if not misplaced:
         return
     # Spell out the transpose only when the names determine it by the wrapper's
@@ -916,13 +921,7 @@ def _validated_artifact_samples(
     dimensions = getattr(artifact_samples, "dims", None)
     if dimensions is not None:
         # Read by position, like time_series: a name saying otherwise is refused.
-        from spectral_connectivity._input_handling import _dimension_role
-
-        misplaced = [
-            f"{dimension!r} is on the {expected} axis"
-            for dimension, expected in zip(dimensions, _INPUT_AXIS_ROLES, strict=False)
-            if _dimension_role(dimension) not in (None, expected)
-        ]
+        misplaced = _misplaced_dimensions(dimensions)
         if misplaced:
             msg = (
                 f"{transform} reads artifact_samples by position, as (time, trial[, "
@@ -1111,17 +1110,17 @@ def _warn_about_unusual_time_series(
     if time_series.shape[1] > 1:
         where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
     at_valid = "" if artifact_samples is None else " at samples artifact_samples does not mark"
-    remedy = (
-        "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
-        "affected trials or signals before the analysis"
+    leave_out = (
+        "pass artifact_samples='nonfinite' to leave them out (it drops every trial "
+        "window that contains one), or "
+        if suggest_artifact_samples
+        else ""
     )
-    if suggest_artifact_samples:
-        remedy = (
-            "Pass artifact_samples='nonfinite' to leave them out (it drops every trial "
-            "window that contains one), or interpolate the affected samples (e.g. "
-            "with numpy.interp) or drop the affected trials or signals before the "
-            "analysis"
-        )
+    remedy = (
+        f"{leave_out}interpolate the affected samples (e.g. with numpy.interp) or drop "
+        "the affected trials or signals before the analysis"
+    )
+    remedy = remedy[0].upper() + remedy[1:]
     warnings.warn(
         f"time_series contains {n_nonfinite} NaN or infinite "
         f"value{'' if n_nonfinite == 1 else 's'}{at_valid} (0-based indices: {where}). They "
