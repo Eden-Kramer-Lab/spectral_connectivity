@@ -23,8 +23,8 @@ from numpy.typing import NDArray
 from spectral_connectivity._array_utils import (
     _batched_eigvalsh,
     _conjugate_transpose,
+    _diagonally_loaded_inverse,
     _divide_where,
-    _regularized_inverse,
     _squared_magnitude,
 )
 from spectral_connectivity._backend import ON_GPU, xp
@@ -130,7 +130,7 @@ def _estimate_transfer_function(
     """
     H_0 = _zero_lag_coefficient(minimum_phase)[..., xp.newaxis, :, :]
     transfer_function: NDArray[np.complexfloating] = xp.matmul(
-        minimum_phase[..., :n_frequencies, :, :], _regularized_inverse(H_0)
+        minimum_phase[..., :n_frequencies, :, :], _diagonally_loaded_inverse(H_0)
     )
     return transfer_function
 
@@ -678,7 +678,7 @@ def _estimate_all_conditional_spectral_granger(
             minimum_phase_tolerance=minimum_phase_tolerance,
             minimum_phase_max_iterations=minimum_phase_max_iterations,
         )
-        reduced_inverse_transfer = _regularized_inverse(reduced_transfer)
+        reduced_inverse_transfer = _diagonally_loaded_inverse(reduced_transfer)
         for target in range(n_signals):
             if target == source:
                 continue
@@ -853,7 +853,7 @@ def _block_spectral_granger_from_model(
     covariance_yx = covariance[..., n_target:, :n_target]
     covariance_yy = covariance[..., n_target:, n_target:]
     conditional_source_covariance = covariance_yy - xp.matmul(
-        xp.matmul(covariance_yx, _regularized_inverse(covariance_xx)),
+        xp.matmul(covariance_yx, _diagonally_loaded_inverse(covariance_xx)),
         covariance_xy,
     )
 

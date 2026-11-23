@@ -986,18 +986,23 @@ def integrating_chain_oracle():
 
 
 @pytest.mark.parametrize(
-    "scales", [(1.0, 1.0, 1.0), (0.1, 1.0, 10.0)], ids=["as_simulated", "rescaled"]
+    "scales",
+    [(1.0, 1.0, 1.0), (0.1, 1.0, 10.0), (1e-3, 1.0, 1e3), (1e3, 1.0, 1e-3)],
+    ids=["as_simulated", "rescaled", "rescaled_1e3", "reversed_1e3"],
 )
 @_BOTH_FACTORIZATION_PATHS
 def test_directed_measures_of_signals_of_very_different_power_match_oracle(
     integrating_chain_oracle, scales, conjugate_symmetric
 ):
     """Signals whose powers differ by orders of magnitude, as they do in the
-    integrating chain and more so once rescaled, are factored as accurately as
-    signals of equal power. Rescaling signal ``i`` by ``d_i`` leaves spectral
-    Granger unchanged and scales the transfer function to ``D H D^-1``, which
-    gives the DTF of the rescaled model. Unscaled, the factorization missed
-    every one of these measures by more than 0.5."""
+    integrating chain and more so once rescaled (mean powers from 5e-5 to
+    3e12), give the measures as accurately as signals of equal power.
+    Rescaling signal ``i`` by ``d_i`` leaves spectral Granger unchanged and
+    scales the transfer function to ``D H D^-1`` and its inverse to
+    ``D A D^-1``, which give the DTF and PDC of the rescaled model. Unscaled,
+    the factorization missed every one of these measures by more than 0.5;
+    with a regularization of the inverses that ignored the signals' scales,
+    pairwise Granger missed by 4e-4 and PDC by 0.9 at the 1e3 rescaling."""
     scale = np.diag(scales)
     coefficients = scale @ _INTEGRATING_CHAIN_COEFFICIENTS @ np.linalg.inv(scale)
     noise_covariance = scale @ scale
@@ -1016,8 +1021,12 @@ def test_directed_measures_of_signals_of_very_different_power_match_oracle(
                 rtol=0,
                 err_msg=measure,
             )
-        dtf = np.asarray(connectivity.directed_transfer_function())[0]
-    expected_dtf = _analytic_directed_measures(A, H, noise_covariance)[
-        "directed_transfer_function"
-    ]
-    np.testing.assert_allclose(dtf, np.swapaxes(expected_dtf, -1, -2), atol=1e-5, rtol=0)
+        transfer_function_measures = {
+            measure: np.asarray(getattr(connectivity, measure)())[0]
+            for measure in ("directed_transfer_function", "partial_directed_coherence")
+        }
+    expected = _analytic_directed_measures(A, H, noise_covariance)
+    for measure, result in transfer_function_measures.items():
+        np.testing.assert_allclose(
+            result, np.swapaxes(expected[measure], -1, -2), atol=1e-5, rtol=0, err_msg=measure
+        )

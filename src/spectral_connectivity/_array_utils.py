@@ -119,6 +119,49 @@ def _regularized_inverse(
     return xp.linalg.solve(matrix + lam * identity_batched, identity_batched)
 
 
+def _diagonally_loaded_inverse(
+    matrix: NDArray[_NumberT],
+    regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+) -> NDArray[_NumberT]:
+    """Inverse of a batched matrix with each diagonal entry loaded by its own size.
+
+    Solves ``(M + λ E) X = I`` with ``E = diag(|M_ii|)`` and ``λ =
+    regularization``, per batched matrix (over the last two axes). Loading each
+    signal in proportion to its own diagonal entry makes the inverse covariant
+    under rescaling the signals: for positive diagonal ``D1`` and ``D2`` the
+    inverse of ``D1 M D2`` is ``D2⁻¹ X D1⁻¹`` when no diagonal entry is zero. That holds for the factor's
+    lag-0 coefficient (rows scaled), the transfer function (``D H D⁻¹``) and
+    the noise covariance (``D Σ D``) alike, so the directed measures read from
+    them do not depend on the signals' relative scales. A loading of the
+    matrix's RMS magnitude, as in :func:`_regularized_inverse`, is covariant
+    only under a common scale: it perturbs a signal far weaker than the others
+    by far more than ``λ`` of its own size. A diagonal entry that is exactly
+    zero (a signal with no power) is loaded by ``λ`` times the RMS magnitude
+    of the matrix instead, which keeps the inverse finite but is
+    not covariant.
+
+    Parameters
+    ----------
+    matrix : NDArray, shape (..., n_signals, n_signals)
+        Batched (real or complex) matrices to invert.
+    regularization : float, default=1e-12
+        Relative diagonal-loading factor.
+
+    Returns
+    -------
+    NDArray, shape (..., n_signals, n_signals)
+        Regularized inverse of each batched matrix.
+    """
+    diagonal = xp.abs(xp.diagonal(matrix, axis1=-2, axis2=-1))
+    rms = xp.sqrt(xp.mean(xp.real(xp.conj(matrix) * matrix), axis=(-2, -1), keepdims=True))[
+        ..., 0
+    ]
+    loading = regularization * xp.where(diagonal > 0, diagonal, rms)
+    identity = xp.eye(matrix.shape[-1], dtype=matrix.dtype)
+    identity_batched = xp.broadcast_to(identity, matrix.shape)
+    return xp.linalg.solve(matrix + identity * loading[..., xp.newaxis, :], identity_batched)
+
+
 def _batched_inverse_square_root(
     matrices: BackendArray,
     *,

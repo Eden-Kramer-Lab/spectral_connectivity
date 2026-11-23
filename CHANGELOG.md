@@ -1212,8 +1212,16 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   samples, 20 trials, NW 2), pairwise spectral Granger of the raw and the
   standardized signals differed by up to 3.7, and `2 -> 0`, which is 0 in the
   model, peaked at 0.44 raw and 0.09 standardized; the two now agree to
-  rounding. 2.x has the same defect (raw and standardized pairwise Granger
-  differed by up to 4.3 there). Recompute directed results, above all from
+  rounding. The inverses taken after the factorization, of the factor's
+  lag-0 coefficient (for the transfer function), of the transfer function
+  (PDC, gPDC, dDTF), of the reduced transfer function (conditional Granger),
+  and of the noise covariance (dDTF, blockwise Granger), load each diagonal
+  entry by 1e-12 of its own size instead of 1e-12 of the matrix's RMS entry,
+  which perturbed a signal far weaker than the others by far more: with the
+  chain rescaled to mean powers from 5e-5 to 3e12 the exact spectrum gave
+  pairwise Granger 4e-4 and PDC 0.9 from their true values even with the
+  scaled factorization, and now 3e-7 and 6e-13. 2.x has the same defect (raw
+  and standardized pairwise Granger differed by up to 4.3 there). Recompute directed results, above all from
   signals whose powers differ by orders of magnitude. Results from signals
   of comparable power change by much less than their estimation
   error (by at most 5e-3 for spectral Granger, DTF, and PDC in the regression
