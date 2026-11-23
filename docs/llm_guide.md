@@ -203,6 +203,16 @@ True
 
 ```
 
+When trials may differ from one another, leave out whole trials instead, so the
+interval includes the variability between trials:
+
+```python
+>>> by_trial = connectivity.jackknife("magnitude_squared_coherence", leave_out="trial")
+>>> by_trial.n_observations  # one replicate per trial
+20
+
+```
+
 ## Where to look next
 
 - `help(spectral_connectivity.multitaper_connectivity)` for every wrapper
