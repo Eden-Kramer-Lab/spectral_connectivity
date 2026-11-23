@@ -252,6 +252,9 @@ class _SurrogateTally:
         self._counts = np.zeros(statistic.shape, dtype=np.int64)
         self.null_maxima = np.empty((n_surrogates, *self._other_shape))
         self._n_added = 0
+        # Surrogates with a NaN at a tested element, and how many such values.
+        self.n_surrogates_with_nan = 0
+        self.n_nan_values = 0
 
     def add(self, null_statistic: NDArray[np.floating]) -> None:
         """Count one surrogate's statistic, shaped like the observed one.
@@ -261,6 +264,10 @@ class _SurrogateTally:
         the measure could not evaluate is not evidence against the null.
         """
         is_nan = np.isnan(null_statistic)
+        n_nan = int(np.count_nonzero(is_nan & self._tested))
+        if n_nan:
+            self.n_surrogates_with_nan += 1
+            self.n_nan_values += n_nan
         self._counts += (null_statistic >= self._threshold) | is_nan
         family_values = np.where(
             self._tested, np.where(is_nan, np.inf, null_statistic), -np.inf

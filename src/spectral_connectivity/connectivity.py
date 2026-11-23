@@ -3274,6 +3274,19 @@ class Connectivity:
                     _real_array_result(values, method, "surrogate_test"), alternative
                 )
             )
+        if tally.n_surrogates_with_nan:
+            warnings.warn(
+                f"surrogate_test({method!r}): {tally.n_surrogates_with_nan} of "
+                f"{n_surrogates} surrogates returned NaN at tested elements "
+                f"({tally.n_nan_values} values in all). Each such value counts as at "
+                "least the estimate, which raises p_value there, and sets its "
+                "family's maximum to inf, which raises fwer_p_value for the whole "
+                "family. Check why the measure is undefined on surrogates (for the "
+                "directed measures, a non-convergence warning; raise "
+                "minimum_phase_max_iterations), or test fewer elements.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
         p_value, fwer_p_value = tally.p_values()
         return SurrogateTestResult(
             estimate=estimate,

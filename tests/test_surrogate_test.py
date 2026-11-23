@@ -923,3 +923,29 @@ def test_auto_alternative_of_phase_slope_index_is_two_sided(lagged_connectivity)
         frequency_range=(10, 30),
     )
     assert result.alternative == "two-sided"
+
+
+def test_nan_surrogates_warn_once_with_their_count(lagged_connectivity, monkeypatch):
+    """A measure undefined on some surrogates warns once per call, with the
+    counts, and those surrogates raise the p-values (never lower them)."""
+    calls = {"n": 0}
+    original = Connectivity.magnitude_squared_coherence
+
+    def sometimes_nan(self):
+        values = original(self)
+        calls["n"] += 1
+        if calls["n"] in (3, 5):  # the 2nd and 4th surrogates (call 1 is the estimate)
+            values = values.copy()
+            values[0, 10, 0, 1] = np.nan
+        return values
+
+    monkeypatch.setattr(Connectivity, "magnitude_squared_coherence", sometimes_nan)
+    with pytest.warns(
+        UserWarning, match=r"2 of 9 surrogates returned NaN at tested elements \(2 values"
+    ) as record:
+        result = lagged_connectivity.surrogate_test(
+            "magnitude_squared_coherence", kind="conjugation", n_surrogates=9, random_state=0
+        )
+    assert sum("returned NaN" in str(item.message) for item in record) == 1
+    assert result.p_value[0, 10, 0, 1] >= 3 / 10
+    assert np.all(result.fwer_p_value[np.isfinite(result.fwer_p_value)] >= 3 / 10)
