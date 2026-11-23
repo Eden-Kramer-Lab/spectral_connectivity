@@ -720,24 +720,15 @@ def connectivity_to_xarray(
         :func:`multitaper_connectivity`: ``delay``, ``group_delay``, and
         ``phase_slope_index`` consume only those bins, and any other measure
         is computed from the full spectrum and cropped to them. Pass it here,
-        not in ``connectivity_kwargs``. To integrate bands of a cropped
-        result, pass ``frequency_bands`` here too rather than calling
-        :func:`frequency_band_reduce` afterwards: a band edge between the last
-        kept bin and its dropped neighbour would lose the part of the band in
-        that neighbour's cell.
+        not in ``connectivity_kwargs``.
     frequency_decimation : int, default=1
         Keep every Nth frequency bin after applying ``frequency_range``, as in
-        :func:`multitaper_connectivity`; ``phase_slope_index`` and
-        ``group_delay`` have no frequency axis and are left as computed.
+        :func:`multitaper_connectivity`.
     frequency_bands : mapping of str to (float, float), optional
-        Reduce the selected bins into named bands, both endpoints included, as
-        in :func:`multitaper_connectivity` and :func:`frequency_band_reduce`.
-        Requesting ``frequency_bands`` or ``frequency_decimation`` with only
-        ``phase_slope_index`` and ``group_delay`` raises ``ValueError``.
+        Reduce the selected bins into named bands, as in
+        :func:`multitaper_connectivity`.
     frequency_reduction : {"mean", "integral"}, default="mean"
-        Band reduction, as in :func:`multitaper_connectivity`: integration is
-        restricted to ``power`` and ``cross_spectral_density``, and with
-        ``frequency_range`` it integrates the uncropped grid.
+        Band reduction, as in :func:`multitaper_connectivity`.
     connectivity_kwargs : mapping, optional
         Settings for the measure, e.g. ``{"pairs": [(0, 1)]}`` for
         ``subset_pairwise_spectral_granger_prediction`` or

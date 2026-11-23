@@ -369,8 +369,7 @@ window, so set `segment_duration` explicitly for electrophysiology data.
 `MorletWavelet.valid_time_frequency` identifies bins with full in-record support.
 For labeled results from any of these transforms, use
 `spectral_connectivity.connectivity_to_xarray(transform, method)`, which
-takes one measure name or a list of them and the same `frequency_range`,
-`frequency_decimation`, `frequency_bands`, and `frequency_reduction` as
+takes one measure name or a list of them and the same frequency options as
 `multitaper_connectivity`; it carries `valid_time_frequency` as a
 two-dimensional coordinate.
 
