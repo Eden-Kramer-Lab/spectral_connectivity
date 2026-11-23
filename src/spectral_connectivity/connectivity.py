@@ -960,7 +960,12 @@ class Connectivity:
         Finite non-negative weights with shape ``(time, trial, taper,
         frequency, 1)``. They are applied to every expectation and shared
         across signals. Transform constructors supply these automatically when
-        smoothing uses a non-uniform kernel or masks invalid edge estimates.
+        smoothing uses a non-uniform kernel, masks invalid edge estimates, or
+        (``Multitaper(valid_samples=...)``) drops trial windows with invalid
+        samples. Weights that only drop observations (0, or one common weight
+        in each bin) leave each bin the plain mean of the observations it
+        keeps, which the measures that count observations count
+        (:attr:`n_valid_observations`).
     observations_are_independent : bool, default=True
         Whether the trial/taper observations are statistically independent.
         Transform constructors set this ``False`` when the observation axis
@@ -984,6 +989,9 @@ class Connectivity:
         the raw count, not a weighted effective sample size, and it is not
         reduced for correlated observations (see
         ``observations_are_independent``).
+    n_valid_observations : ndarray of int
+        The observations with nonzero weight in each bin of a result, the
+        count the measures that count observations use.
 
     See Also
     --------

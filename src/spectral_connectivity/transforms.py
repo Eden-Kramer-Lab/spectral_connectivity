@@ -656,8 +656,8 @@ class SpectralTransform(Protocol):
     ``observation_weights`` : ndarray, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, 1), default None
         Finite, non-negative weights applied to every expectation over the
         coefficients and shared across signals, e.g. a smoothing kernel or a
-        mask for invalid edge estimates. ``None`` weights all observations
-        equally.
+        mask for invalid edge estimates or invalid samples (0 drops an
+        observation). ``None`` weights all observations equally.
     ``observations_are_independent`` : bool, default True
         Whether the trial and taper observations are statistically
         independent. Set it ``False`` when that axis holds correlated
