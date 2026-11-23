@@ -529,6 +529,17 @@ def test_labeled_results_record_the_model():
     assert estimator["n_fft_samples"] == var.n_fft_samples
     assert estimator["n_lags"] == 2
     assert estimator["n_time_windows"] == 1
+    # A larger model is recorded by shape and dtype, as large input attributes are.
+    large, large_noise = _dense_stable_var(n_signals=6, n_lags=3, spectral_radius=0.5, seed=1)
+    summarized = json.loads(
+        connectivity_to_xarray(
+            VARSpectrum(large, large_noise, sampling_frequency=_SAMPLING_FREQUENCY), "power"
+        ).attrs["transform_parameters_json"]
+    )["estimator"]
+    assert summarized["coefficients"] == {
+        "summarized_array": {"shape": [1, 3, 6, 6], "dtype": "float64"}
+    }
+    np.testing.assert_array_equal(summarized["noise_covariance"], [large_noise])
 
     timed = VARSpectrum(
         coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY, time=[2.0]

@@ -4040,12 +4040,20 @@ class VARSpectrum:
         )
 
     def _provenance_metadata(self) -> dict[str, Any]:
-        """The model and grid, serialized by the shared provenance builder."""
+        """The model and grid, serialized by the shared provenance builder.
+
+        The coefficients and covariance are recorded in full up to the size at
+        which input attributes are summarized, and by shape and dtype above it,
+        since every variable of a result carries the record.
+        """
+        # _provenance imports this module through connectivity.
+        from spectral_connectivity._provenance import _summarized_if_large
+
         return {
             "transform": self._transform_name,
-            "coefficients": self._coefficients,
-            "noise_covariance": self._noise_covariance,
-            "spectral_radius": self._spectral_radius,
+            "coefficients": _summarized_if_large(self._coefficients),
+            "noise_covariance": _summarized_if_large(self._noise_covariance),
+            "spectral_radius": _summarized_if_large(self._spectral_radius),
             "n_fft_samples": self.n_fft_samples,
             "n_lags": self.n_lags,
             "n_signals": self.n_signals,
