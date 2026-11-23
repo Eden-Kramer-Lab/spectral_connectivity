@@ -9,7 +9,7 @@ import xarray as xr
 
 from spectral_connectivity._backend import ON_GPU
 from spectral_connectivity.connectivity import Connectivity, _uniform_grid_spacing
-from spectral_connectivity.utils import to_numpy
+from spectral_connectivity.utils import summarized_if_large, to_numpy
 
 
 def _json_compatible(value: Any) -> Any:
@@ -228,7 +228,7 @@ def _shared_provenance_attrs(
     # and let characters such as "/" create an invalid NetCDF attribute name.
     if input_attrs:
         attrs["input_attrs_json"] = _canonical_json(
-            {key: _summarized_if_large(value) for key, value in input_attrs.items()}
+            {key: summarized_if_large(value) for key, value in input_attrs.items()}
         )
     return attrs
 
@@ -264,19 +264,3 @@ def _with_frequency_grid_metadata(
         for name, variable in result.data_vars.items():
             updated[name].attrs = grid_attrs(variable)
     return updated
-
-
-# Input attrs are copied onto every result variable, so an array attribute
-# larger than this is recorded by shape and dtype instead of by value.
-_MAX_INPUT_ATTR_ARRAY_SIZE = 100
-
-
-def _summarized_if_large(value: Any) -> Any:
-    """Replace an array with more than ``_MAX_INPUT_ATTR_ARRAY_SIZE`` elements."""
-    if isinstance(value, (np.ndarray, list, tuple)):
-        array = np.asarray(value)
-        if array.size > _MAX_INPUT_ATTR_ARRAY_SIZE:
-            return {
-                "summarized_array": {"shape": list(array.shape), "dtype": str(array.dtype)}
-            }
-    return value

@@ -46,6 +46,7 @@ from spectral_connectivity.utils import (
     reject_complex_var,
     reject_sampling_frequency_aliases,
     stacklevel_outside_package,
+    summarized_if_large,
     to_numpy,
     var_companion_matrices,
     var_is_unstable,
@@ -4122,17 +4123,13 @@ class VARSpectrum:
         which input attributes are summarized, and by shape and dtype above it,
         since every variable of a result carries the record.
         """
-        # _provenance imports this module through connectivity.
-        from spectral_connectivity._provenance import _summarized_if_large
-
         return {
             "transform": self._transform_name,
-            "coefficients": _summarized_if_large(self._coefficients),
-            "noise_covariance": _summarized_if_large(self._noise_covariance),
-            "spectral_radius": _summarized_if_large(self._spectral_radius),
+            "coefficients": summarized_if_large(self._coefficients),
+            "noise_covariance": summarized_if_large(self._noise_covariance),
+            "spectral_radius": summarized_if_large(self._spectral_radius),
             "n_fft_samples": self.n_fft_samples,
             "n_lags": self.n_lags,
-            "n_signals": self.n_signals,
             "n_time_windows": self.n_time_windows,
             "nyquist_frequency": self.nyquist_frequency,
             "sampling_frequency": self.sampling_frequency,

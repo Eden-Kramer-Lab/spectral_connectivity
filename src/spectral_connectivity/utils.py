@@ -672,3 +672,21 @@ def var_stabilizing_advice(spectral_radius: float) -> str:
         "c, so coefficients * c ** np.arange(1, n_lags + 1)[:, np.newaxis, "
         f"np.newaxis] with c = {0.9 / spectral_radius:.6g} gives a radius of 0.9."
     )
+
+
+# Provenance is copied onto every result variable, so an array in it (an
+# input attribute, a VAR model) larger than this is recorded by shape and
+# dtype instead of by value.
+MAX_PROVENANCE_ARRAY_SIZE = 100
+
+
+def summarized_if_large(value: Any) -> Any:
+    """Replace an array with more than ``MAX_PROVENANCE_ARRAY_SIZE`` elements
+    by ``{"summarized_array": {"shape": ..., "dtype": ...}}``."""
+    if isinstance(value, (np.ndarray, list, tuple)):
+        array = np.asarray(value)
+        if array.size > MAX_PROVENANCE_ARRAY_SIZE:
+            return {
+                "summarized_array": {"shape": list(array.shape), "dtype": str(array.dtype)}
+            }
+    return value
