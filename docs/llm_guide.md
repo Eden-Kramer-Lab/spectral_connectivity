@@ -156,7 +156,7 @@ Prefer the wrapper's labeled results so you never index these by hand.
   complex measures a complex mean.
 - **Other transforms.** For a `Welch`, `ShortTimeFourierTransform`,
   `MorletWavelet`, or your own transform, call
-  `spectral_connectivity.wrapper.connectivity_to_xarray(transform,
+  `spectral_connectivity.connectivity_to_xarray(transform,
   ["power", "magnitude_squared_coherence"], frequency_bands=...)` rather than
   looping over measures and calling `frequency_band_reduce`: it takes a list of
   measures and the same frequency options as `multitaper_connectivity`.

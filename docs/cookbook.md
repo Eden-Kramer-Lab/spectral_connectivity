@@ -422,7 +422,7 @@ and the same frequency options:
 
 ```python
 >>> from spectral_connectivity import Welch
->>> from spectral_connectivity.wrapper import connectivity_to_xarray
+>>> from spectral_connectivity import connectivity_to_xarray
 >>> welch = Welch(time_series, sampling_frequency=500, segment_duration=0.5)
 >>> welch_bands = connectivity_to_xarray(
 ...     welch,

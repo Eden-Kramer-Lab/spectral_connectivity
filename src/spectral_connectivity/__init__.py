@@ -54,6 +54,7 @@ from spectral_connectivity.utils import get_compute_backend
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
     MeasureInfo,
+    connectivity_to_xarray,
     fourier_connectivity,
     frequency_band_reduce,
     list_measures,
@@ -84,6 +85,7 @@ __all__ = [
     "SidednessWarning",
     "SpectralTransform",
     "Welch",
+    "connectivity_to_xarray",
     "estimate_frequency_resolution",
     "estimate_n_tapers",
     "fourier_connectivity",

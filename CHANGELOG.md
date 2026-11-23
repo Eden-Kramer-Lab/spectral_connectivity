@@ -49,6 +49,8 @@ The migration guide for code written against 2.x is
   takes `frequency_decimation`, `frequency_bands`, and `frequency_reduction`,
   so `Welch`, `ShortTimeFourierTransform`, and `MorletWavelet` results can be
   band-reduced in the call, on the uncropped grid with `frequency_range`.
+  It is now importable as `spectral_connectivity.connectivity_to_xarray`,
+  like the other two wrappers.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working
