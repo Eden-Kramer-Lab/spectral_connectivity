@@ -436,7 +436,11 @@ def _determinant_winding_number(
             factor[..., 0, 0] * factor[..., 1, 1] - factor[..., 0, 1] * factor[..., 1, 0]
         )
     else:
-        determinant = xp.linalg.det(factor)
+        # NumPy 1.24's complex det warns of a division by zero on
+        # well-conditioned input (and on a singular or NaN factor, whose
+        # winding is NaN or not counted anyway); later releases do not.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            determinant = xp.linalg.det(factor)
     if n_fft_samples is not None:
         n_nonnegative = determinant.shape[-1]
         determinant = xp.concatenate(
