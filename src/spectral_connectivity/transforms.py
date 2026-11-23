@@ -2210,8 +2210,12 @@ class Multitaper(_WindowedFourierTransform):
           samples). Needs generated DPSS tapers, ``is_low_bias=True``, and
           at least 2 tapers. Construction solves one dense eigenproblem, of
           the size of the window's valid samples, for each distinct pattern
-          of artifact samples in a trial window (about 25 ms on a laptop for
-          a 1000-sample window), and keeps their tapers.
+          of artifact samples in a trial window, and keeps their tapers. Its
+          cost grows as the cube of the window length: measured on a laptop,
+          about 30 ms for 1000 samples, 0.2 s for 2000, 2 s for 4000, and 20 s
+          (with a 0.5 GB kernel) for 8000, so a window as long as the
+          recording (``time_window_duration=None``) is impractical beyond a
+          few thousand samples.
 
     Attributes
     ----------
