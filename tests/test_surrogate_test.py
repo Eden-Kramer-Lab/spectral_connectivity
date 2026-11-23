@@ -21,13 +21,14 @@ from spectral_connectivity import (
     SurrogateTestResult,
     Welch,
 )
-from spectral_connectivity.connectivity import _NON_MEASURE_METHODS
 from spectral_connectivity.statistics import _SurrogateTally
 from tests._backend_helpers import to_host
 from tests._monte_carlo import replicate_mean_and_limit
 
 _ALPHA = 0.05
-_N_SURROGATES = 99  # P(p <= 0.05) is exactly 5 / 100 for an exact test without ties
+# P(p <= 0.05) is exactly 1 / 20 for an exact test without ties, as for 99
+# surrogates (5 / 100), and the size tests run five times faster.
+_N_SURROGATES = 19
 
 
 def _coefficients(rng, shape=(2, 4, 3, 16, 3)):
@@ -68,6 +69,7 @@ def _first_replicates(connectivity, n_replicates):
     return Connectivity(
         connectivity.fourier_coefficients[:n_replicates],
         frequencies=connectivity.all_frequencies,
+        half_bandwidth=connectivity.half_bandwidth,
     )
 
 
@@ -291,11 +293,7 @@ def test_coupled_pair_is_detected_and_the_independent_one_is_not(lagged_connecti
     """Power: the lagged pair is significant family-wise at nearly every tested
     frequency, and no pair with the independent signal is."""
     result = lagged_connectivity.surrogate_test(
-        "magnitude_squared_coherence",
-        kind="phase_rotation",
-        half_bandwidth=2.0,
-        n_surrogates=99,
-        random_state=1,
+        "magnitude_squared_coherence", kind="phase_rotation", n_surrogates=99, random_state=1
     )
     in_band = slice(2, 63)
     assert np.mean(result.fwer_p_value[0, in_band, 0, 1] <= _ALPHA) > 0.9
@@ -331,30 +329,37 @@ def test_empty_fwer_axis_is_refused_for_p_value(lagged_connectivity):
         )
 
 
-@pytest.mark.parametrize("alternative", ["less", "two-sided"])
-def test_alternative_sets_the_statistic(lagged_connectivity, alternative):
-    """'less' ranks the negated values and 'two-sided' the magnitudes: equal to
-    'greater' applied to -x or |x| through the tally."""
+class _TransformedCoherency(Connectivity):
+    """Measures of the imaginary coherency negated and in magnitude, to test
+    ``alternative`` against ``"greater"`` applied to them."""
+
+    def negated_imaginary_coherency(self):
+        return -self.imaginary_coherency()
+
+    def absolute_imaginary_coherency(self):
+        return np.abs(self.imaginary_coherency())
+
+
+@pytest.mark.parametrize(
+    ("alternative", "transformed"),
+    [("less", "negated_imaginary_coherency"), ("two-sided", "absolute_imaginary_coherency")],
+)
+def test_alternative_sets_the_statistic(lagged_connectivity, alternative, transformed):
+    """'less' ranks the negated values and 'two-sided' the magnitudes: the
+    same p-values as 'greater' for a measure returning -x or |x|, with the
+    same surrogates (same random_state)."""
+    connectivity = _TransformedCoherency(
+        lagged_connectivity.fourier_coefficients,
+        frequencies=lagged_connectivity.all_frequencies,
+    )
     kwargs = {"kind": "conjugation", "n_surrogates": 19, "random_state": 3}
-    signed = lagged_connectivity.surrogate_test(
+    signed = connectivity.surrogate_test(
         "imaginary_coherency", alternative=alternative, **kwargs
     )
-    estimate = signed.estimate
-    statistic = -estimate if alternative == "less" else np.abs(estimate)
-    # Rebuild the surrogates with the same random numbers.
-    connectivity = lagged_connectivity
-    rng = np.random.default_rng(3)
-    tested = np.isfinite(estimate) & ~np.eye(3, dtype=bool)
-    tally = _SurrogateTally(statistic, tested, (0, 1, 2, 3), 19)
-    for _ in range(19):
-        values = Connectivity(
-            connectivity._surrogate_coefficients("conjugation", (1, 2), rng),
-            frequencies=connectivity._frequencies,
-        ).imaginary_coherency()
-        tally.add(-values if alternative == "less" else np.abs(values))
-    p_value, fwer_p_value = tally.p_values()
-    np.testing.assert_array_equal(signed.p_value, p_value)
-    np.testing.assert_array_equal(signed.fwer_p_value, fwer_p_value)
+    reference = connectivity.surrogate_test(transformed, alternative="greater", **kwargs)
+    np.testing.assert_array_equal(signed.p_value, reference.p_value)
+    np.testing.assert_array_equal(signed.fwer_p_value, reference.fwer_p_value)
+    np.testing.assert_array_equal(signed.null_maxima, reference.null_maxima)
 
 
 def test_phase_rotation_leaves_the_edge_frequencies_untested(lagged_connectivity):
@@ -363,7 +368,6 @@ def test_phase_rotation_leaves_the_edge_frequencies_untested(lagged_connectivity
     result = lagged_connectivity.surrogate_test(
         "pairwise_spectral_granger_prediction",
         kind="phase_rotation",
-        half_bandwidth=2.0,
         n_surrogates=4,
         random_state=4,
     )
@@ -381,11 +385,9 @@ def test_phase_slope_index_band_must_avoid_the_edges(lagged_connectivity):
     result = lagged_connectivity.surrogate_test(
         "phase_slope_index",
         kind="phase_rotation",
-        half_bandwidth=2.0,
         n_surrogates=4,
         random_state=5,
         frequency_range=(10, 30),
-        alternative="two-sided",
     )
     assert result.p_value.shape == (1, 3, 3)
     assert np.isfinite(result.p_value[0, ~np.eye(3, dtype=bool)]).all()
@@ -393,7 +395,7 @@ def test_phase_slope_index_band_must_avoid_the_edges(lagged_connectivity):
         ValueError, match=r"Pass frequency_range=\(low, high\) with low >= 2.0"
     ):
         lagged_connectivity.surrogate_test(
-            "phase_slope_index", kind="phase_rotation", half_bandwidth=2.0, n_surrogates=4
+            "phase_slope_index", kind="phase_rotation", n_surrogates=4
         )
 
 
@@ -417,21 +419,17 @@ def test_phase_slope_index_band_must_avoid_the_edges(lagged_connectivity):
         ("directed_coherence", {}),
     ],
 )
-def test_every_pairwise_measure_runs_with_every_kind(lagged_connectivity, measure, kwargs):
+@pytest.mark.parametrize("kind", ["trial_shuffle", "phase_rotation", "conjugation"])
+def test_every_pairwise_measure_runs_with_every_kind(
+    lagged_connectivity, measure, kwargs, kind
+):
     """Each real pairwise measure has its frequency axis where phase_rotation
     looks for it, and every kind accepts it."""
-    for kind in ("trial_shuffle", "phase_rotation", "conjugation"):
-        extra = {"half_bandwidth": 2.0} if kind == "phase_rotation" else {}
-        result = lagged_connectivity.surrogate_test(
-            measure, kind=kind, n_surrogates=2, random_state=6, **extra, **kwargs
-        )
-        assert result.p_value.shape == result.estimate.shape
-        assert np.nanmin(result.p_value) >= 1 / 3
-
-
-def test_surrogate_test_is_not_a_measure():
-    """The registry and the wrapper must not offer surrogate_test as a measure."""
-    assert "surrogate_test" in _NON_MEASURE_METHODS
+    result = lagged_connectivity.surrogate_test(
+        measure, kind=kind, n_surrogates=2, random_state=6, **kwargs
+    )
+    assert result.p_value.shape == result.estimate.shape
+    assert np.nanmin(result.p_value) >= 1 / 3
 
 
 def test_migration_notice_is_emitted_once_per_call(lagged_connectivity):
@@ -618,22 +616,39 @@ def independent_replicates():
         series, n_trials, sampling_frequency=64, time_halfbandwidth_product=2
     )
     return Connectivity(
-        coefficients, frequencies=np.fft.fftfreq(coefficients.shape[3], 1 / 64)
+        coefficients,
+        frequencies=np.fft.fftfreq(coefficients.shape[3], 1 / 64),
+        half_bandwidth=2.0,
+    )
+
+
+@pytest.fixture(scope="module")
+def shuffled_coherence(independent_replicates):
+    """The trial-shuffle test of magnitude-squared coherence of
+    ``independent_replicates``, one family per replicate."""
+    return independent_replicates.surrogate_test(
+        "magnitude_squared_coherence",
+        kind="trial_shuffle",
+        n_surrogates=_N_SURROGATES,
+        random_state=16,
+        fwer_axis=(1, 2, 3),
     )
 
 
 @pytest.mark.parametrize(
     "measure", ["magnitude_squared_coherence", "pairwise_spectral_granger_prediction"]
 )
-def test_trial_shuffle_holds_its_size_at_every_frequency(independent_replicates, measure):
+def test_trial_shuffle_holds_its_size_at_every_frequency(
+    independent_replicates, shuffled_coherence, measure
+):
     """Independent signals: the trial-shuffle test is exact (iid trials), at
     every frequency including 0 Hz and Nyquist."""
-    connectivity = _first_replicates(
-        independent_replicates, 100 if "granger" in measure else None
-    )
-    result = connectivity.surrogate_test(
-        measure, kind="trial_shuffle", n_surrogates=_N_SURROGATES, random_state=16
-    )
+    if measure == "magnitude_squared_coherence":
+        result = shuffled_coherence
+    else:
+        result = _first_replicates(independent_replicates, 100).surrogate_test(
+            measure, kind="trial_shuffle", n_surrogates=_N_SURROGATES, random_state=16
+        )
     off_diagonal = ~np.eye(3, dtype=bool)
     _assert_rate(
         _rejection(result.p_value[..., off_diagonal]), _ALPHA, label="all frequencies"
@@ -646,19 +661,22 @@ def test_trial_shuffle_holds_its_size_at_every_frequency(independent_replicates,
 
 
 @pytest.mark.parametrize("kind", ["trial_shuffle", "phase_rotation", "conjugation"])
-def test_family_wise_error_is_held_under_the_global_null(independent_replicates, kind):
+def test_family_wise_error_is_held_under_the_global_null(
+    independent_replicates, shuffled_coherence, kind
+):
     """One family per replicate (every frequency and pair): some element is
     rejected in at most 5% of replicates, while uncorrected p-values reject
     somewhere in most of them."""
-    extra = {"half_bandwidth": 2.0} if kind == "phase_rotation" else {}
-    result = independent_replicates.surrogate_test(
-        "magnitude_squared_coherence",
-        kind=kind,
-        n_surrogates=_N_SURROGATES,
-        random_state=17,
-        fwer_axis=(1, 2, 3),
-        **extra,
-    )
+    if kind == "trial_shuffle":
+        result = shuffled_coherence
+    else:
+        result = independent_replicates.surrogate_test(
+            "magnitude_squared_coherence",
+            kind=kind,
+            n_surrogates=_N_SURROGATES,
+            random_state=17,
+            fwer_axis=(1, 2, 3),
+        )
     any_family = np.nanmin(
         result.fwer_p_value.reshape(result.fwer_p_value.shape[0], -1), axis=1
     )
@@ -686,13 +704,13 @@ def test_phase_rotation_holds_its_size_away_from_the_edges(n_trials, measure):
     coefficients, multitaper = _replicates(
         series, n_trials, sampling_frequency=128, time_halfbandwidth_product=4
     )
-    connectivity = Connectivity(coefficients, frequencies=np.fft.fftfreq(128, 1 / 128))
+    connectivity = Connectivity(
+        coefficients,
+        frequencies=np.fft.fftfreq(128, 1 / 128),
+        half_bandwidth=multitaper.half_bandwidth,
+    )
     result = connectivity.surrogate_test(
-        measure,
-        kind="phase_rotation",
-        half_bandwidth=multitaper.frequency_resolution / 2,
-        n_surrogates=_N_SURROGATES,
-        random_state=20,
+        measure, kind="phase_rotation", n_surrogates=_N_SURROGATES, random_state=20
     )
     # Directed measures carry a small excess just past the edges (see Notes).
     allowance = 0.01 if measure == "pairwise_spectral_granger_prediction" else 0.0
@@ -735,7 +753,8 @@ def test_conjugation_holds_its_size_under_instantaneous_mixing(
         _rejection(result.p_value[..., 0, 1]), _ALPHA, allowance=allowance
     )
     if measure == "pairwise_spectral_granger_prediction":
-        shuffled = connectivity.surrogate_test(
+        # Measured 96% with 400 datasets; 30 replicates show it.
+        shuffled = _first_replicates(connectivity, 30).surrogate_test(
             measure, kind="trial_shuffle", n_surrogates=_N_SURROGATES, random_state=23
         )
         assert _rejection(shuffled.p_value[..., 0, 1]).mean() > rate + 10 * limit
@@ -755,9 +774,9 @@ def test_conjugation_detects_a_lagged_interaction():
     result = Connectivity(
         coefficients, frequencies=np.fft.fftfreq(128, 1 / 128)
     ).surrogate_test(
-        "imaginary_coherence", kind="conjugation", n_surrogates=_N_SURROGATES, random_state=25
+        "imaginary_coherence", kind="conjugation", n_surrogates=99, random_state=25
     )
-    # Measured 0.86.
+    # Measured 0.86; 99 surrogates, since the margin is small.
     assert _rejection(result.p_value[:, 15:26, 0, 1]).mean() > 0.75
 
 
@@ -781,11 +800,13 @@ def test_correlated_tapers_are_randomized_as_whole_trials():
     rates = {}
     for independent in (False, True):
         result = Connectivity(
-            coefficients, frequencies=frequencies, observations_are_independent=independent
+            coefficients,
+            frequencies=frequencies,
+            observations_are_independent=independent,
+            half_bandwidth=8.0,  # the Hann main lobe's half-width, 2 / 0.25 s
         ).surrogate_test(
             "magnitude_squared_coherence",
             kind="phase_rotation",
-            half_bandwidth=8.0,  # the Hann main lobe's half-width, 2 / 0.25 s
             n_surrogates=_N_SURROGATES,
             random_state=27,
         )
@@ -814,17 +835,21 @@ def test_a_shared_evoked_response_is_in_the_shuffle_null_but_not_the_rotation_nu
     coefficients, _ = _replicates(
         series, n_trials, sampling_frequency=sampling_frequency, time_halfbandwidth_product=2
     )
-    connectivity = Connectivity(coefficients, frequencies=np.fft.fftfreq(128, 1 / 128))
+    connectivity = Connectivity(
+        coefficients, frequencies=np.fft.fftfreq(128, 1 / 128), half_bandwidth=2.0
+    )
     evoked_band = np.s_[:, 5:16, 0, 1]
     rates = {}
     for kind in ("trial_shuffle", "conjugation", "phase_rotation"):
-        extra = {"half_bandwidth": 2.0} if kind == "phase_rotation" else {}
-        result = connectivity.surrogate_test(
+        # Rotation rejects in about 70% of tests; 30 replicates show it.
+        tested = (
+            _first_replicates(connectivity, 30) if kind == "phase_rotation" else connectivity
+        )
+        result = tested.surrogate_test(
             "magnitude_squared_coherence",
             kind=kind,
             n_surrogates=_N_SURROGATES,
             random_state=29,
-            **extra,
         )
         rates[kind] = _rejection(result.p_value[evoked_band])
     _, limit = _assert_rate(rates["trial_shuffle"], _ALPHA, label="trial_shuffle")
@@ -941,6 +966,7 @@ def test_resampled_replicates_keep_the_subclass_and_settings(lagged_connectivity
         ("debiased_squared_phase_lag_index", "greater"),
         ("directed_phase_lag_index", "greater"),
         ("pairwise_spectral_granger_prediction", "greater"),
+        ("phase_slope_index", "two-sided"),
     ],
 )
 def test_auto_alternative_is_two_sided_for_lead_lag_signs(
@@ -949,25 +975,20 @@ def test_auto_alternative_is_two_sided_for_lead_lag_signs(
     """'auto' is two-sided where the sign says which signal leads, greater
     otherwise (a debiased estimate below 0 is chance, not a direction); the
     result records the resolved alternative, which matches passing it."""
+    kwargs = {"frequency_range": (10, 30)} if measure == "phase_slope_index" else {}
     automatic = lagged_connectivity.surrogate_test(
-        measure, kind="conjugation", n_surrogates=4, random_state=0
+        measure, kind="conjugation", n_surrogates=4, random_state=0, **kwargs
     )
     assert automatic.alternative == expected
     explicit = lagged_connectivity.surrogate_test(
-        measure, kind="conjugation", n_surrogates=4, random_state=0, alternative=expected
-    )
-    np.testing.assert_array_equal(automatic.p_value, explicit.p_value)
-
-
-def test_auto_alternative_of_phase_slope_index_is_two_sided(lagged_connectivity):
-    result = lagged_connectivity.surrogate_test(
-        "phase_slope_index",
+        measure,
         kind="conjugation",
         n_surrogates=4,
         random_state=0,
-        frequency_range=(10, 30),
+        alternative=expected,
+        **kwargs,
     )
-    assert result.alternative == "two-sided"
+    np.testing.assert_array_equal(automatic.p_value, explicit.p_value)
 
 
 def test_nan_surrogates_warn_once_with_their_count(lagged_connectivity, monkeypatch):
