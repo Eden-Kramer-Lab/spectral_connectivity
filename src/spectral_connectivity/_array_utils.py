@@ -85,17 +85,26 @@ _NumberT = TypeVar("_NumberT", bound=np.number)
 def _regularized_inverse(
     matrix: NDArray[_NumberT],
     regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+    *,
+    per_signal: bool = False,
 ) -> NDArray[_NumberT]:
     """Return the Tikhonov-regularized inverse of a batched matrix.
 
-    Solves ``(M + λI) X = I`` instead of inverting ``M`` directly. The diagonal
-    loading ``λ = TIKHONOV_REGULARIZATION_FACTOR * sqrt(mean(|M|^2))`` is scaled
-    per batched matrix (over the last two axes), so windows/frequencies with very
-    different power are each conditioned appropriately. Using the RMS magnitude
-    (amplitude units) rather than the mean square keeps ``λ`` in the same units
-    as ``M``: adding ``λI`` is dimensionally consistent and the regularized
-    inverse is scale-covariant (rescaling ``M`` by ``c`` rescales ``λ`` by ``c``,
-    leaving downstream connectivity measures invariant).
+    Solves ``(M + λ E) X = I`` instead of inverting ``M`` directly, per
+    batched matrix (over the last two axes), with ``λ = regularization``.
+
+    By default ``E = sqrt(mean(|M|^2)) I``, the RMS magnitude of ``M``, so
+    windows and frequencies of very different power are each conditioned
+    appropriately and the loading is in the units of ``M``: rescaling ``M`` by
+    ``c`` rescales the loading by ``c``.
+
+    With ``per_signal``, ``E = diag(|M_ii|)`` loads each signal by its own
+    diagonal entry, so for positive diagonal ``D1`` and ``D2`` (and no zero
+    diagonal entry) the inverse of ``D1 M D2`` is ``D2⁻¹ X D1⁻¹``: covariant
+    under rescaling the signals one by one, where the RMS loading perturbs a
+    signal far weaker than the others by far more than ``λ`` of its own size.
+    A diagonal entry that is exactly zero (a signal with no power) is loaded
+    by the RMS magnitude instead, which keeps the inverse finite.
 
     Parameters
     ----------
@@ -103,65 +112,26 @@ def _regularized_inverse(
         Batched (real or complex) matrices to invert.
     regularization : float, default=1e-12
         Relative diagonal-loading factor.
+    per_signal : bool, default=False
+        Load each diagonal entry by its own magnitude.
 
     Returns
     -------
     NDArray, shape (..., n_signals, n_signals)
         Regularized inverse of each batched matrix.
     """
-    lam = regularization * xp.sqrt(
-        xp.mean(xp.real(xp.conj(matrix) * matrix), axis=(-2, -1), keepdims=True)
-    )
+    rms = xp.sqrt(xp.mean(xp.real(xp.conj(matrix) * matrix), axis=(-2, -1), keepdims=True))
     identity = xp.eye(matrix.shape[-1], dtype=matrix.dtype)
     # Broadcast identity to the batch dimensions so CuPy's batched solve accepts
     # the RHS shape (NumPy tolerates the mismatch; CuPy does not).
     identity_batched = xp.broadcast_to(identity, matrix.shape)
-    return xp.linalg.solve(matrix + lam * identity_batched, identity_batched)
-
-
-def _diagonally_loaded_inverse(
-    matrix: NDArray[_NumberT],
-    regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
-) -> NDArray[_NumberT]:
-    """Inverse of a batched matrix with each diagonal entry loaded by its own size.
-
-    Solves ``(M + λ E) X = I`` with ``E = diag(|M_ii|)`` and
-    ``λ = regularization``, per batched matrix (over the last two axes).
-    Loading each signal in proportion to its own diagonal entry makes the
-    inverse covariant under rescaling the signals: for positive diagonal ``D1``
-    and ``D2``, and no zero diagonal entry, the inverse of ``D1 M D2`` is
-    ``D2⁻¹ X D1⁻¹``. That covers the factor's lag-0 coefficient (rows scaled),
-    the transfer function (``D H D⁻¹``), and the noise covariance
-    (``D Σ D``), so the directed measures read from their inverses are
-    covariant (DTF, PDC, dDTF) or invariant (the spectral Granger family,
-    directed coherence, gPDC) under rescaling the signals. A loading of the
-    matrix's RMS magnitude, as in :func:`_regularized_inverse`, is covariant
-    only under a common scale: it perturbs a signal far weaker than the others
-    by far more than ``λ`` of its own size. A diagonal entry that is exactly
-    zero (a signal with no power) is loaded by ``λ`` times the RMS magnitude
-    of the matrix instead, which keeps the inverse finite but is not
-    covariant.
-
-    Parameters
-    ----------
-    matrix : NDArray, shape (..., n_signals, n_signals)
-        Batched (real or complex) matrices to invert.
-    regularization : float, default=1e-12
-        Relative diagonal-loading factor.
-
-    Returns
-    -------
-    NDArray, shape (..., n_signals, n_signals)
-        Regularized inverse of each batched matrix.
-    """
-    diagonal = xp.abs(xp.diagonal(matrix, axis1=-2, axis2=-1))
-    rms = xp.sqrt(xp.mean(xp.real(xp.conj(matrix) * matrix), axis=(-2, -1), keepdims=True))[
-        ..., 0
-    ]
-    loading = regularization * xp.where(diagonal > 0, diagonal, rms)
-    identity = xp.eye(matrix.shape[-1], dtype=matrix.dtype)
-    identity_batched = xp.broadcast_to(identity, matrix.shape)
-    return xp.linalg.solve(matrix + identity * loading[..., xp.newaxis, :], identity_batched)
+    if per_signal:
+        diagonal = xp.abs(xp.diagonal(matrix, axis1=-2, axis2=-1))
+        loading = regularization * xp.where(diagonal > 0, diagonal, rms[..., 0])
+        loaded = matrix + identity * loading[..., xp.newaxis, :]
+    else:
+        loaded = matrix + regularization * rms * identity_batched
+    return xp.linalg.solve(loaded, identity_batched)
 
 
 def _batched_inverse_square_root(

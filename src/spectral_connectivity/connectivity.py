@@ -21,7 +21,6 @@ from spectral_connectivity._array_utils import (
     _clip_rounding_above_one,
     _complex_inner_product,
     _conjugate_transpose,
-    _diagonally_loaded_inverse,
     _divide_where,
     _NumberT,
     _regularized_inverse,
@@ -2306,7 +2305,7 @@ class Connectivity:
 
     @cached_property
     def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
-        return _diagonally_loaded_inverse(self._transfer_function)
+        return _regularized_inverse(self._transfer_function, per_signal=True)
 
     def _expectation(self, values: BackendArray, *, frequency_axis: int = 3) -> BackendArray:
         """Average observation axes, applying optional spectral weights.
@@ -6359,7 +6358,9 @@ class Connectivity:
             self._transfer_function / _total_inflow(self._transfer_function, axis=(-1, -3))
         )
         mvar_coefficients = self._MVAR_Fourier_coefficients
-        inverse_noise_covariance = _diagonally_loaded_inverse(self._noise_covariance)
+        inverse_noise_covariance = _regularized_inverse(
+            self._noise_covariance, per_signal=True
+        )
         inverse_spectrum = xp.matmul(
             xp.matmul(
                 _conjugate_transpose(mvar_coefficients),

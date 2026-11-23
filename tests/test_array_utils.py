@@ -7,8 +7,8 @@ import numpy as np
 from spectral_connectivity._array_utils import (
     _complex_inner_product,
     _conjugate_transpose,
-    _diagonally_loaded_inverse,
     _divide_where,
+    _regularized_inverse,
     _squared_magnitude,
 )
 from tests._backend_helpers import to_device, to_host
@@ -67,7 +67,7 @@ def test__complex_inner_product():
     )
 
 
-def test_diagonally_loaded_inverse_is_covariant_under_rescaling_the_signals():
+def test_per_signal_regularized_inverse_is_covariant_under_rescaling_the_signals():
     """The inverse of ``D1 M D2`` is ``D2^-1 inverse(M) D1^-1`` for positive
     diagonal ``D1`` and ``D2`` spanning twelve orders of magnitude, and the
     loading perturbs a well-conditioned inverse only at the 1e-12 level. A
@@ -79,8 +79,8 @@ def test_diagonally_loaded_inverse_is_covariant_under_rescaling_the_signals():
     right = np.array([3e5, 1.0, 2e-6])
     rescaled = left[:, np.newaxis] * matrix * right[np.newaxis, :]
 
-    inverse = to_host(_diagonally_loaded_inverse(to_device(matrix)))
-    rescaled_inverse = to_host(_diagonally_loaded_inverse(to_device(rescaled)))
+    inverse = to_host(_regularized_inverse(to_device(matrix), per_signal=True))
+    rescaled_inverse = to_host(_regularized_inverse(to_device(rescaled), per_signal=True))
 
     np.testing.assert_allclose(inverse, np.linalg.inv(matrix), rtol=1e-9)
     np.testing.assert_allclose(
@@ -89,4 +89,6 @@ def test_diagonally_loaded_inverse_is_covariant_under_rescaling_the_signals():
     dead_signal = matrix[0].copy()
     dead_signal[2, :] = 0
     dead_signal[:, 2] = 0
-    assert np.isfinite(to_host(_diagonally_loaded_inverse(to_device(dead_signal)))).all()
+    assert np.isfinite(
+        to_host(_regularized_inverse(to_device(dead_signal), per_signal=True))
+    ).all()
