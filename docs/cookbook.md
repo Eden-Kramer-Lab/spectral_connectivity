@@ -404,8 +404,8 @@ up to 37% for one spanning 2400 (poles of radius 0.95 at 0.1 cycles per sample,
 two 3-sample gaps). In exchange the valid samples are used: with three of four
 trials gapped in every window, the variance of white-noise power is a third of
 that of `"drop"`. Building the transform finds the tapers of each distinct
-pattern of artifacts in a trial window, 1 to 2 ms per pattern for 1000
-samples and 36 ms for 60000. Windows without artifacts are unchanged.
+pattern of artifacts in a trial window, about 2 ms per pattern for 1000
+samples and 65 ms for 60000. Windows without artifacts are unchanged.
 :::
 
 ## Group measures: canonical coherence between areas

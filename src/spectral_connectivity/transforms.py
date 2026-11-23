@@ -2264,7 +2264,7 @@ class Multitaper(_WindowedFourierTransform):
           ``taper_weighting`` uses each window's own concentrations. Needs
           generated DPSS tapers, ``is_low_bias=True`` and at least 2 tapers.
           Construction finds the tapers of each distinct artifact pattern,
-          1 to 2 ms per pattern for a 1000-sample window. When to use it,
+          about 2 ms per pattern for a 1000-sample window. When to use it,
           its leakage and its gap limit:
           https://spectral-connectivity.readthedocs.io/en/latest/cookbook.html#leave-out-artifacts-and-missing-samples
 
@@ -4919,22 +4919,50 @@ def _leading_eigenpairs(
 
     Implicitly restarted Lanczos (ARPACK) on the FFT operator of
     :func:`_restricted_toeplitz_operator`, from a fixed start vector so the
-    result is reproducible. ARPACK needs more Lanczos vectors than
-    eigenpairs and fewer than the matrix order; at or below its default
-    count, ``max(2 k + 1, 20)``, the matrix is solved densely.
+    result is reproducible. Lanczos from one vector can miss copies of a
+    repeated eigenvalue (SciPy 1.11's ARPACK finds 9 of the 10 concentrations
+    within 1e-5 of 1 of a 1000-sample window at NW = 8), so the largest
+    eigenvalue of the matrix with the pairs found deflated, which any vector
+    of its eigenspace gives, is added while it is not below the smallest
+    found, and the pairs are recomputed on their span. ARPACK needs more
+    Lanczos vectors than eigenpairs and fewer than the matrix order; at or
+    below its default count, ``max(2 k + 1, 20)``, the matrix is solved
+    densely.
     """
     n = indices.size
     if n <= max(2 * k + 1, 20):
         kernel = first_row[np.abs(indices[:, np.newaxis] - indices[np.newaxis, :])]
         return scipy_eigh(kernel, subset_by_index=[n - k, n - 1])
-    eigenvalues, eigenvectors = scipy_eigsh(
-        _restricted_toeplitz_operator(first_row, indices),
-        k=k,
-        which="LA",
-        tol=0,
-        # Generic, so no eigenvector is orthogonal to it by symmetry.
-        v0=np.random.default_rng(0).standard_normal(n),
-    )
+    operator = _restricted_toeplitz_operator(first_row, indices)
+    # Generic, so no eigenvector is orthogonal to it by symmetry.
+    start = np.random.default_rng(0).standard_normal(n)
+    eigenvalues, eigenvectors = scipy_eigsh(operator, k=k, which="LA", tol=0, v0=start)
+    for _ in range(k):
+
+        def deflated(
+            vector: NDArray[np.floating],
+            values: NDArray[np.floating] = eigenvalues,
+            vectors: NDArray[np.floating] = eigenvectors,
+        ) -> NDArray[np.floating]:
+            vector = np.ravel(vector)
+            product: NDArray[np.floating] = operator.matvec(vector) - vectors @ (
+                values * (vectors.T @ vector)
+            )
+            return product
+
+        (largest,), missed = scipy_eigsh(
+            LinearOperator((n, n), matvec=deflated, dtype=np.float64),
+            k=1,
+            which="LA",
+            tol=0,
+            v0=start,
+        )
+        if largest <= eigenvalues.min():
+            break
+        basis, _ = np.linalg.qr(np.column_stack([eigenvectors, missed]))
+        projected = basis.T @ np.column_stack([operator.matvec(column) for column in basis.T])
+        ritz_values, ritz_vectors = np.linalg.eigh((projected + projected.T) / 2)
+        eigenvalues, eigenvectors = ritz_values[1:], basis @ ritz_vectors[:, 1:]
     return eigenvalues, eigenvectors
 
 

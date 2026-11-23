@@ -230,6 +230,35 @@ def test_tapers_of_equal_concentration_do_not_depend_on_the_solver(monkeypatch):
     np.testing.assert_allclose(gapless, reference, atol=1e-8)
 
 
+def test_a_repeated_concentration_lanczos_misses_is_recovered(monkeypatch):
+    """When Lanczos misses one copy of a repeated eigenvalue (as SciPy 1.11's
+    ARPACK does at NW = 8), the deflation check finds it: here the first
+    solve is made to miss the third largest."""
+    from spectral_connectivity import transforms
+
+    n_time, nw, k = 256, 8, 15
+    half_bandwidth = nw / n_time
+    sinc = 2 * half_bandwidth * np.sinc(2 * half_bandwidth * np.arange(n_time))
+    indices = np.flatnonzero(_valid([(40, 10)], n_time=n_time))
+    solve = transforms.scipy_eigsh
+    calls = []
+
+    def missing_one(operator, k, **kwargs):
+        calls.append(k)
+        if len(calls) > 1:
+            return solve(operator, k=k, **kwargs)
+        values, vectors = solve(operator, k=k + 1, **kwargs)
+        keep = np.argsort(values)[::-1] != 2
+        return values[keep], vectors[:, keep]
+
+    monkeypatch.setattr(transforms, "scipy_eigsh", missing_one)
+    values, vectors = transforms._leading_eigenpairs(sinc, indices, k)
+    assert calls[1:3] == [1, 1]  # found the missed one, then confirmed none is left
+    expected, _ = _brute_force(_valid([(40, 10)], n_time=n_time), nw)
+    np.testing.assert_allclose(np.sort(values)[::-1], expected[:k], atol=1e-12)
+    np.testing.assert_allclose(vectors.T @ vectors, np.eye(k), atol=1e-12)
+
+
 def _top(eigenpairs, k):
     """The ``k`` largest of ascending ``eigenpairs``."""
     eigenvalues, eigenvectors = eigenpairs
