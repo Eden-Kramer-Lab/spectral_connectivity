@@ -642,24 +642,19 @@ def _shared_dynamics_chain(rho):
 
 
 @pytest.mark.parametrize(
-    "rho",
-    [
-        0.9,
-        pytest.param(
-            0.99,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="Wilson factorization of badly scaled spectra; fixed by "
-                "fix/wilson-scaling",
-            ),
-        ),
-    ],
+    ("rho", "rtol"),
+    [(0.9, 0), (0.95, 0), (0.97, 0), (0.99, 1e-6)],
 )
-def test_pairwise_granger_of_a_chain_with_shared_slow_dynamics(rho):
-    """At rho 0.99 the signals' standard deviations are about 7, 100 and 1800,
-    and the Wilson factorization of the (0, 2) pair converges to a factor
-    that reproduces its spectrum but is not minimum phase: 2 -> 0, which is
-    exactly 0 (signal 0 is driven by nothing), came out 3.9."""
+def test_pairwise_granger_of_a_chain_with_shared_slow_dynamics(rho, rtol):
+    """Signals whose powers differ by orders of magnitude (at rho 0.99 their
+    standard deviations are about 7, 100 and 1800), with poles near the unit
+    circle. Measured against the state-space oracle on the default grid, the
+    largest error is 5.7e-11, 5.8e-10 and 4.0e-9 for rho 0.90, 0.95 and 0.97,
+    inside atol 1e-8. At rho 0.99 it is 3.2e-7, at 0 Hz, where the value is
+    12.0 (2.7e-8 relative) and the pair's spectrum has condition number
+    6.4e7: a float64 rounding floor that neither a 4x grid nor a tighter
+    Wilson tolerance moves, so there the allowance is atol 1e-8 plus rtol
+    1e-6, 40 times the measured error."""
     coefficients, noise_covariance = _shared_dynamics_chain(rho)
     var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
     granger = _directed(
@@ -669,5 +664,35 @@ def test_pairwise_granger_of_a_chain_with_shared_slow_dynamics(rho):
         coefficients, noise_covariance, var.n_fft_samples
     )
     np.testing.assert_allclose(
-        granger[:, _OFF_DIAGONAL], oracle[:, _OFF_DIAGONAL], rtol=0, atol=1e-8
+        granger[:, _OFF_DIAGONAL], oracle[:, _OFF_DIAGONAL], rtol=rtol, atol=1e-8
     )
+
+
+@pytest.mark.cpu_only(reason="the replaced start is computed with NumPy")
+def test_the_chain_check_catches_an_unscaled_factorization(monkeypatch):
+    """The defect the rho 0.99 chain guards against lies far outside its
+    allowance: with the factorization's previous start (the transposed lower
+    Cholesky factor of the zero-lag matrix) and without its scaling of the
+    signals to unit power, Wilson converged, without a warning, to a factor
+    that is not minimum phase, and 2 -> 0, exactly 0, came out 3.9."""
+    from spectral_connectivity import minimum_phase_decomposition as decomposition
+    from spectral_connectivity._backend import xp
+
+    def transposed_cholesky_start(cross_spectral_matrix, n_fft_samples=None):
+        zero_lag = np.fft.irfft(cross_spectral_matrix, n=n_fft_samples, axis=-3)[..., :1, :, :]
+        return xp.linalg.cholesky(xp.asarray(zero_lag)).swapaxes(-1, -2)
+
+    monkeypatch.setattr(decomposition, "_get_initial_conditions", transposed_cholesky_start)
+    monkeypatch.setattr(
+        decomposition,
+        "_signal_scale",
+        lambda cross_spectral_matrix: xp.ones(
+            cross_spectral_matrix.shape[:-3] + cross_spectral_matrix.shape[-1:]
+        ),
+    )
+    coefficients, noise_covariance = _shared_dynamics_chain(0.99)
+    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    granger = _directed(
+        Connectivity.from_transform(var), "pairwise_spectral_granger_prediction"
+    )[0]
+    assert granger[:, 2, 0].max() > 1.0  # many allowances (1e-8) from its true 0
