@@ -405,8 +405,51 @@ def _source_first(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
     return wrapper
 
 
-def _refused_for_exact_spectrum(method: Callable[_P, _R]) -> Callable[_P, _R]:
-    """Make ``method`` raise on a ``Connectivity`` of an exact spectrum.
+# Why a measure that needs samples is refused for an exact spectrum.
+_ExactSpectrumRefusal = Literal["per_observation", "significance_gate", "sampling_error"]
+_SIMULATE_INSTEAD = (
+    "simulate data from the model (spectral_connectivity.simulate.simulate_MVAR) "
+    "and estimate it with Multitaper"
+)
+
+
+def _exact_spectrum_refusal_message(method: str, reason: _ExactSpectrumRefusal) -> str:
+    """What to say when ``method`` is called on an exact spectrum, for ``reason``."""
+    intro = (
+        f"{method} is not defined for an exact spectrum (is_exact_spectrum is "
+        "True, as for VARSpectrum), whose coefficients are one factor of the "
+        "model's cross-spectral matrix, not samples."
+    )
+    if reason == "sampling_error":
+        return (
+            f"{intro} {method} estimates sampling error by leaving out one "
+            "observation at a time, and an exact spectrum has no sampling error "
+            f"to estimate. For the spread of an estimate, {_SIMULATE_INSTEAD}, and "
+            f"apply {method} to that."
+        )
+    if reason == "significance_gate":
+        return (
+            f"{intro} {method} uses only the frequencies whose coherence passes "
+            "a significance test whose degrees of freedom are n_observations, "
+            "which here counts the columns of that factor, so which frequencies "
+            "it keeps would be arbitrary. phase_slope_index and coherence_phase "
+            f"are computed from the spectral matrix alone; or {_SIMULATE_INSTEAD}."
+        )
+    return (
+        f"{intro} {method} averages a function of each trial/taper "
+        "observation (the debiased measures and pairwise phase consistency "
+        "also count them), so its value would depend on an arbitrary choice "
+        "of factor. Use a measure of the cross-spectral matrix (the coherence "
+        "family, partial coherence, the group and global measures, "
+        "phase_slope_index, and the spectral Granger and transfer-function "
+        f"families), or {_SIMULATE_INSTEAD}."
+    )
+
+
+def _refused_for_exact_spectrum(
+    reason: _ExactSpectrumRefusal,
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Make a method raise, for ``reason``, on a ``Connectivity`` of an exact spectrum.
 
     For the measures that use each trial/taper observation or count them, and
     for ``jackknife``, which leaves observations out. Apply it outermost, so
@@ -414,14 +457,16 @@ def _refused_for_exact_spectrum(method: Callable[_P, _R]) -> Callable[_P, _R]:
     ``defined_for_exact_spectrum`` records which measures carry it.
     """
 
-    @wraps(method)
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-        connectivity = cast("Connectivity", args[0])
-        if connectivity._is_exact_spectrum:
-            connectivity._raise_for_exact_spectrum(method.__name__)
-        return method(*args, **kwargs)
+    def decorate(method: Callable[_P, _R]) -> Callable[_P, _R]:
+        @wraps(method)
+        def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            if cast("Connectivity", args[0])._is_exact_spectrum:
+                raise ValueError(_exact_spectrum_refusal_message(method.__name__, reason))
+            return method(*args, **kwargs)
 
-    return wrapper
+        return wrapper
+
+    return decorate
 
 
 class DirectedOrientationWarning(UserWarning):
@@ -2597,46 +2642,7 @@ class Connectivity:
         )
         raise ValueError(msg)
 
-    def _raise_for_exact_spectrum(self, method: str) -> None:
-        """Raise because ``method`` needs samples, which an exact spectrum does not have."""
-        intro = (
-            f"{method} is not defined for an exact spectrum (is_exact_spectrum is "
-            "True, as for VARSpectrum), whose coefficients are one factor of the "
-            "model's cross-spectral matrix, not samples."
-        )
-        simulate = (
-            "simulate data from the model (spectral_connectivity.simulate."
-            "simulate_MVAR) and estimate it with Multitaper"
-        )
-        if method == "jackknife":
-            msg = (
-                f"{intro} The jackknife estimates sampling error by leaving out one "
-                "observation at a time, and an exact spectrum has no sampling error "
-                "to estimate. For the spread of an estimate, simulate data from the "
-                "model (spectral_connectivity.simulate.simulate_MVAR), estimate the "
-                "measure with Multitaper, and jackknife that."
-            )
-        elif method in {"delay", "group_delay"}:
-            msg = (
-                f"{intro} {method} uses only the frequencies whose coherence passes "
-                "a significance test whose degrees of freedom are n_observations, "
-                "which here counts the columns of that factor, so which frequencies "
-                "it keeps would be arbitrary. phase_slope_index and coherence_phase "
-                f"are computed from the spectral matrix alone; or {simulate}."
-            )
-        else:
-            msg = (
-                f"{intro} {method} averages a function of each trial/taper "
-                "observation (the debiased measures and pairwise phase consistency "
-                "also count them), so its value would depend on an arbitrary choice "
-                "of factor. Use a measure of the cross-spectral matrix (the coherence "
-                "family, partial coherence, the group and global measures, "
-                "phase_slope_index, and the spectral Granger and transfer-function "
-                f"families), or {simulate}."
-            )
-        raise ValueError(msg)
-
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("sampling_error")
     def jackknife(
         self,
         method: str,
@@ -4807,7 +4813,7 @@ class Connectivity:
         )
         return self._reduced_cross_spectral_matrix(normalized, dtype=dtype)
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def phase_locking_value(self) -> NDArray[np.floating]:
         """Return the cross-spectrum with power scaled to magnitude 1.
@@ -4857,7 +4863,7 @@ class Connectivity:
         # ulp above 1 (matching the bounds clipping magnitude_squared_coherence applies).
         return xp.clip(xp.abs(self._phase_locking_value()), 0.0, 1.0)
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def corrected_imaginary_phase_locking_value(self) -> NDArray[np.floating]:
         """Return corrected imaginary phase-locking value (ciPLV).
@@ -5208,7 +5214,7 @@ class Connectivity:
             xp.abs(imaginary, out=scratch)
             moments["absolute"][block] = xp.mean(scratch, axis=observation_axes)
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def phase_lag_index(self) -> NDArray[np.floating]:
         """Return non-parametric synchrony measure mitigating power differences.
@@ -5279,7 +5285,7 @@ class Connectivity:
         )
         return pli
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def directed_phase_lag_index(self) -> NDArray[np.floating]:
         """Return the directed phase-lag index (dPLI).
@@ -5342,7 +5348,7 @@ class Connectivity:
         )
         return directed_pli
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return weighted average of phase lag index using imaginary coherency magnitudes.
@@ -5408,7 +5414,7 @@ class Connectivity:
         no_lag = self._has_no_phase_lag(mean_absolute)
         return _divide_where(mean_imaginary, mean_absolute, ~no_lag, 0.0)
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of phase lag index corrected for positive bias.
@@ -5471,7 +5477,7 @@ class Connectivity:
         # the signs are rounding noise; there is no lag to estimate, so 0.
         return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def debiased_squared_weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of weighted phase lag index corrected for bias.
@@ -5543,7 +5549,7 @@ class Connectivity:
         )
         return debiased
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def pairwise_phase_consistency(self) -> NDArray[np.floating]:
         """Return square of phase locking value corrected for bias.
@@ -6759,7 +6765,7 @@ class Connectivity:
         )
         return coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("significance_gate")
     def group_delay(
         self,
         frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None = None,
@@ -6911,7 +6917,7 @@ class Connectivity:
 
         return delay, slope, r_value
 
-    @_refused_for_exact_spectrum
+    @_refused_for_exact_spectrum("significance_gate")
     @_asnumpy
     def delay(
         self,
