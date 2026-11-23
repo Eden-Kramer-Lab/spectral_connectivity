@@ -965,39 +965,30 @@ _ARTIFACT_HANDLINGS = ("drop", "missing_data_tapers")
 
 
 def _validate_artifact_handling(
-    artifact_handling: Any, artifact_samples: Any, transform: str
+    artifact_handling: Any, supported: Sequence[str], transform: str
 ) -> None:
-    """Raise unless ``artifact_handling`` is an option ``transform`` supports
-    and, for ``"missing_data_tapers"``, ``artifact_samples`` marks artifacts."""
-    if not isinstance(artifact_handling, str) or artifact_handling not in _ARTIFACT_HANDLINGS:
-        hint = (
-            did_you_mean(close_names(artifact_handling, _ARTIFACT_HANDLINGS))
-            if isinstance(artifact_handling, str)
-            else ""
-        )
-        msg = (
-            "artifact_handling must be 'drop' or 'missing_data_tapers', got "
-            f"{artifact_handling!r}.{hint} See the artifact_handling parameter of "
-            "Multitaper."
-        )
-        raise ValueError(msg)
-    if artifact_handling == "drop":
+    """Raise unless ``artifact_handling`` is one of the options in
+    ``supported``, those of the transform named ``transform``."""
+    if isinstance(artifact_handling, str) and artifact_handling in supported:
         return
-    if transform != "Multitaper":
+    if artifact_handling in _ARTIFACT_HANDLINGS:
         msg = (
             f"{transform} supports only artifact_handling='drop' (it has no DPSS "
             "taper family to adapt). Use Multitaper(..., "
             "artifact_handling='missing_data_tapers') or keep 'drop'."
         )
         raise ValueError(msg)
-    if artifact_samples is None:
-        msg = (
-            "artifact_handling='missing_data_tapers' needs artifact_samples: it sets "
-            "how the trial windows containing artifact samples are estimated, and "
-            "none are marked. Pass artifact_samples (a boolean mask, True at an "
-            "artifact, or 'nonfinite'), or leave artifact_handling at 'drop'."
-        )
-        raise ValueError(msg)
+    hint = (
+        did_you_mean(close_names(artifact_handling, supported))
+        if isinstance(artifact_handling, str)
+        else ""
+    )
+    options = " or ".join(repr(option) for option in supported)
+    msg = (
+        f"artifact_handling must be {options}, got {artifact_handling!r}.{hint} See "
+        f"the artifact_handling parameter of {transform}."
+    )
+    raise ValueError(msg)
 
 
 def _validate_window_step(
@@ -1837,26 +1828,35 @@ Frequency Analysis
         clean: BackendArray = ~xp.any(artifact_windows, axis=-1)
         return clean
 
-    def _window_drop_rule(self, window: str) -> str:
-        """The sentence of the warnings saying when a trial's ``window`` (its
-        length, in samples and seconds) is dropped."""
+    @property
+    def _window_length(self) -> str:
+        """The window's length in samples and seconds, for messages."""
+        return f"{self.n_time_samples_per_window} samples ({self.time_window_duration:g} s)"
+
+    def _window_drop_rule(self) -> str:
+        """The sentence of the warnings saying when a trial's window is dropped."""
         return (
-            f"A trial's window of {window} is dropped if any of its samples is an "
+            f"A trial's window of {self._window_length} is dropped if any of its samples is an "
             "artifact; a shorter time_window_duration loses less data around "
             "artifacts. Alternatively, artifact_handling='missing_data_tapers' "
             "(Multitaper only) estimates such a window from its valid samples."
         )
 
+    def _dropped_window_notes(self) -> list[tuple[str, str]]:
+        """Warnings of a subclass about the windows it drops, as (text, closing
+        sentence) pairs, given before the base ones; none by default."""
+        return []
+
     def _check_kept_trial_windows(self, valid_windows: BackendArray) -> None:
         """Raise if ``valid_windows`` keeps no trial window; warn if it keeps
-        fewer than half, or if a window keeps no trial."""
+        fewer than half, or if a window keeps no trial, after any of
+        :meth:`_dropped_window_notes`. The drop rule is stated in the first
+        warning only."""
         n_windows = int(valid_windows.shape[0])
         empty = ~xp.any(valid_windows, axis=1)
         n_empty = int(xp.sum(empty))
         name = type(self).__name__
-        rule = self._window_drop_rule(
-            f"{self.n_time_samples_per_window} samples ({self.time_window_duration:g} s)"
-        )
+        rule = self._window_drop_rule()
         inverted = "True marks an artifact; for a mask of valid samples pass ~mask."
         if n_empty == n_windows:
             msg = (
@@ -1866,20 +1866,32 @@ Frequency Analysis
                 "Otherwise mark fewer samples as artifacts."
             )
             raise ValueError(msg)
+        notes = self._dropped_window_notes()
         n_kept, n_trial_windows = self._n_kept_trial_windows, int(valid_windows.size)
         if 2 * n_kept < n_trial_windows:
-            warnings.warn(
-                f"artifact_samples drops {1 - n_kept / n_trial_windows:.0%} of trial "
-                f"windows ({n_kept} of {n_trial_windows} kept). {rule} {inverted} "
-                f"{name}.valid_windows shows which are kept.",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
+            notes.append(
+                (
+                    (
+                        f"artifact_samples drops {1 - n_kept / n_trial_windows:.0%} of "
+                        f"trial windows ({n_kept} of {n_trial_windows} kept)."
+                    ),
+                    f"{inverted} {name}.valid_windows shows which are kept.",
+                )
             )
         if n_empty:
+            notes.append(
+                (
+                    (
+                        f"artifact_samples leaves {n_empty} of {n_windows} time windows "
+                        f"(0-based indices {_listed_indices(empty)}) with no trial, so "
+                        "every measure is NaN there."
+                    ),
+                    f"{name}.valid_windows shows which are kept.",
+                )
+            )
+        for number, (text, closing) in enumerate(notes):
             warnings.warn(
-                f"artifact_samples leaves {n_empty} of {n_windows} time windows (0-based "
-                f"indices {_listed_indices(empty)}) with no trial, so every measure is "
-                f"NaN there. {rule} {name}.valid_windows shows which are kept.",
+                f"{text} {rule} {closing}" if number == 0 else f"{text} {closing}",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
@@ -1961,11 +1973,7 @@ Frequency Analysis
             return None
         tapers = self._tapers_for_fft()
         n_tapers = tapers.shape[1]
-        if self._n_kept_tapers is None:
-            assert self._valid_windows is not None
-            kept = self._valid_windows[:, :, xp.newaxis]
-        else:
-            kept = xp.arange(n_tapers) < self._n_kept_tapers[:, :, xp.newaxis]
+        kept = xp.arange(n_tapers) < self.n_kept_tapers[:, :, xp.newaxis]
         # The precision of the coefficients' real part.
         weights = kept.astype(
             xp.result_type(self._time_series.dtype, tapers.dtype, xp.float32)
@@ -1980,8 +1988,13 @@ Frequency Analysis
         given = "'nonfinite'" if self._artifact_samples_mode == "nonfinite" else "<mask>"
         n_trial_windows = len(self.time) * self.n_trials
         return (
-            f"{given} ({self._n_kept_trial_windows} of {n_trial_windows} trial windows kept)"
+            f"{given} ({self._n_kept_trial_windows} of {n_trial_windows} trial windows "
+            f"kept{self._artifact_samples_details()})"
         )
+
+    def _artifact_samples_details(self) -> str:
+        """What a subclass adds to the description of the windows kept."""
+        return ""
 
     def _artifact_samples_repr(self) -> str:
         """The repr's ``artifact_samples`` entry, empty when it was not given."""
@@ -2411,7 +2424,9 @@ class Multitaper(_WindowedFourierTransform):
         artifact_handling: Literal["drop", "missing_data_tapers"] = "drop",
     ) -> None:
         object.__setattr__(self, "_initialized", False)
-        _validate_artifact_handling(artifact_handling, artifact_samples, type(self).__name__)
+        _validate_artifact_handling(
+            artifact_handling, _ARTIFACT_HANDLINGS, type(self).__name__
+        )
         time_series = _validated_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
@@ -2603,18 +2618,26 @@ class Multitaper(_WindowedFourierTransform):
             with _transposed_layout_hint(self._time_series):
                 self._tapers, self._taper_eigenvalues = self._dpss_tapers()
         if artifact_handling == "missing_data_tapers":
-            self._check_missing_data_taper_settings()
+            self._check_missing_data_taper_settings(artifact_samples)
         self.artifact_handling = artifact_handling
         # Warned only once every check has passed, so an invalid Multitaper
         # (a transposed array among them) only raises.
         self._set_artifact_samples(artifact_samples)
         object.__setattr__(self, "_initialized", True)
 
-    def _check_missing_data_taper_settings(self) -> None:
-        """Raise unless the tapers are generated DPSS tapers, low-bias
-        filtered, at least two of them: the missing-data tapers generalize
-        them and keep those the same rule keeps."""
-        if self._taper_eigenvalues is None:
+    def _check_missing_data_taper_settings(self, artifact_samples: Any) -> None:
+        """Raise unless ``artifact_samples`` is given and the tapers are
+        generated DPSS tapers, low-bias filtered, at least two of them: the
+        missing-data tapers generalize them and keep those the same rule
+        keeps."""
+        if artifact_samples is None:
+            reason = (
+                "it sets how the trial windows containing artifact samples are "
+                "estimated, and artifact_samples marks none. Pass artifact_samples "
+                "(a boolean mask, True at an artifact, or 'nonfinite'), or leave "
+                "artifact_handling at 'drop'."
+            )
+        elif self._taper_eigenvalues is None:
             reason = (
                 "custom tapers are not DPSS tapers, so they have no missing-data "
                 "counterpart. Omit tapers, or use artifact_handling='drop'."
@@ -3031,30 +3054,30 @@ class Multitaper(_WindowedFourierTransform):
         kept_windows: BackendArray = xp.asarray(counts > 0)
         return kept_windows
 
-    def _check_kept_trial_windows(self, valid_windows: BackendArray) -> None:
-        """The base checks, then, with missing-data tapers, a warning that
-        windows with artifacts were dropped all the same."""
-        super()._check_kept_trial_windows(valid_windows)
+    def _dropped_window_notes(self) -> list[tuple[str, str]]:
+        """With missing-data tapers, the windows with artifacts dropped anyway."""
         n_dropped = self._n_gapped_trial_windows - self._n_missing_data_trial_windows
         if self.artifact_handling == "drop" or n_dropped == 0:
-            return
-        window = f"{self.n_time_samples_per_window} samples ({self.time_window_duration:g} s)"
-        warnings.warn(
-            f"artifact_handling='missing_data_tapers': {n_dropped} of "
-            f"{self._n_gapped_trial_windows} trial windows with artifacts kept fewer "
-            f"than 2 tapers and were dropped. {self._window_drop_rule(window)} "
-            f"{type(self).__name__}.n_kept_tapers shows what each window keeps.",
-            UserWarning,
-            stacklevel=stacklevel_outside_package(),
-        )
+            return []
+        return [
+            (
+                (
+                    f"artifact_handling='missing_data_tapers': {n_dropped} of "
+                    f"{self._n_gapped_trial_windows} trial windows with artifacts kept "
+                    "fewer than 2 tapers and were dropped."
+                ),
+                f"{type(self).__name__}.n_kept_tapers shows what each window keeps.",
+            )
+        ]
 
-    def _window_drop_rule(self, window: str) -> str:
+    def _window_drop_rule(self) -> str:
         """When a trial's window is dropped, for the warnings."""
         if self.artifact_handling == "drop":
-            return super()._window_drop_rule(window)
+            return super()._window_drop_rule()
         recurrence = self.n_time_samples_per_window / (2 * self.time_halfbandwidth_product)
         return (
-            f"With artifact_handling='missing_data_tapers' a trial's window of {window} "
+            "With artifact_handling='missing_data_tapers' a trial's window of "
+            f"{self._window_length} "
             "is dropped if fewer than 2 of its missing-data tapers have enough of "
             f"their energy ({MIN_EIGENVALUE_THRESHOLD:.0%}) inside the frequency band: "
             "too few of its samples are valid, or its artifacts recur more often than "
@@ -3098,15 +3121,14 @@ class Multitaper(_WindowedFourierTransform):
             workers=self.fft_workers,
         ).swapaxes(1, -1)
 
-    def _artifact_samples_description(self) -> str:
-        """The base description, with the trial windows that had artifacts and
-        those of them estimated with missing-data tapers."""
-        description = super()._artifact_samples_description()
+    def _artifact_samples_details(self) -> str:
+        """With missing-data tapers, the trial windows that had artifacts and
+        those of them rescued."""
         if self.artifact_handling == "drop":
-            return description
+            return ""
         return (
-            f"{description[:-1]}; {self._n_gapped_trial_windows} had artifacts, "
-            f"{self._n_missing_data_trial_windows} rescued with missing-data tapers)"
+            f"; {self._n_gapped_trial_windows} had artifacts, "
+            f"{self._n_missing_data_trial_windows} rescued with missing-data tapers"
         )
 
     def _artifact_samples_repr(self) -> str:
@@ -3187,7 +3209,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         artifact_samples: NDArray[np.bool_] | Literal["nonfinite"] | None = None,
         artifact_handling: Literal["drop"] = "drop",
     ) -> None:
-        _validate_artifact_handling(artifact_handling, artifact_samples, type(self).__name__)
+        _validate_artifact_handling(artifact_handling, ("drop",), type(self).__name__)
         sampling_frequency = _validate_sampling_frequency(sampling_frequency)
         for name, value in (
             ("time_window_duration", time_window_duration),

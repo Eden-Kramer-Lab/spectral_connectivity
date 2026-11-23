@@ -408,7 +408,7 @@ def test_adaptive_weighting_weights_a_gapped_window_as_a_window_of_its_own(recor
             r"must be 'drop' or 'missing_data_tapers', got 'interpolate'\. See",
         ),
         ({"artifact_handling": "missing_data_taper"}, "Did you mean 'missing_data_tapers'"),
-        ({"artifact_samples": None}, "needs artifact_samples"),
+        ({"artifact_samples": None}, "artifact_samples marks none"),
         ({"tapers": np.ones((WINDOW, 2)) / 8}, "custom tapers are not DPSS"),
         ({"is_low_bias": False}, "is_low_bias=False sets no such threshold"),
         ({"n_tapers": 1}, "uses 1, so it would drop"),
@@ -447,6 +447,15 @@ def test_the_stft_refuses_missing_data_tapers(recording):
         artifact_samples=artifacts,
     )
     assert stft.artifact_handling == "drop"
+    with pytest.raises(
+        ValueError, match=r"must be 'drop', got 'drp'\. Did you mean 'drop'\?.*ShortTime"
+    ):
+        ShortTimeFourierTransform(
+            time_series,
+            SAMPLING_FREQUENCY,
+            artifact_samples=artifacts,
+            artifact_handling="drp",
+        )
     assert stft._provenance_metadata()["artifact_handling"] == "drop"
 
 
@@ -554,14 +563,45 @@ def test_the_drop_warning_names_the_alternative():
         _multitaper(time_series, artifacts, artifact_handling="drop")
 
 
-def test_the_warnings_state_when_a_window_is_dropped():
+def test_the_drop_rule_is_stated_once_when_two_warnings_fire():
+    """Window 1, blanked every other sample, is dropped in its only trial: the
+    dropped-anyway warning states the rule, the empty-window one does not."""
     time_series = np.random.default_rng(5).standard_normal((2 * WINDOW, 1, 2))
     artifacts = np.zeros((2 * WINDOW, 1), dtype=bool)
-    artifacts[WINDOW::2] = True  # window 1 blanked every other sample
-    with pytest.warns(
-        UserWarning, match=r"leaves 1 of 2 time windows .*fewer than 2 of its missing-data"
-    ):
-        _multitaper(time_series, artifacts)
+    artifacts[WINDOW::2] = True
+    with pytest.warns(UserWarning, match="artifact") as record:
+        Multitaper(
+            time_series,
+            SAMPLING_FREQUENCY,
+            n_time_samples_per_window=WINDOW,
+            time_halfbandwidth_product=NW,
+            artifact_samples=artifacts,
+            artifact_handling="missing_data_tapers",
+        )
+    messages = [str(warning.message) for warning in record]
+    assert len(messages) == 2
+    assert "1 of 1 trial windows with artifacts kept fewer than 2 tapers" in messages[0]
+    assert "leaves 1 of 2 time windows (0-based indices [1])" in messages[1]
+    rule = "fewer than 2 of its missing-data tapers"
+    assert [rule in message for message in messages] == [True, False]
+
+
+def test_a_multitaper_subclass_takes_missing_data_tapers(recording):
+    class Subclass(Multitaper):
+        pass
+
+    time_series, artifacts = recording
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", DROPPED_ANYWAY, UserWarning)
+        subclass = Subclass(
+            time_series,
+            SAMPLING_FREQUENCY,
+            n_time_samples_per_window=WINDOW,
+            time_halfbandwidth_product=NW,
+            artifact_samples=artifacts,
+            artifact_handling="missing_data_tapers",
+        )
+    np.testing.assert_array_equal(to_host(subclass.n_kept_tapers), EXPECTED_TAPER_COUNTS)
 
 
 def test_the_wrapper_takes_artifact_handling_in_transform_kwargs(recording):
