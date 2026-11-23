@@ -127,17 +127,20 @@ def test_jackknife_refuses_to_leave_out_correlated_taper_observations(expectatio
         expectation_type=expectation_type,
         observations_are_independent=False,
     )
-    with pytest.raises(ValueError, match="observations_are_independent"):
+    with pytest.raises(ValueError, match="observations_are_independent") as error:
         conn.jackknife("phase_lag_index")
+    # Only an expectation that averages trials can leave out whole trials.
+    assert ("leave_out='trial'" in str(error.value)) is (expectation_type == "trials_tapers")
 
 
-def test_jackknife_over_trials_is_allowed_with_correlated_tapers():
+@pytest.mark.parametrize("leave_out", ["observation", "trial"])
+def test_jackknife_over_trials_is_allowed_with_correlated_tapers(leave_out):
     conn = Connectivity(
         _coefficients(np.random.default_rng(6)),
         expectation_type="trials",
         observations_are_independent=False,
     )
-    result = conn.jackknife("phase_lag_index")
+    result = conn.jackknife("phase_lag_index", leave_out=leave_out)
     assert np.isfinite(result.standard_error).any()
 
 

@@ -393,7 +393,9 @@ one `transform_parameters_json` record of the settings. See the
 [result-schema reference and migration examples](docs/cookbook.md#result-schema-and-transform-bandwidth).
 
 For uncertainty, `Connectivity.jackknife(method)` recomputes a real-valued
-measure, leaving out one trial/taper observation at a time. It returns a
+measure, leaving out one trial/taper observation at a time
+(`leave_out="trial"` leaves out whole trials instead, which includes the
+variability between trials). It returns a
 bias-corrected estimate, standard error, and confidence interval, and applies
 a variance-stabilizing transformation automatically: log for power,
 `atanh(sqrt(.))` for magnitude-squared coherence, and circular for phase.

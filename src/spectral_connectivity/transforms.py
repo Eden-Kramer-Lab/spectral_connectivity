@@ -662,7 +662,8 @@ class SpectralTransform(Protocol):
         Whether the trial and taper observations are statistically
         independent. Set it ``False`` when that axis holds correlated
         estimates; measures whose corrections count observations then warn,
-        and the jackknife refuses to leave out tapers.
+        and the jackknife refuses to leave out tapers (``leave_out="trial"``,
+        which leaves out whole trials, still works).
     ``time_bins_are_independent`` : bool, default True
         Whether successive time windows are independent (e.g. ``False`` for
         windows overlapping by more than half). It affects only expectations that
@@ -2326,7 +2327,7 @@ class Multitaper(_WindowedFourierTransform):
         uncorrelated (Thomson 1982; Percival & Walden 1993, ch. 7), and trials
         are independent realizations. :class:`Connectivity` reads this flag to
         decide whether ``n_observations`` (trials x tapers) counts effectively
-        independent samples: the jackknife, the debiased measures (pairwise
+        independent samples: the leave-one-observation-out jackknife, the debiased measures (pairwise
         phase consistency, debiased squared PLI/WPLI) and the zero-coherence
         significance test (``Beta(1, n_observations - 1)`` null) all assume it
         does. ``True`` for DPSS tapers and for custom tapers that are mutually
@@ -2915,8 +2916,8 @@ class Welch:
         additional segments are strongly correlated with their neighbors and
         add little independent information, so ``n_observations`` (trials x
         segments) overstates the effective sample size. :class:`Connectivity`
-        reads this flag before the jackknife, the debiased measures (pairwise
-        phase consistency, debiased squared PLI/WPLI) and the zero-coherence
+        reads this flag before the leave-one-observation-out jackknife, the
+        debiased measures (pairwise phase consistency, debiased squared PLI/WPLI) and the zero-coherence
         significance test, whose finite-sample corrections assume independent
         observations.
 
@@ -3261,8 +3262,8 @@ class MorletWavelet:
         adjacent frequency bins overlap in bandwidth. ``n_observations`` then
         overstates the effective sample size, and normalized measures of
         independent signals are biased toward 1. :class:`Connectivity` reads
-        this flag before the jackknife, the debiased measures (pairwise phase
-        consistency, debiased squared PLI/WPLI) and the zero-coherence
+        this flag before the leave-one-observation-out jackknife, the debiased
+        measures (pairwise phase consistency, debiased squared PLI/WPLI) and the zero-coherence
         significance test, whose finite-sample corrections assume independent
         observations. Correlation between successive time bins, which matters
         only for expectations that also average over time, is reported by

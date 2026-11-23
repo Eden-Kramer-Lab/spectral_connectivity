@@ -958,7 +958,8 @@ class Connectivity:
         holds correlated estimates (a ``MorletWavelet`` smoothing neighborhood,
         or ``Welch`` segments overlapping by more than half). Measures whose
         finite-sample corrections or null distributions count observations
-        warn in that case, and ``jackknife`` refuses to leave out tapers.
+        warn in that case, and ``jackknife`` refuses to leave out tapers
+        (``leave_out="trial"``, which leaves out whole trials, still works).
     time_bins_are_independent : bool, default=True
         Whether the time bins may be counted as independent observations when
         the expectation averages over time. Transform constructors set this
@@ -2470,17 +2471,24 @@ class Connectivity:
         leave_out : {"observation", "trial"}, default="observation"
             What one leave-one-out replicate omits. ``"observation"`` omits
             one averaged observation (a trial-taper eigencoefficient for
-            ``trials_tapers``). ``"trial"`` omits one whole trial, all of its
-            tapers together, so the interval has ``n_trials - 1`` degrees of
-            freedom and reflects how much the measure varies from trial to
-            trial. Use it when trials may differ (in coupling strength, state,
-            or noise level): leaving out one taper at a time then treats the
+            ``trials_tapers``). ``"trial"`` omits one whole trial (the
+            coefficients' trial axis), all of its tapers together, so the
+            interval has ``n_trials - 1`` degrees of freedom and reflects how
+            much the measure varies from trial to trial.
+
+            Prefer ``"trial"`` for recordings of several trials unless they
+            are known to be alike. When trials differ (in coupling strength,
+            state, or noise level), leaving out one taper at a time treats the
             tapers of one trial as independent draws from one shared spectrum
-            and gives too narrow an interval (see Notes). It needs an
-            expectation that averages trials (``"trials_tapers"`` or
-            ``"trials"``, for which the two settings are the same) and at
-            least 3 trials, and it is valid when the tapers within a trial are
-            correlated, since the trials are the units left out.
+            and gives too narrow an interval. The cost is a wider interval
+            when trials are alike and few, from the fewer degrees of freedom
+            (see Notes). Keep ``"observation"`` for a single trial.
+
+            ``"trial"`` needs an expectation that averages trials
+            (``"trials_tapers"``, or ``"trials"``, for which the two settings
+            are the same) and at least 3 trials. It assumes the trials are
+            independent, but not the tapers within one, so it is allowed when
+            ``observations_are_independent`` is ``False``.
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -2558,6 +2566,9 @@ class Connectivity:
         coherency is drawn from U(0, 0.9), ``leave_out="observation"`` covers
         83-92% (less with more tapers per trial), and ``leave_out="trial"``
         93.5-95.4%. It also computes ``n_tapers`` times fewer replicates.
+        When the trials are alike, the median ``"trial"`` interval is wider by
+        20-47% with 3 or 4 trials, 14-19% with 5 and 5-8% with 10, at the same
+        coverage.
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (
@@ -2570,7 +2581,7 @@ class Connectivity:
             )
             raise ValueError(msg)
         _validate_confidence_level(confidence_level)
-        if leave_out not in {"observation", "trial"}:
+        if leave_out not in ("observation", "trial"):
             msg = f"leave_out must be 'observation' or 'trial'; got {leave_out!r}."
             raise ValueError(msg)
         if leave_out == "trial" and self.expectation_type == "tapers":
@@ -2683,14 +2694,17 @@ class Connectivity:
         if n_observations < 3 and leave_out == "trial":
             msg = (
                 "jackknife(leave_out='trial') requires at least 3 trials, got "
-                f"{n_observations}: with two, the interval has 1 degree of freedom "
-                "and a critical value near 13."
+                f"{n_observations}: an interval over n trials has n - 1 degrees "
+                "of freedom, so 2 trials give a critical value near 13 and 1 "
+                "trial gives none."
             )
-            if self.expectation_type == "trials_tapers":
+            if self.expectation_type == "trials_tapers" and self._observations_are_independent:
                 msg += (
                     " Keep leave_out='observation' to leave out one trial-taper "
                     "observation at a time."
                 )
+            else:
+                msg += " Collect at least 3 trials for an interval."
             raise ValueError(msg)
         if n_observations < 3:
             msg = (
