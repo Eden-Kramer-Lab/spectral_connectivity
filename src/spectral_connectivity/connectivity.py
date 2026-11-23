@@ -2052,13 +2052,10 @@ class Connectivity:
             *trailing,
         )
         nonnegative = spectrum[index]
-        n_interior = (n_fft_samples - 1) // 2
-        interior: tuple[Any, ...] = (..., slice(1, n_interior + 1), *trailing)
-        partners: tuple[Any, ...] = (
-            ...,
-            slice(n_fft_samples - 1, n_fft_samples - 1 - n_interior, -1),
-            *trailing,
-        )
+        positive, negative = _paired_frequency_bins(n_fft_samples)
+        n_interior = positive.stop - 1
+        interior: tuple[Any, ...] = (..., positive, *trailing)
+        partners: tuple[Any, ...] = (..., negative, *trailing)
         # One output buffer: the partners' conjugate is written into it and the
         # positive bins added in place; 0 Hz and Nyquist are copied as they are.
         density: BackendArray = xp.empty_like(nonnegative)
@@ -3534,19 +3531,22 @@ class Connectivity:
         # coefficients at -f are the conjugates of those at +f, so -f turns the
         # other way and the surrogate stays the coefficients of a real signal
         # (that of the analytic signal rotated by the phase); the real 0 Hz and
-        # Nyquist bins get the sign of its cosine.
+        # Nyquist bins, which have no partner, get the sign of its cosine.
         phase = rng.uniform(0.0, 2 * np.pi, (*unit_shape, 1, n_signals))
         rotation = np.exp(1j * phase)
-        side = np.zeros(n_frequencies)
-        side[1 : (n_frequencies + 1) // 2] = 1
-        side[n_frequencies // 2 + 1 :] = -1
-        side = side[:, np.newaxis]
-        factor = np.where(
-            side > 0,
-            rotation,
-            np.where(side < 0, np.conj(rotation), np.where(rotation.real < 0, -1.0, 1.0)),
-        )
-        rotated: BackendArray = coefficients * xp.asarray(factor.astype(coefficients.dtype))
+        # The factor is built on the device with only the units' shape (one
+        # phase per unit and signal, repeated over frequency), then applied in
+        # one broadcast product.
+        rotation = xp.asarray(rotation.astype(coefficients.dtype))
+        factor = xp.empty((*unit_shape, n_frequencies, n_signals), dtype=coefficients.dtype)
+        positive, negative = _paired_frequency_bins(n_frequencies)
+        factor[..., positive, :] = rotation
+        factor[..., negative, :] = xp.conj(rotation)
+        sign = xp.where(xp.real(rotation) < 0, -1.0, 1.0)
+        factor[..., 0:1, :] = sign
+        if n_frequencies % 2 == 0:
+            factor[..., n_frequencies // 2 : n_frequencies // 2 + 1, :] = sign
+        rotated: BackendArray = coefficients * factor
         return rotated
 
     def _rotation_valid_frequencies(
@@ -7824,6 +7824,21 @@ class Connectivity:
             xp.conj(bandpassed_coherency[..., :-1, :, :]) * bandpassed_coherency[..., 1:, :, :]
         ).sum(axis=-3)
         return adjacent_product.imag
+
+
+def _paired_frequency_bins(n_fft_samples: int) -> tuple[slice, slice]:
+    """The interior positive bins of a two-sided FFT and their negative partners.
+
+    In standard FFT order bin ``k`` (``1 <= k <= (n_fft_samples - 1) // 2``)
+    is frequency ``k`` and bin ``n_fft_samples - k`` is ``-k``; the second
+    slice lists the partners in the order of the first. 0 Hz (bin 0) and,
+    for an even length, Nyquist (bin ``n_fft_samples // 2``) have no partner.
+    """
+    n_interior = (n_fft_samples - 1) // 2
+    return (
+        slice(1, n_interior + 1),
+        slice(n_fft_samples - 1, n_fft_samples - 1 - n_interior, -1),
+    )
 
 
 def _axes_description(dims: tuple[str, ...] | None) -> str:
