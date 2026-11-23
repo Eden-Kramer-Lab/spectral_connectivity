@@ -4730,14 +4730,23 @@ def _missing_data_slepian_tapers(
     n_time_samples = valid.shape[0]
     (valid_times,) = np.nonzero(valid)
     half_bandwidth = time_halfbandwidth_product / n_time_samples
-    # The kernel depends only on the lag between two samples.
+    # The kernel depends only on the lag between two samples. The lags are
+    # built in int32 and made absolute in place.
     lags = np.arange(n_time_samples)
     sinc = 2 * half_bandwidth * np.sinc(2 * half_bandwidth * lags)
-    kernel = sinc[np.abs(valid_times[:, np.newaxis] - valid_times[np.newaxis, :])]
+    times = valid_times.astype(np.int32)
+    lag = np.subtract.outer(times, times)
+    kernel = sinc[np.abs(lag, out=lag)]
+    del lag
     n_valid = valid_times.size
     n_computed = min(n_tapers, n_valid)
+    # The kernel is symmetric, so its transpose is the same matrix in the
+    # Fortran order LAPACK can overwrite without a copy.
     eigenvalues, eigenvectors = scipy_eigh(
-        kernel, subset_by_index=[n_valid - n_computed, n_valid - 1]
+        kernel.T,
+        subset_by_index=[n_valid - n_computed, n_valid - 1],
+        overwrite_a=True,
+        check_finite=False,
     )
     order = np.argsort(eigenvalues)[::-1]
     tapers = np.zeros((n_time_samples, n_tapers))
