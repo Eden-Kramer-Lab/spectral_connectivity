@@ -3516,8 +3516,12 @@ class Connectivity:
             # window, taper and frequency; signal 0 keeps its order.
             order = np.tile(np.arange(n_trials), (n_signals, 1))
             order[1:] = rng.permuted(order[1:], axis=-1)
-            index = xp.asarray(order.T[np.newaxis, :, np.newaxis, np.newaxis, :])
-            shuffled: BackendArray = xp.take_along_axis(coefficients, index, axis=1)
+            shuffled: BackendArray = xp.empty(coefficients.shape, dtype=coefficients.dtype)
+            shuffled[..., 0] = coefficients[..., 0]
+            for signal in range(1, n_signals):
+                shuffled[..., signal] = xp.take(
+                    coefficients[..., signal], xp.asarray(order[signal]), axis=1
+                )
             return shuffled
         unit_shape = tuple(
             coefficients.shape[axis] if axis in unit_axes else 1 for axis in range(3)
