@@ -94,7 +94,7 @@ _NONFINITE_COEFFICIENTS_WARNING = "fourier_coefficients contains NaN or Inf valu
 # the resampling drivers' validation cannot drift apart.
 _NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife", "surrogate_test"})
 # Connectivity.surrogate_test: the surrogate constructions and alternatives it
-# takes, and the measures it refuses by name, with why.
+# takes.
 _SURROGATE_KINDS = ("trial_shuffle", "phase_rotation", "conjugation")
 # The question each kind answers, for the message naming them.
 _SURROGATE_QUESTIONS = {
@@ -103,27 +103,26 @@ _SURROGATE_QUESTIONS = {
     "conjugation": "is there more than zero-lag mixing such as volume conduction?",
 }
 _SURROGATE_ALTERNATIVES = ("auto", "greater", "less", "two-sided")
-_SURROGATE_REFUSED_MEASURES = {
-    "power": (
+# Why surrogate_test refuses a registered measure, keyed by what the registry
+# says of it (see _surrogate_refusal).
+_SURROGATE_REFUSALS = {
+    "single_signal": (
         "it describes one signal, and every surrogate keeps each signal's "
         "spectrum, so its null distribution is the estimate itself. Test a "
         "measure of the relation between signals."
     ),
-    "delay": (
+    "candidate_delays": (
         "it returns candidate delays at the frequencies its own coherence test "
         "selects, not a statistic. Test magnitude_squared_coherence, or "
         "phase_slope_index for the direction of a lag."
     ),
-    "coherence_phase": (
+    "phase": (
         "a phase is circular, so no ordering of its values is evidence against "
         "the null, and it is undefined where coherence is weak. Test "
         "imaginary_coherence (or imaginary_coherency, two-sided) for a lagged "
         "relation, or phase_locking_value for phase coupling."
     ),
 }
-# Measures that sum over a frequency band (frequency_range) instead of
-# returning one value per frequency.
-_BAND_SUMMED_MEASURES = frozenset({"phase_slope_index"})
 # Measure names released in 2.x and replaced in 3.0, mapped to the canonical
 # name. Each still works through 3.x with a DeprecationWarning and is removed
 # in 4.0; the canonical measure is the one registered and listed.
@@ -3259,10 +3258,9 @@ class Connectivity:
             raise ValueError(msg)
         unit_axes = self._surrogate_unit_axes(kind, n_surrogates)
         method, measure = self._resampled_measure(method, "surrogate_test")
-        if method in _SURROGATE_REFUSED_MEASURES:
-            msg = (
-                f"surrogate_test cannot test {method!r}: {_SURROGATE_REFUSED_MEASURES[method]}"
-            )
+        refusal = _surrogate_refusal(method)
+        if refusal is not None:
+            msg = f"surrogate_test cannot test {method!r}: {_SURROGATE_REFUSALS[refusal]}"
             raise ValueError(msg)
         if alternative == "auto":
             alternative = _signed_measure_alternative(method)
@@ -3290,8 +3288,8 @@ class Connectivity:
                 fwer_axis,
                 estimate.ndim,
                 "fwer_axis",
-                f"{method}'s result, {self._result_axes_description(estimate.ndim)} "
-                f"with shape {estimate.shape}",
+                f"{method}'s result, {_axes_description(self._result_dims(method, estimate.ndim))}"
+                f"shape {estimate.shape}",
             )
         )
         tested = np.isfinite(estimate) & ~np.eye(self.n_signals, dtype=bool)
@@ -3342,15 +3340,23 @@ class Connectivity:
             fwer_axis=family_axes,
         )
 
-    def _result_axes_description(self, ndim: int) -> str:
-        """The axes of a pairwise result with ``ndim`` axes, e.g. ``(time, frequency, source, target)``."""
-        kept = [("time", "trial", "taper")[axis] for axis in self._kept_observation_axes]
-        trailing = ["source", "target"]
-        if ndim == len(kept) + 3:
-            trailing.insert(0, "frequency")
-        elif ndim != len(kept) + 2:
-            return f"{ndim} axes"
-        return "axes (" + ", ".join(kept + trailing) + ")"
+    def _result_dims(self, method: str, ndim: int) -> tuple[str, ...] | None:
+        """The axis names of ``method``'s ``ndim``-dimensional result, if known.
+
+        A registered measure's dimensions (:attr:`_MeasureSpec.dims`, which
+        lead with the default expectation's one time axis) with the axes this
+        expectation keeps in place of that time axis; ``None`` for an
+        unregistered measure or a result of another size.
+        """
+        # The registry imports this module, so it is imported here.
+        from spectral_connectivity._measure_registry import _MEASURE_SPECS
+
+        spec = _MEASURE_SPECS.get(method)
+        if spec is None:
+            return None
+        kept = tuple(("time", "trial", "taper")[axis] for axis in self._kept_observation_axes)
+        dims = kept + spec.dims[1:]
+        return dims if len(dims) == ndim else None
 
     def _rotation_half_bandwidth(self, half_bandwidth: float | None) -> float:
         """The half bandwidth ``kind="phase_rotation"`` masks with, or the error it raises.
@@ -3584,7 +3590,9 @@ class Connectivity:
                 "frequencies (half the transform's frequency resolution)."
             )
             raise ValueError(msg)
-        if method in _BAND_SUMMED_MEASURES:
+        dims = self._result_dims(method, estimate.ndim)
+        if dims is not None and "frequency" not in dims:
+            # A measure without a frequency axis sums over its frequency_range.
             band = _select_measure_frequencies(
                 frequencies,
                 method_kwargs.get("frequency_range"),
@@ -3600,7 +3608,11 @@ class Connectivity:
                 )
                 raise ValueError(msg)
             return np.ones((), dtype=bool)
-        frequency_axis = len(self._kept_observation_axes)
+        # The frequency axis follows the kept observation axes; an unregistered
+        # measure is taken to have it there if its length is right.
+        frequency_axis = (
+            dims.index("frequency") if dims is not None else len(self._kept_observation_axes)
+        )
         if estimate.ndim < frequency_axis + 3 or estimate.shape[frequency_axis] != len(
             frequencies
         ):
@@ -7811,6 +7823,33 @@ class Connectivity:
             xp.conj(bandpassed_coherency[..., :-1, :, :]) * bandpassed_coherency[..., 1:, :, :]
         ).sum(axis=-3)
         return adjacent_product.imag
+
+
+def _axes_description(dims: tuple[str, ...] | None) -> str:
+    """``"axes (time, frequency, ...) with "`` for known ``dims``, else ``""``."""
+    return "" if dims is None else f"axes ({', '.join(dims)}) with "
+
+
+def _surrogate_refusal(method: str) -> str | None:
+    """Why ``surrogate_test`` refuses a registered measure (a key of
+    ``_SURROGATE_REFUSALS``), or ``None``.
+
+    A measure of one signal (``output_kind="power"``), candidate delays
+    (``"delay"``), and a phase (``quantity="phase"``) are refused.
+    """
+    # The registry imports this module, so it is imported here.
+    from spectral_connectivity._measure_registry import _MEASURE_SPECS
+
+    spec = _MEASURE_SPECS.get(method)
+    if spec is None:
+        return None
+    if spec.output_kind == "power":
+        return "single_signal"
+    if spec.output_kind == "delay":
+        return "candidate_delays"
+    if spec.quantity == "phase":
+        return "phase"
+    return None
 
 
 def _signed_measure_alternative(method: str) -> Literal["greater", "two-sided"]:
