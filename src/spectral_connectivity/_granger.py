@@ -343,9 +343,8 @@ def _scatter_pairwise_granger(
     except np.linalg.LinAlgError:
         # A lone pair is left NaN; the calling measure names the NaN pairs
         # (_warn_granger_failures). Retry a stack pair by pair so one failing
-        # pair does not take the others with it (warnings the failed stack
-        # already issued can repeat). NumPy raises LinAlgError, as does CuPy
-        # under ``cupyx.errstate(linalg="raise")``.
+        # pair does not take the others with it. NumPy raises LinAlgError, as
+        # does CuPy under ``cupyx.errstate(linalg="raise")``.
         if pairs.shape[0] > 1:
             for pair in pairs:
                 _scatter_pairwise_granger(
