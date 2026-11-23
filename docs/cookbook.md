@@ -396,11 +396,16 @@ Which to choose:
 
 :::{note}
 The gapped windows' tapers are less concentrated than the DPSS (down to 0.9
-rather than about 0.95), so their estimates leak more power from strong peaks
-into the rest of the spectrum; see the `artifact_handling` parameter of
-`Multitaper` for measured sizes. Building the transform finds the tapers of
-each distinct pattern of artifacts in a trial window, about 1.5 ms per pattern
-for 1000 samples. Windows without artifacts are unchanged.
+rather than about 0.95), and fewer of them smooth less, so their expected
+spectrum differs from that without gaps. For 64-sample windows (NW = 3) with
+gaps of 4 to 12 samples, away from 0 Hz and Nyquist, it differs by under 6% for
+a spectrum spanning a factor of 100 (an AR(2) with poles of radius 0.77) and by
+up to 37% for one spanning 2400 (poles of radius 0.95 at 0.1 cycles per sample,
+two 3-sample gaps). In exchange the valid samples are used: with three of four
+trials gapped in every window, the variance of white-noise power is a third of
+that of `"drop"`. Building the transform finds the tapers of each distinct
+pattern of artifacts in a trial window, 1 to 2 ms per pattern for 1000
+samples and 36 ms for 60000. Windows without artifacts are unchanged.
 :::
 
 ## Group measures: canonical coherence between areas

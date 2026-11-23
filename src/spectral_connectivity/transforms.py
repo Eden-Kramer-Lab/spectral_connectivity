@@ -2251,49 +2251,22 @@ class Multitaper(_WindowedFourierTransform):
 
         - ``"drop"``: leave it out, as described under ``artifact_samples``.
         - ``"missing_data_tapers"``: estimate it from its valid samples with
-          missing-data Slepian tapers [3]_ [4]_: of the sequences that are
-          zero at its artifact samples, the ``n_tapers`` most concentrated in
-          the band ``[-W, W]``, ``W = time_halfbandwidth_product /
+          missing-data Slepian tapers [3]_ [4]_, the ``n_tapers`` sequences
+          zero at its artifact samples that are most concentrated in the band
+          ``[-W, W]``, ``W = time_halfbandwidth_product /
           n_time_samples_per_window`` cycles per sample (the leading
-          eigenvectors of the sinc kernel restricted to the valid samples;
-          their eigenvalues are their concentrations). Like the DPSS they are
-          orthonormal, with unit energy on the valid samples, so white noise
-          has the same expected ``power()`` as without gaps (away from 0 Hz,
-          where detrending lowers it); the window is
-          detrended (``detrend_type``) over its valid samples only. The
-          tapers concentrated above 0.9, the ``is_low_bias`` rule, are kept
-          and the others get observation weight 0, so such a window can keep
-          fewer than ``n_tapers`` (:attr:`n_kept_tapers` says how many);
-          ``Connectivity.n_valid_observations`` counts what each bin keeps,
-          and the measures that count observations use those counts. A
-          window keeping fewer than 2 is dropped, as with ``"drop"``, with a
-          warning: one with too few valid samples, or one whose artifacts
-          recur more often than every ``1 / (2 W)`` samples (``1 /
-          frequency_resolution`` seconds), which caps every taper's
-          concentration at the fraction of samples kept (every ninth sample
-          missing drops it). Windows without artifacts keep
-          the DPSS tapers and their coefficients unchanged (with
-          ``taper_weighting="adaptive"`` to within its tolerance, as its
-          iterations stop when every window has converged).
-
-          The tapers of a window with gaps are less concentrated than the
-          DPSS (down to 0.9 rather than about 0.95 or more), and fewer of
-          them smooth less, so its expected spectrum differs from that
-          without gaps. For 64-sample windows (NW = 3) with gaps of 4 to 12
-          samples, away from 0 Hz and Nyquist, by under 6% for a spectrum
-          spanning a factor of 100 (an AR(2) with poles of radius 0.77) and by
-          up to 37% for one spanning 2400 (poles of radius 0.95 at 0.1 cycles
-          per sample, a window with two 3-sample gaps). In exchange the valid
-          samples are
-          used: with three of four trials gapped in every window there, the
-          variance of white-noise power is a third of that of ``"drop"``.
-          ``taper_weighting="eigen"`` and ``"adaptive"`` use each window's own
-          concentrations (and ``"adaptive"`` the variance of its valid
-          samples). Needs generated DPSS tapers, ``is_low_bias=True``, and
-          at least 2 tapers. Construction finds the tapers of each distinct
-          pattern of artifact samples in a trial window (Lanczos iterations
-          on an FFT product with the kernel), about 1.5 ms per pattern for
-          1000 samples and 36 ms for 60000 on a laptop, and keeps them.
+          eigenvectors of the sinc kernel restricted to the valid samples),
+          with unit energy; the window is detrended over its valid samples.
+          The tapers concentrated above 0.9, the ``is_low_bias`` rule, are
+          kept and the others get observation weight 0
+          (:attr:`n_kept_tapers`); a window keeping fewer than 2 is dropped,
+          with a warning. Windows without artifacts are unchanged, and
+          ``taper_weighting`` uses each window's own concentrations. Needs
+          generated DPSS tapers, ``is_low_bias=True`` and at least 2 tapers.
+          Construction finds the tapers of each distinct artifact pattern,
+          1 to 2 ms per pattern for a 1000-sample window. When to use it,
+          its leakage and its gap limit:
+          https://spectral-connectivity.readthedocs.io/en/latest/cookbook.html#leave-out-artifacts-and-missing-samples
 
     Attributes
     ----------
