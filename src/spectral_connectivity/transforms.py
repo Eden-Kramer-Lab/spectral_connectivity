@@ -3747,9 +3747,12 @@ class VARSpectrum:
     each side, about 7 bins or more for ``r <= rho``. On it the directed
     measures are exact to the Wilson factorization's tolerance (the
     ``minimum_phase_tolerance`` of :class:`Connectivity`), down to a floor of
-    float64 rounding, a relative error near ``eps`` times the condition number
-    of the spectral matrix, at nearly singular frequencies. A grid that is a
-    multiple of another transform's FFT length contains its frequencies.
+    float64 rounding at nearly singular frequencies: a relative error of a few
+    times ``eps`` times the condition number of the spectral matrix of the
+    signals compared, which no tolerance lowers. For the pair of a chain whose
+    spectrum has condition number 1e10 at 0 Hz, that is about 1e-5 of its
+    value. A grid that is a multiple of another transform's FFT length
+    contains its frequencies.
 
     Examples
     --------
@@ -3809,10 +3812,21 @@ class VARSpectrum:
         var_coefficients = _real_var_array(
             coefficients, "coefficients", _VAR_COEFFICIENTS_LAYOUT
         )
-        if var_coefficients.ndim not in (3, 4) or (
-            var_coefficients.shape[-1] != var_coefficients.shape[-2]
+        empty = var_coefficients.ndim in (3, 4) and (
+            var_coefficients.shape[-1] == 0
+            or (var_coefficients.ndim == 4 and var_coefficients.shape[0] == 0)
+        )
+        if (
+            var_coefficients.ndim not in (3, 4)
+            or var_coefficients.shape[-1] != var_coefficients.shape[-2]
+            or empty
         ):
-            hint = VAR_SINGLE_LAG_HINT if var_coefficients.ndim == 2 else ""
+            if var_coefficients.ndim == 2:
+                hint = VAR_SINGLE_LAG_HINT
+            elif empty:
+                hint = "; a model needs at least one signal (and one time window)"
+            else:
+                hint = ""
             msg = (
                 f"coefficients must have shape {_VAR_COEFFICIENTS_LAYOUT}, one "
                 f"square matrix A_k per lag; got shape {var_coefficients.shape}{hint}."
@@ -3892,11 +3906,15 @@ class VARSpectrum:
                 )
                 warnings.warn(msg, UserWarning, stacklevel=stacklevel_outside_package())
         elif not is_positive_integer(n_fft_samples, minimum=shortest):
+            why = (
+                "two frequencies"
+                if shortest == 2
+                else f"n_lags + 1 = {shortest}, so every lag fits on the grid"
+            )
             msg = (
-                f"n_fft_samples must be an integer of at least {shortest} (2, and "
-                f"n_lags + 1 = {self.n_lags + 1} so every lag fits on the grid), got "
-                f"{n_fft_samples!r}. Omit it for the grid on which every measure is "
-                f"exact ({self.minimum_n_fft_samples} bins)."
+                f"n_fft_samples must be an integer of at least {shortest} ({why}), "
+                f"got {n_fft_samples!r}. Omit it for the grid on which every measure "
+                f"is exact ({self.minimum_n_fft_samples} bins)."
             )
             raise ValueError(msg)
         else:
