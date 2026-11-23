@@ -4,10 +4,11 @@ import numpy as np
 import pytest
 
 from spectral_connectivity.connectivity import Connectivity
-from spectral_connectivity.transforms import Multitaper
+from spectral_connectivity.transforms import Multitaper, VARSpectrum
 from spectral_connectivity.wrapper import (
     UnsupportedMeasureError,
     connectivity_to_xarray,
+    fourier_connectivity,
     multitaper_connectivity,
 )
 
@@ -155,30 +156,30 @@ def test_signal_names_length_is_validated():
         connectivity_to_xarray(m, signal_names=["only-one"])
 
 
-@pytest.mark.parametrize("wrapper", ["multitaper_connectivity", "fourier_connectivity"])
-@pytest.mark.parametrize("transform", ["VARSpectrum", "Multitaper"])
-def test_a_transform_given_as_data_points_to_connectivity_to_xarray(wrapper, transform):
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        lambda transform: multitaper_connectivity(transform, sampling_frequency=100),
+        fourier_connectivity,
+    ],
+    ids=["multitaper_connectivity", "fourier_connectivity"],
+)
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: VARSpectrum(np.array([[[0.5, 0.0], [0.4, 0.5]]]), sampling_frequency=100),
+        lambda: Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100),
+    ],
+    ids=["VARSpectrum", "Multitaper"],
+)
+def test_a_transform_given_as_data_points_to_connectivity_to_xarray(wrapper, make):
     """A transform passed where data goes names the route for transforms,
     not a conversion with np.asarray."""
-    from spectral_connectivity import (
-        VARSpectrum,
-        fourier_connectivity,
-        multitaper_connectivity,
-    )
-
-    made = (
-        VARSpectrum(np.array([[[0.5, 0.0], [0.4, 0.5]]]), sampling_frequency=100)
-        if transform == "VARSpectrum"
-        else Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100)
-    )
-    call = {
-        "multitaper_connectivity": lambda: multitaper_connectivity(
-            made, sampling_frequency=100
-        ),
-        "fourier_connectivity": lambda: fourier_connectivity(made),
-    }[wrapper]
-    with pytest.raises(TypeError, match=rf"is a spectral transform \({transform}\)") as info:
-        call()
+    transform = make()
+    with pytest.raises(
+        TypeError, match=rf"is a spectral transform \({type(transform).__name__}\)"
+    ) as info:
+        wrapper(transform)
     message = str(info.value)
     assert "connectivity_to_xarray(transform, method)" in message
     assert "np.asarray" not in message

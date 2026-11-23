@@ -12,8 +12,9 @@ import numpy as np
 import pytest
 
 from spectral_connectivity import Connectivity, list_measures
-from spectral_connectivity._measure_registry import _EXACT_SPECTRUM_MEASURES, _MEASURE_SPECS
+from spectral_connectivity._measure_registry import _EXACT_SPECTRUM_MEASURES
 from spectral_connectivity.connectivity import EXPECTATION_AXES
+from tests._measure_helpers import REFUSED_FOR_EXACT_SPECTRUM, measure_kwargs
 from tests._var_oracle import (
     _STRONG_CHAIN_COEFFICIENTS,
     _analytic_var,
@@ -21,19 +22,7 @@ from tests._var_oracle import (
 )
 
 _GROUPS = ["a", "a", "b"]
-_MEASURE_KWARGS = {
-    "canonical_coherence": {"group_labels": _GROUPS},
-    "canonical_coherency": {"group_labels": _GROUPS},
-    "maximized_imaginary_coherency": {"group_labels": _GROUPS},
-    "maximized_imaginary_coherency_components": {"group_labels": _GROUPS},
-    "multivariate_interaction_measure": {"group_labels": _GROUPS},
-    "blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
-    "time_reversed_blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
-    "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
-}
-_REFUSED = [
-    name for name, spec in _MEASURE_SPECS.items() if not spec.defined_for_exact_spectrum
-]
+_MEASURE_KWARGS = measure_kwargs(_GROUPS)
 
 
 @pytest.fixture(scope="module")
@@ -67,7 +56,7 @@ def _compute(connectivity, name):
 
 def test_the_refused_measures_are_the_ones_that_use_observations():
     """The registry's split, read from each implementation, as a list to review."""
-    assert sorted(_REFUSED) == sorted(
+    assert sorted(REFUSED_FOR_EXACT_SPECTRUM) == sorted(
         [
             "phase_locking_value",
             "corrected_imaginary_phase_locking_value",
@@ -81,10 +70,12 @@ def test_the_refused_measures_are_the_ones_that_use_observations():
             "group_delay",
         ]
     )
-    assert set(_EXACT_SPECTRUM_MEASURES) | set(_REFUSED) == {m.name for m in list_measures()}
+    assert set(_EXACT_SPECTRUM_MEASURES) | set(REFUSED_FOR_EXACT_SPECTRUM) == {
+        m.name for m in list_measures()
+    }
 
 
-@pytest.mark.parametrize("name", _REFUSED)
+@pytest.mark.parametrize("name", REFUSED_FOR_EXACT_SPECTRUM)
 def test_measures_using_observations_refuse_an_exact_spectrum(coefficients, name):
     connectivity = Connectivity(coefficients, is_exact_spectrum=True)
     with pytest.raises(
@@ -161,15 +152,14 @@ def test_the_expectation_must_average_the_tapers(coefficients, expectation_type)
     Connectivity(coefficients, expectation_type=expectation_type)
 
 
-def test_from_transform_reads_the_flag(coefficients):
+def test_from_transform_reads_the_flag_strictly(coefficients):
+    """The transform's flag reaches the instance, and must be a bool there as
+    on Connectivity itself."""
     exact = Connectivity.from_transform(_ExactTransform(coefficients))
     assert exact.is_exact_spectrum
     with pytest.raises(ValueError, match="not defined for an exact spectrum"):
         exact.phase_locking_value()
     assert not Connectivity(coefficients).is_exact_spectrum
-
-
-def test_a_flag_that_is_not_a_bool_is_rejected(coefficients):
     transform = _ExactTransform(coefficients)
     transform.is_exact_spectrum = "False"
     with pytest.raises(TypeError, match=r"^transform\.is_exact_spectrum must be a bool"):

@@ -28,10 +28,13 @@ from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import connectivity_to_xarray
 from tests._backend_helpers import to_host
 from tests._expected_spectrum import _assert_multitaper_estimates
+from tests._measure_helpers import REFUSED_FOR_EXACT_SPECTRUM
 from tests._var_oracle import (
     _analytic_directed_measures,
     _analytic_var,
     _block_granger_from_state_space,
+    _companion_matrix,
+    _companion_spectral_radius,
     _dense_stable_var,
     _pairwise_granger_from_state_space,
     _state_space_conditional_granger,
@@ -60,6 +63,21 @@ def _model_spectrum(coefficients, noise_covariance, n_fft):
     return _analytic_var(coefficients, noise_covariance, n_fft)[2] / _SAMPLING_FREQUENCY
 
 
+def _one_sided_density(model, n_fft):
+    """The one-sided power spectral density of ``model`` (coefficients, noise
+    covariance) on ``n_fft`` bins: every bin between 0 Hz and Nyquist doubled."""
+    density = np.real(np.diagonal(_model_spectrum(*model, n_fft), 0, -2, -1))
+    one_sided = density[: n_fft // 2 + 1].copy()
+    one_sided[1 : (n_fft + 1) // 2] *= 2
+    return one_sided
+
+
+def _var(model, **settings):
+    """The VARSpectrum of ``model`` (coefficients, noise covariance) at the
+    tests' sampling frequency."""
+    return VARSpectrum(*model, sampling_frequency=_SAMPLING_FREQUENCY, **settings)
+
+
 def _tightly_factored(var):
     """A Connectivity of ``var`` factored far below the tolerances compared."""
     return Connectivity.from_transform(
@@ -82,10 +100,8 @@ def test_coefficients_reproduce_the_model_spectrum(
     """The taper mean of the outer products is S(f) / sampling_frequency on
     every bin, exactly conjugate-symmetric (so the Wilson factorization takes
     its half-spectrum path) and real at 0 Hz and Nyquist."""
-    var = VARSpectrum(
-        coefficients,
-        noise_covariance,
-        sampling_frequency=_SAMPLING_FREQUENCY,
+    var = _var(
+        (coefficients, noise_covariance),
         n_fft_samples=n_fft_samples,
     )
     assert isinstance(var, SpectralTransform)
@@ -110,16 +126,11 @@ def test_coefficients_reproduce_the_model_spectrum(
 
 def test_power_is_the_models_one_sided_density():
     """power() doubles every bin between 0 Hz and Nyquist of S_ii / fs."""
-    coefficients, noise_covariance = _DENSE
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var(_DENSE)
     power = Connectivity.from_transform(var).power(one_sided=True)[0]
-    n_fft = var.n_fft_samples
-    density = np.real(
-        np.diagonal(_model_spectrum(coefficients, noise_covariance, n_fft), 0, -2, -1)
+    np.testing.assert_allclose(
+        power, _one_sided_density(_DENSE, var.n_fft_samples), rtol=1e-12
     )
-    expected = density[: n_fft // 2 + 1].copy()
-    expected[1 : (n_fft + 1) // 2] *= 2
-    np.testing.assert_allclose(power, expected, rtol=1e-12)
 
 
 def test_long_multitaper_estimate_of_the_simulated_model_is_a_draw_around_it():
@@ -175,7 +186,7 @@ def test_pairwise_conditional_and_time_reversed_granger_match_the_state_space_or
 ):
     """On the default grid the directed measures are those of the model to the
     Wilson tolerance: the state-space oracle factors nothing."""
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     connectivity = _tightly_factored(var)
     n_fft = var.n_fft_samples
 
@@ -219,7 +230,7 @@ def test_blockwise_granger_matches_the_state_space_oracle():
     coefficients, noise_covariance = _dense_stable_var(
         n_signals=5, n_lags=2, spectral_radius=0.8, seed=0
     )
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     group_labels = ["a", "b", "b", "c", "c"]
     connectivity = _tightly_factored(var)
     for measure, model in (
@@ -258,7 +269,7 @@ def test_transfer_function_measures_match_their_closed_forms(measure):
     """Every entry, the diagonal included, transposed from the closed forms'
     native [target, source] layout."""
     coefficients, noise_covariance = _CHAIN
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     A, H, _ = _analytic_var(coefficients, noise_covariance, var.n_fft_samples)
     expected = np.swapaxes(
         _analytic_directed_measures(A, H, noise_covariance)[measure], -1, -2
@@ -271,7 +282,7 @@ def test_transfer_function_measures_match_their_closed_forms(measure):
 def test_measures_of_the_spectral_matrix_follow_its_formulas(coefficients, noise_covariance):
     """Coherency, partial coherence, canonical and global coherence of the
     exact S(f), from their definitions."""
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     connectivity = Connectivity.from_transform(var)
     n_fft = var.n_fft_samples
     spectrum = _model_spectrum(coefficients, noise_covariance, n_fft)[: n_fft // 2 + 1]
@@ -367,18 +378,14 @@ def test_the_minimum_grid_follows_the_decay_of_the_model():
     share their dynamics) decay more slowly than the spectral radius alone
     says; a nilpotent companion matrix reaches 0 at the length of its
     impulse response."""
-    for coefficients, noise_covariance in (_DENSE, _CHAIN):
-        var = VARSpectrum(
-            coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY
-        )
-        companion = np.zeros((6, 6))
-        companion[:3] = np.concatenate(list(coefficients), axis=1)
-        companion[3:, :3] = np.eye(3)
+    for model in (_DENSE, _CHAIN):
+        var = _var(model)
+        companion = _companion_matrix(model[0])
         lag = var.minimum_n_fft_samples // 2
         assert np.linalg.norm(np.linalg.matrix_power(companion, lag)) <= 1e-10
         assert np.linalg.norm(np.linalg.matrix_power(companion, lag - 1)) > 1e-10
         rho = var.spectral_radius[0]
-        np.testing.assert_allclose(rho, np.abs(np.linalg.eigvals(companion)).max())
+        np.testing.assert_allclose(rho, _companion_spectral_radius(model[0]))
         assert rho**lag <= 1e-10
         assert var.n_fft_samples >= var.minimum_n_fft_samples
     # The chain's eigenvalues are repeated: the radius alone would allow a
@@ -462,15 +469,13 @@ def test_messages_name_the_radius_and_the_grid():
             noise_covariance,
             sampling_frequency=_SAMPLING_FREQUENCY,
         )
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     minimum = var.minimum_n_fft_samples
     assert f"spectral_radius={var.spectral_radius[0]:.6g}" in repr(var)
     match = rf"below this model's minimum_n_fft_samples \({minimum}\)"
     with pytest.warns(UserWarning, match=match) as caught:
-        short = VARSpectrum(
-            coefficients,
-            noise_covariance,
-            sampling_frequency=_SAMPLING_FREQUENCY,
+        short = _var(
+            (coefficients, noise_covariance),
             n_fft_samples=minimum - 2,
         )
     message = str(caught[0].message)
@@ -478,16 +483,11 @@ def test_messages_name_the_radius_and_the_grid():
     assert f"use n_fft_samples >= {minimum}" in message
     # Power stays exact on the short grid.
     power = Connectivity.from_transform(short).power(one_sided=True)[0]
-    density = _model_spectrum(coefficients, noise_covariance, minimum - 2)
-    expected = np.real(np.diagonal(density, 0, -2, -1))[: (minimum - 2) // 2 + 1].copy()
-    expected[1:-1] *= 2
-    np.testing.assert_allclose(power, expected, rtol=1e-12)
+    np.testing.assert_allclose(power, _one_sided_density(_DENSE, minimum - 2), rtol=1e-12)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        exact = VARSpectrum(
-            coefficients,
-            noise_covariance,
-            sampling_frequency=_SAMPLING_FREQUENCY,
+        exact = _var(
+            (coefficients, noise_covariance),
             n_fft_samples=minimum,
         )
     assert exact.n_fft_samples == minimum
@@ -514,7 +514,7 @@ def test_the_sampling_frequency_is_required_by_its_name():
 def test_the_model_is_a_read_only_snapshot():
     """Changing the caller's arrays afterwards changes nothing."""
     coefficients, noise_covariance = (array.copy() for array in _DENSE)
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     before = var.fft()
     coefficients[:] = 0
     noise_covariance[:] = np.eye(3)
@@ -528,7 +528,7 @@ def test_labeled_results_record_the_model():
     """connectivity_to_xarray labels the signals and records the model, the
     grid, and that the windows are labeled by index."""
     coefficients, noise_covariance = _DENSE
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     result = connectivity_to_xarray(
         var, "magnitude_squared_coherence", signal_names=["a", "b", "c"]
     )
@@ -564,9 +564,7 @@ def test_labeled_results_record_the_model():
     }
     np.testing.assert_array_equal(summarized["noise_covariance"], [large_noise])
 
-    timed = VARSpectrum(
-        coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY, time=[2.0]
-    )
+    timed = _var((coefficients, noise_covariance), time=[2.0])
     power = connectivity_to_xarray(timed, "power")
     assert power.attrs["time_coordinate"] == "provided"
     assert power.time.values.tolist() == [2.0]
@@ -576,18 +574,15 @@ def test_labeled_results_record_the_model():
 
 def test_refused_measures_are_refused_through_the_wrapper():
     coefficients, noise_covariance = _DENSE
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     with pytest.raises(ValueError, match=r"^phase_locking_value is not defined for an exact"):
         connectivity_to_xarray(var, "phase_locking_value")
 
 
 def test_the_docstring_names_every_refused_measure():
     """The class documentation lists what the registry refuses."""
-    refused = [
-        name for name, spec in _MEASURE_SPECS.items() if not spec.defined_for_exact_spectrum
-    ]
     notes = " ".join(VARSpectrum.__doc__.split())
-    assert all(name in notes for name in refused)
+    assert all(name in notes for name in REFUSED_FOR_EXACT_SPECTRUM)
 
 
 def test_from_var_is_from_transform_of_the_var_spectrum():
@@ -656,7 +651,7 @@ def test_pairwise_granger_of_a_chain_with_shared_slow_dynamics(rho, rtol):
     Wilson tolerance moves, so there the allowance is atol 1e-8 plus rtol
     1e-6, 40 times the measured error."""
     coefficients, noise_covariance = _shared_dynamics_chain(rho)
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     granger = _directed(
         Connectivity.from_transform(var), "pairwise_spectral_granger_prediction"
     )[0]
@@ -691,7 +686,7 @@ def test_the_chain_check_catches_an_unscaled_factorization(monkeypatch):
         ),
     )
     coefficients, noise_covariance = _shared_dynamics_chain(0.99)
-    var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=_SAMPLING_FREQUENCY)
+    var = _var((coefficients, noise_covariance))
     granger = _directed(
         Connectivity.from_transform(var), "pairwise_spectral_granger_prediction"
     )[0]
