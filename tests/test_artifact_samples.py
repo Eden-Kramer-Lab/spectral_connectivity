@@ -12,7 +12,12 @@ import warnings
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
+from spectral_connectivity import (
+    Connectivity,
+    Multitaper,
+    ShortTimeFourierTransform,
+    multitaper_connectivity,
+)
 from spectral_connectivity.connectivity import _find_significant_frequencies
 from spectral_connectivity.statistics import coherence_significance_pvalue
 from tests._backend_helpers import to_host
@@ -614,3 +619,31 @@ def test_coherence_test_keeps_its_size_with_dropped_trials(independent_signals):
     assert abs(size - 0.05) < limit, (size, limit)
     raw = coherence_significance_pvalue(coherency, independent_signals.n_observations) < 0.05
     assert raw.mean() - 0.05 > 10 * limit, raw.mean()
+
+
+def test_stft_drops_the_trial_windows_with_artifacts(recording):
+    """ShortTimeFourierTransform takes artifact_samples as Multitaper does."""
+    time_series, artifacts = recording
+    stft = ShortTimeFourierTransform(
+        time_series,
+        SAMPLING_FREQUENCY,
+        n_time_samples_per_window=WINDOW,
+        artifact_samples="nonfinite",
+    )
+    np.testing.assert_array_equal(to_host(stft.artifact_samples), artifacts)
+    assert to_host(stft.observation_weights).shape == (4, 5, 1, stft.n_fft_samples, 1)
+    connectivity = Connectivity.from_transform(stft)
+    for measure in ("power", "magnitude_squared_coherence", "pairwise_phase_consistency"):
+        masked = _quietly(getattr(connectivity, measure))
+        for window in range(4):
+            samples = slice(window * WINDOW, (window + 1) * WINDOW)
+            trials = ~artifacts[samples].any(axis=0)
+            kept = Connectivity.from_transform(
+                ShortTimeFourierTransform(time_series[samples, trials], SAMPLING_FREQUENCY)
+            )
+            np.testing.assert_allclose(
+                masked[window], _quietly(getattr(kept, measure))[0], rtol=1e-10, atol=1e-13
+            )
+    assert "artifact_samples='nonfinite' (16 of 20 trial windows kept)" in repr(stft)
+    assert "Artifact samples:" in stft.summarize_parameters()
+    assert stft._provenance_metadata()["n_dropped_trial_windows"] == 4
