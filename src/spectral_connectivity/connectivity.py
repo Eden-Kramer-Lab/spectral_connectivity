@@ -2838,24 +2838,25 @@ class Connectivity:
                     1,
                 )
         replicates: list[NDArray[np.floating]] = []
-        for omitted in range(n_observations):
-            keep = xp.arange(n_observations) != omitted
-            subset = xp.compress(keep, observation_coefficients, axis=observation_axis)
-            subset_weights = (
-                None
-                if observation_weights is None
-                else xp.compress(keep, observation_weights, axis=observation_axis)
-            )
-            replicate_connectivity = self._with_coefficients(subset, subset_weights)
-            token = _emit_migration_notices.set(False)
-            try:
+        # The full estimate carried the migration notices; the replicates do not.
+        token = _emit_migration_notices.set(False)
+        try:
+            for omitted in range(n_observations):
+                keep = xp.arange(n_observations) != omitted
+                subset = xp.compress(keep, observation_coefficients, axis=observation_axis)
+                subset_weights = (
+                    None
+                    if observation_weights is None
+                    else xp.compress(keep, observation_weights, axis=observation_axis)
+                )
+                replicate_connectivity = self._with_coefficients(subset, subset_weights)
                 replicate = getattr(replicate_connectivity, method)(**method_kwargs)
-            finally:
-                _emit_migration_notices.reset(token)
-            if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
-                msg = f"jackknife requires a real array result from {method!r}."
-                raise TypeError(msg)
-            replicates.append(np.asarray(replicate))
+                if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
+                    msg = f"jackknife requires a real array result from {method!r}."
+                    raise TypeError(msg)
+                replicates.append(np.asarray(replicate))
+        finally:
+            _emit_migration_notices.reset(token)
 
         resolved_transformation: Literal[
             "identity", "log", "fisher", "fisher_squared", "circular"
@@ -3003,7 +3004,8 @@ class Connectivity:
             n_signals)``, ``fwer_axis=(1, 2, 3)`` corrects across
             frequencies and pairs separately in each time window. The result
             records the axes as non-negative integers (``None`` as every
-            axis).
+            axis). ``()`` is refused: with each element its own family, use
+            ``p_value``.
         half_bandwidth : float, optional
             For ``kind="phase_rotation"`` only (refused otherwise): the
             half-width of the transform's spectral smoothing, in the units of
@@ -3244,6 +3246,16 @@ class Connectivity:
                 f"{', '.join(map(repr, _SURROGATE_ALTERNATIVES))}, got {alternative!r}."
             )
             raise ValueError(msg)
+        if isinstance(fwer_axis, tuple) and not fwer_axis:
+            msg = (
+                "fwer_axis=() makes every element its own family, so fwer_p_value "
+                "would equal p_value while null_maxima kept every surrogate's whole "
+                "result (n_surrogates times the measure's size). Use "
+                "result.p_value for the uncorrected test of each element, or name "
+                "the axes of one family, e.g. fwer_axis=(1, 2, 3) for every "
+                "frequency and pair within each time window."
+            )
+            raise ValueError(msg)
         rotation_half_bandwidth = None
         if kind == "phase_rotation":
             rotation_half_bandwidth = self._rotation_half_bandwidth(half_bandwidth)
@@ -3299,20 +3311,22 @@ class Connectivity:
             _surrogate_statistic(estimate, alternative), tested, family_axes, n_surrogates
         )
         rng = _generator(random_state)
-        for _ in range(n_surrogates):
-            surrogate_connectivity = self._with_coefficients(
-                self._surrogate_coefficients(kind, unit_axes, rng), self._observation_weights
-            )
-            token = _emit_migration_notices.set(False)
-            try:
-                values = getattr(surrogate_connectivity, method)(**method_kwargs)
-            finally:
-                _emit_migration_notices.reset(token)
-            tally.add(
-                _surrogate_statistic(
-                    _real_array_result(values, method, "surrogate_test"), alternative
+        # The estimate carried the migration notices; the surrogates do not.
+        token = _emit_migration_notices.set(False)
+        try:
+            for _ in range(n_surrogates):
+                surrogate_connectivity = self._with_coefficients(
+                    self._surrogate_coefficients(kind, unit_axes, rng),
+                    self._observation_weights,
                 )
-            )
+                values = getattr(surrogate_connectivity, method)(**method_kwargs)
+                tally.add(
+                    _surrogate_statistic(
+                        _real_array_result(values, method, "surrogate_test"), alternative
+                    )
+                )
+        finally:
+            _emit_migration_notices.reset(token)
         if tally.n_surrogates_with_nan:
             warnings.warn(
                 f"surrogate_test({method!r}): {tally.n_surrogates_with_nan} of "

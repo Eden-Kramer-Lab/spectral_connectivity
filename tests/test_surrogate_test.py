@@ -302,9 +302,9 @@ def test_coupled_pair_is_detected_and_the_independent_one_is_not(lagged_connecti
 
 
 def test_fwer_axis_sets_the_families(lagged_connectivity):
-    """fwer_axis=(1, 2, 3) gives one family per time window: null_maxima has the
-    kept axis; fwer_axis=() makes each element its own family, so the adjusted
-    p-values are the element-wise ones."""
+    """fwer_axis=(1, 2, 3) gives one family per time window, so null_maxima
+    has the kept axis, and the stored axes are normalized; the element-wise
+    p-values do not depend on the families."""
     per_window = lagged_connectivity.surrogate_test(
         "imaginary_coherence",
         kind="conjugation",
@@ -314,11 +314,20 @@ def test_fwer_axis_sets_the_families(lagged_connectivity):
     )
     assert per_window.fwer_axis == (1, 2, 3)
     assert per_window.null_maxima.shape == (9, 1)
-    each = lagged_connectivity.surrogate_test(
-        "imaginary_coherence", kind="conjugation", n_surrogates=9, random_state=2, fwer_axis=()
+    pooled = lagged_connectivity.surrogate_test(
+        "imaginary_coherence", kind="conjugation", n_surrogates=9, random_state=2
     )
-    np.testing.assert_array_equal(each.fwer_p_value, each.p_value)
-    np.testing.assert_array_equal(each.p_value, per_window.p_value)
+    assert pooled.fwer_axis == (0, 1, 2, 3)
+    np.testing.assert_array_equal(pooled.p_value, per_window.p_value)
+
+
+def test_empty_fwer_axis_is_refused_for_p_value(lagged_connectivity):
+    """fwer_axis=() would store every surrogate's whole result to reproduce
+    p_value; the message points there."""
+    with pytest.raises(ValueError, match=r"fwer_axis=\(\) makes every element its own family"):
+        lagged_connectivity.surrogate_test(
+            "imaginary_coherence", kind="conjugation", n_surrogates=9, fwer_axis=()
+        )
 
 
 @pytest.mark.parametrize("alternative", ["less", "two-sided"])
