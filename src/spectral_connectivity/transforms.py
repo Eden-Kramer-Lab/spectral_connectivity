@@ -2368,6 +2368,8 @@ class Multitaper(_WindowedFourierTransform):
     # Trial windows with artifacts, and those of them kept.
     _n_gapped_trial_windows: int = 0
     _n_missing_data_trial_windows: int = 0
+    # What the dropped windows with artifacts look like, for the warnings.
+    _dropped_gap_summary: str = ""
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Keep transform parameters immutable once construction has completed."""
@@ -2998,6 +3000,7 @@ class Multitaper(_WindowedFourierTransform):
             self.time_halfbandwidth_product,
             self.n_tapers,
             to_numpy(self._tapers),
+            self.sampling_frequency,
         )
         counts = np.full(clean.shape, self.n_tapers, dtype=np.intp)
         counts[window_index, trial_index] = n_kept[pattern_index]
@@ -3015,21 +3018,48 @@ class Multitaper(_WindowedFourierTransform):
             self._gapped_tapers = xp.asarray(tapers * np.sqrt(self.sampling_frequency))
             self._gapped_concentrations = xp.asarray(concentrations)
             self._gapped_valid = xp.asarray(~patterns[n_kept > 0])
+        if not is_kept.all():
+            self._dropped_gap_summary = _dropped_gap_summary(patterns[n_kept == 0])
         if np.any(n_kept[pattern_index[is_kept]] < self.n_tapers):
             self._n_kept_tapers = _immutable_array_snapshot(xp.asarray(counts))
         kept_windows: BackendArray = xp.asarray(counts > 0)
         return kept_windows
 
+    def _check_kept_trial_windows(self, valid_windows: BackendArray) -> None:
+        """The base checks, then, with missing-data tapers, a warning that
+        windows with artifacts were dropped all the same."""
+        super()._check_kept_trial_windows(valid_windows)
+        n_dropped = self._n_gapped_trial_windows - self._n_missing_data_trial_windows
+        if self.artifact_handling == "drop" or n_dropped == 0:
+            return
+        window = f"{self.n_time_samples_per_window} samples ({self.time_window_duration:g} s)"
+        warnings.warn(
+            f"artifact_handling='missing_data_tapers': {n_dropped} of "
+            f"{self._n_gapped_trial_windows} trial windows with artifacts kept fewer "
+            f"than 2 tapers and were dropped. {self._window_drop_rule(window)} "
+            f"{type(self).__name__}.n_kept_tapers shows what each window keeps.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
     def _window_drop_rule(self, window: str) -> str:
         """When a trial's window is dropped, for the warnings."""
         if self.artifact_handling == "drop":
             return super()._window_drop_rule(window)
+        recurrence = self.n_time_samples_per_window / (2 * self.time_halfbandwidth_product)
         return (
-            "With artifact_handling='missing_data_tapers' a trial's window of "
-            f"{window} is dropped if fewer than 2 of its missing-data tapers have a "
-            f"concentration above {MIN_EIGENVALUE_THRESHOLD}: too few of its "
-            "samples are valid, or its artifacts recur too often, for "
-            f"time_halfbandwidth_product={self.time_halfbandwidth_product:g}."
+            f"With artifact_handling='missing_data_tapers' a trial's window of {window} "
+            "is dropped if fewer than 2 of its missing-data tapers have enough of "
+            f"their energy ({MIN_EIGENVALUE_THRESHOLD:.0%}) inside the frequency band: "
+            "too few of its samples are valid, or its artifacts recur more often than "
+            f"every 1/(2W) = {recurrence:.3g} samples "
+            f"({recurrence / self.sampling_frequency:.3g} s, one over the frequency "
+            "resolution), which caps that energy at the fraction of samples valid. "
+            f"{self._dropped_gap_summary}To keep such windows use a larger "
+            "time_halfbandwidth_product (a wider band, so that 1/(2W) falls below "
+            "the artifacts' spacing) or a longer window (more valid samples around "
+            "a long artifact), or artifact_handling='drop', which drops every "
+            "window with an artifact."
         )
 
     def _estimate_gapped_windows(
@@ -4777,16 +4807,26 @@ def _missing_data_slepian_tapers(
     return tapers, concentrations
 
 
+# Seconds per cubed valid sample of one missing-data taper eigenproblem, from
+# timings on a laptop (27 ms for 980 samples to 20 s for 7840); machines differ.
+_EIGENPROBLEM_SECONDS_PER_CUBED_SAMPLE = 3.5e-11
+# Warn above this estimated time, or above this size of one kernel.
+_MISSING_DATA_TAPER_SECONDS_WARNING = 10.0
+_MISSING_DATA_TAPER_KERNEL_BYTES_WARNING = 1e9
+
+
 def _missing_data_taper_sets(
     valid: NDArray[np.bool_],
     time_halfbandwidth_product: float,
     n_tapers: int,
     orientation: NDArray[np.floating],
+    sampling_frequency: float,
 ) -> tuple[NDArray[np.intp], NDArray[np.floating], NDArray[np.floating]]:
     """The missing-data tapers each gap pattern keeps, on the host.
 
     A pattern keeps its tapers concentrated above ``MIN_EIGENVALUE_THRESHOLD``
-    if there are at least 2 of them, and none otherwise.
+    if there are at least 2 of them, and none otherwise. Warns first when the
+    eigenproblems are estimated to take long or need much memory.
 
     Parameters
     ----------
@@ -4796,6 +4836,8 @@ def _missing_data_taper_sets(
     n_tapers : int
     orientation : NDArray[float], shape (n_time_samples_per_window, n_tapers)
         The DPSS tapers, for :func:`_missing_data_slepian_tapers`.
+    sampling_frequency : float
+        For the warning's durations.
 
     Returns
     -------
@@ -4812,6 +4854,7 @@ def _missing_data_taper_sets(
     # The concentrations are at most the restricted kernel's trace, 2 W n_valid,
     # in sum, so below twice the threshold two cannot pass: no eigenproblem.
     is_solved = 2 * half_bandwidth * n_valid > 2 * MIN_EIGENVALUE_THRESHOLD
+    _warn_about_missing_data_taper_cost(n_valid[is_solved], sampling_frequency)
     n_kept = np.zeros(n_patterns, dtype=np.intp)
     tapers, concentrations = [], []
     for pattern in np.flatnonzero(is_solved):
@@ -4829,6 +4872,60 @@ def _missing_data_taper_sets(
     if not tapers:
         return n_kept, np.zeros((0, n_time_samples, n_tapers)), np.zeros((0, n_tapers))
     return n_kept, np.stack(tapers), np.stack(concentrations)
+
+
+def _warn_about_missing_data_taper_cost(
+    n_valid: NDArray[np.integer], sampling_frequency: float
+) -> None:
+    """Warn once if the eigenproblems of patterns with ``n_valid`` valid
+    samples are estimated to take over ``_MISSING_DATA_TAPER_SECONDS_WARNING``
+    or one kernel to need over ``_MISSING_DATA_TAPER_KERNEL_BYTES_WARNING``."""
+    if n_valid.size == 0:
+        return
+    seconds = _EIGENPROBLEM_SECONDS_PER_CUBED_SAMPLE * float(
+        np.sum(n_valid.astype(float) ** 3)
+    )
+    kernel_bytes = 8 * float(n_valid.max()) ** 2
+    if (
+        seconds <= _MISSING_DATA_TAPER_SECONDS_WARNING
+        and kernel_bytes <= _MISSING_DATA_TAPER_KERNEL_BYTES_WARNING
+    ):
+        return
+    n_problems = int(n_valid.size)
+    typical = float(np.mean(n_valid))
+    warnings.warn(
+        f"artifact_handling='missing_data_tapers' will solve {n_problems} "
+        f"eigenproblem{'' if n_problems == 1 else 's'} of about {typical:.0f} samples "
+        f"({typical / sampling_frequency:.3g} s){'' if n_problems == 1 else ' each'}, "
+        "one per distinct pattern of "
+        f"artifact samples in a trial window, estimated at {seconds:.0f} s, with a "
+        f"kernel of up to {kernel_bytes / 1e9:.2g} GB. The cost of each grows as the "
+        "cube of the window length, its memory as the square: halving "
+        "time_window_duration divides each by about 8 and 4. Or use "
+        "artifact_handling='drop'.",
+        UserWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
+
+
+def _dropped_gap_summary(artifacts: NDArray[np.bool_]) -> str:
+    """A sentence on the valid fraction and artifact spacing of the dropped
+    windows' artifact patterns ``(n_patterns, n_time_samples_per_window)``."""
+    valid_fraction = 1 - artifacts.mean(axis=1)
+    # Separate artifacts: runs of artifact samples.
+    n_runs = np.count_nonzero(
+        np.diff(artifacts.astype(np.int8), prepend=0, axis=1) == 1, axis=1
+    )
+    most = int(n_runs.max())
+    spacing = (
+        f", and up to {most} separate artifacts in one window "
+        f"({artifacts.shape[1] / most:.3g} samples apart on average)"
+        if most > 1
+        else ""
+    )
+    lowest, highest = valid_fraction.min(), valid_fraction.max()
+    fraction = f"{lowest:.0%}" if lowest == highest else f"{lowest:.0%} to {highest:.0%}"
+    return f"The dropped windows have {fraction} of their samples valid{spacing}. "
 
 
 def _detrend_valid_samples(

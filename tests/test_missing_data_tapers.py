@@ -8,6 +8,8 @@ window keeping fewer than 2 is dropped. Windows without artifacts are the
 ordinary DPSS estimate, bit for bit.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 from scipy.signal import detrend as scipy_detrend
@@ -56,11 +58,20 @@ def _valid(gaps, n_time=WINDOW):
     return valid
 
 
+# The warning that windows with artifacts were dropped all the same, which the
+# fixtures do on purpose (tested in test_dropping_windows_with_artifacts_warns).
+DROPPED_ANYWAY = "artifact_handling='missing_data_tapers': .* were dropped"
+
+
 def _multitaper(time_series, artifacts, **kwargs):
     kwargs.setdefault("n_time_samples_per_window", WINDOW)
     kwargs.setdefault("time_halfbandwidth_product", NW)
     kwargs.setdefault("artifact_handling", "missing_data_tapers")
-    return Multitaper(time_series, SAMPLING_FREQUENCY, artifact_samples=artifacts, **kwargs)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", DROPPED_ANYWAY, UserWarning)
+        return Multitaper(
+            time_series, SAMPLING_FREQUENCY, artifact_samples=artifacts, **kwargs
+        )
 
 
 @pytest.fixture(scope="module")
@@ -465,6 +476,35 @@ def test_artifact_handling_is_immutable_and_reported(recording):
     assert metadata["n_missing_data_taper_trial_windows"] == 3
 
 
+def test_dropping_windows_with_artifacts_warns(recording):
+    """Once, with the count, what the dropped windows look like, the rule
+    against the window's 1/(2W), and the remedies."""
+    time_series, artifacts = recording
+    with pytest.warns(UserWarning, match=DROPPED_ANYWAY) as record:
+        Multitaper(
+            time_series,
+            SAMPLING_FREQUENCY,
+            n_time_samples_per_window=WINDOW,
+            time_halfbandwidth_product=NW,
+            artifact_samples=artifacts,
+            artifact_handling="missing_data_tapers",
+        )
+    assert len(record) == 1
+    message = str(record[0].message)
+    for part in (
+        "2 of 5 trial windows with artifacts kept fewer than 2 tapers",
+        "enough of their energy (90%) inside the frequency band",
+        "every 1/(2W) = 10.7 samples (0.0533 s",
+        (
+            "The dropped windows have 22% to 66% of their samples valid, and up to 22 "
+            "separate artifacts in one window (2.91 samples apart on average)."
+        ),
+        "a larger time_halfbandwidth_product",
+        "Multitaper.n_kept_tapers",
+    ):
+        assert part in message, part
+
+
 def test_a_window_keeping_one_concentrated_taper_is_dropped():
     """50 of 128 samples missing at NW = 2 leaves exactly one taper above 0.9."""
     n_time = 128
@@ -480,6 +520,26 @@ def test_a_window_keeping_one_concentrated_taper_is_dropped():
     )
     np.testing.assert_array_equal(to_host(multitaper.n_kept_tapers), [[3, 0]])
     np.testing.assert_array_equal(to_host(multitaper.valid_windows), [[True, False]])
+
+
+def test_a_long_computation_warns_with_its_estimate(recording, monkeypatch):
+    """The estimate (here forced over the limit) names the eigenproblems, their
+    size, the time, and the remedies; a kernel over the memory limit too."""
+    from spectral_connectivity import transforms
+
+    time_series, artifacts = recording
+    monkeypatch.setattr(transforms, "_MISSING_DATA_TAPER_SECONDS_WARNING", 0.0)
+    with pytest.warns(UserWarning, match="will solve") as record:
+        _multitaper(time_series, artifacts)
+    message = str(record[0].message)
+    # Five patterns; the one with 50 of 64 samples missing needs none. The
+    # others have 60, 58, 42 and 56 valid samples.
+    assert "will solve 4 eigenproblems of about 54 samples (0.27 s) each" in message
+    assert "halving time_window_duration divides each by about 8 and 4" in message
+    monkeypatch.setattr(transforms, "_MISSING_DATA_TAPER_SECONDS_WARNING", 10.0)
+    monkeypatch.setattr(transforms, "_MISSING_DATA_TAPER_KERNEL_BYTES_WARNING", 1e4)
+    with pytest.warns(UserWarning, match=r"a kernel of up to 2\.9e-05 GB"):
+        _multitaper(time_series, artifacts)
 
 
 def test_the_drop_warning_names_the_alternative():
