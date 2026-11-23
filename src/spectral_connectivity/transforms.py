@@ -2243,10 +2243,7 @@ class Multitaper(_WindowedFourierTransform):
         n_windows = int(valid_windows.shape[0])
         empty = ~xp.any(valid_windows, axis=1)
         n_empty = int(xp.sum(empty))
-        window = (
-            f"{self.n_time_samples_per_window} samples "
-            f"({self.time_window_duration:g} s)"
-        )
+        window = f"{self.n_time_samples_per_window} samples ({self.time_window_duration:g} s)"
         inverted = (
             "valid_samples marks the samples to keep as True; if your mask marks "
             "artifacts as True, pass ~mask."
