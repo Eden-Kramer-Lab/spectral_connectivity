@@ -2484,8 +2484,8 @@ class Connectivity:
                 f"{n_single} of {n_bins} bins (one per kept observation index and "
                 "frequency), where its finite-sample correction, which needs two, "
                 "is undefined, so it is NaN there. Connectivity.n_valid_observations "
-                "counts each bin's observations; mark more samples valid, or use "
-                "shorter windows or more trials.",
+                "counts each bin's observations; mark fewer samples as artifacts, or "
+                "use shorter windows or more trials.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
@@ -2728,7 +2728,10 @@ class Connectivity:
           zero-coherence null instead:
           :func:`spectral_connectivity.statistics.coherence_significance_pvalue`
           applied to ``coherency()`` and ``n_observations`` (valid for
-          independent, equally weighted observations), corrected across
+          independent, equally weighted observations; when ``artifact_samples``
+          or edge masking drops observations, pass
+          ``n_valid_observations[..., np.newaxis, np.newaxis]`` instead),
+          corrected across
           frequencies and pairs with
           :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`.
           For measures without an analytic null, use a permutation or
