@@ -210,4 +210,9 @@ True
 - Each `Connectivity` measure's docstring has a runnable example.
 - `help(spectral_connectivity.SpectralTransform)` for the interface a custom
   transform needs to work with `Connectivity.from_transform`.
+- `help(spectral_connectivity.VARSpectrum)` for the exact connectivity of a
+  VAR model (`Connectivity.from_var(coefficients, noise_covariance,
+  sampling_frequency=...)`, with `coefficients[k - 1]` the lag-`k` matrix as in
+  `simulate_MVAR` and statsmodels' `VARResults.coefs`). It does not fit the
+  model, and refuses the measures computed from individual observations.
 - The [Cookbook](cookbook.md) has recipes for common tasks.

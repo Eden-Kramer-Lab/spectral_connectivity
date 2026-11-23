@@ -42,6 +42,30 @@ The migration guide for code written against 2.x is
 
 ### Added
 
+- `VARSpectrum(coefficients, noise_covariance, sampling_frequency=...)`, a
+  transform whose spectrum is exactly that of a vector autoregressive model,
+  and `Connectivity.from_var(...)`, the shortcut for
+  `Connectivity.from_transform(VARSpectrum(...))`. Every measure of the
+  cross-spectral matrix (power, the coherence family, partial, canonical and
+  global coherence, the phase slope index, and the spectral Granger and
+  transfer-function families) is then the model's population value, with no
+  estimation error; the directed measures agree with an independent
+  state-space computation to the Wilson factorization's tolerance (to 1e-9
+  with `minimum_phase_tolerance=1e-12`). The coefficients follow `simulate_MVAR`
+  and statsmodels' `VARResults.coefs` (`coefficients[k - 1]` is the lag-`k`
+  matrix, entry `[i, j]` the effect of `j` on `i`), and a leading window axis
+  gives a time-varying model. Power is in the units of a multitaper estimate
+  of the simulated process. Complex, unstable, and indefinite models are
+  refused, as is an FFT length too short for the directed measures to be
+  exact (`VARSpectrum.minimum_n_fft_samples`, the default's lower bound).
+  Fitting the model is left to other packages.
+- `is_exact_spectrum`, an optional `SpectralTransform` attribute (and a
+  keyword-only `Connectivity` argument and property) for coefficients that
+  are one factorization of a cross-spectral matrix rather than samples, as
+  `VARSpectrum`'s are. The measures computed from each observation or their
+  count (the phase-locking and phase-lag families, pairwise phase
+  consistency, `delay`, `group_delay`) and `jackknife` then raise, and
+  `expectation_type` must average the tapers.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working

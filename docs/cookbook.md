@@ -635,6 +635,88 @@ True
 
 ```
 
+## Exact connectivity of a VAR model
+
+`VARSpectrum` is a transform whose spectrum is that of a vector autoregressive
+(VAR) model, `x(t) = sum_k A_k x(t - k) + e(t)`, so every measure of the
+cross-spectral matrix it gives is the model's population value, with no
+estimation error: what an estimate of data simulated from the model should
+find, or the connectivity of a model fitted elsewhere.
+`Connectivity.from_var(...)` is the shortcut for
+`Connectivity.from_transform(VARSpectrum(...))`. `coefficients[k - 1]` is
+`A_k`, whose entry `[i, j]` is the effect of signal `j` on signal `i`, as in
+`simulate_MVAR`; `noise_covariance` is the covariance of `e(t)` (the identity
+by default).
+
+```python
+>>> from spectral_connectivity import Connectivity, VARSpectrum
+>>> from spectral_connectivity.simulate import simulate_MVAR
+>>> from spectral_connectivity.wrapper import connectivity_to_xarray
+>>> coefficients = np.array(
+...     [[[0.5, 0.0], [0.4, 0.5]], [[-0.6, 0.0], [0.0, -0.6]]]
+... )  # (n_lags, n_signals, n_signals): signal "a" drives "b", never the reverse
+>>> var = VARSpectrum(coefficients, sampling_frequency=500)
+>>> granger = connectivity_to_xarray(
+...     var, "pairwise_spectral_granger_prediction", signal_names=["a", "b"]
+... )
+>>> bool(granger.sel(source="a", target="b").max() > 0.1)
+True
+>>> bool(granger.sel(source="b", target="a").max() < 1e-9)  # exactly 0 up to rounding
+True
+
+```
+
+`power` is the model's one-sided power spectral density, in the units a
+multitaper estimate of the simulated process converges to. Give the model the
+estimate's frequency grid (an `n_fft_samples` equal to the estimate's, or a
+multiple of it), and, without detrending (which removes 0 Hz), 200 trials of
+one-second windows agree with it to within their sampling error, 3% per bin:
+
+```python
+>>> simulated = simulate_MVAR(coefficients, n_time_samples=500, n_trials=200, random_state=0)
+>>> estimate = multitaper_connectivity(
+...     simulated, sampling_frequency=500, method="power", detrend_type=None
+... ).isel(time=0)
+>>> on_its_grid = VARSpectrum(coefficients, sampling_frequency=500, n_fft_samples=500)
+>>> true_power = connectivity_to_xarray(on_its_grid, "power").isel(time=0)
+>>> ratio = estimate / true_power
+>>> bool(abs(float(ratio.mean()) - 1) < 0.02), bool(abs(ratio - 1).max() < 0.15)
+(True, True)
+
+```
+
+The coefficients that `VARSpectrum.fft()` returns are one factorization of the
+model's spectrum, not samples, so the measures computed from each trial and
+taper or from their count (the phase-locking and phase-lag families, pairwise
+phase consistency, `delay`, `group_delay`) and `jackknife` raise rather than
+return values that depend on that choice. Estimate those from simulated data.
+
+```python
+>>> Connectivity.from_var(coefficients, sampling_frequency=500).phase_locking_value()
+Traceback (most recent call last):
+...
+ValueError: phase_locking_value is not defined for an exact spectrum ...
+
+```
+
+A model fitted by statsmodels (not a dependency of this package) has the same
+convention. `fitted.coefs` is `(n_lags, n_signals, n_signals)` and
+`fitted.sigma_u` the innovation covariance:
+
+```python
+from statsmodels.tsa.api import VAR
+
+fitted = VAR(simulated[:, 0, :]).fit(maxlags=2)  # one trial: (n_time_samples, n_signals)
+connectivity = Connectivity.from_var(fitted.coefs, fitted.sigma_u, sampling_frequency=500)
+```
+
+Give `coefficients` a leading `n_time_windows` axis for a time-varying model
+(one model per window, with `noise_covariance` shared or per window, and
+`time=` the window times in seconds). The frequency grid defaults to the
+shortest one on which the directed measures are exact to about 1e-10
+(`VARSpectrum.minimum_n_fft_samples`), which grows as the model's poles near
+the unit circle; a shorter `n_fft_samples` raises.
+
 ## Result schema and transform bandwidth
 
 The xarray interfaces share `output_schema_version=1`. Common provenance is on

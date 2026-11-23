@@ -376,6 +376,15 @@ attributes, the `fft()` ownership rule, and the scaling that makes `power()` a
 density; the cookbook has a
 [worked example](docs/cookbook.md#plug-in-your-own-transform).
 
+`VARSpectrum` is a transform whose spectrum is that of a vector autoregressive
+model, given by its coefficient matrices and innovation covariance (as
+`simulate_MVAR` takes them, or as statsmodels fits them), and
+`Connectivity.from_var(coefficients, noise_covariance, sampling_frequency=...)`
+builds the `Connectivity` in one call. Every measure of the cross-spectral
+matrix is then the model's exact value, with no estimation error; the measures
+computed from individual trials and tapers raise. See the
+[cookbook recipe](docs/cookbook.md#exact-connectivity-of-a-var-model).
+
 For DPSS transforms, `taper_weighting="uniform"` preserves the historical
 behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies
 Thomson's frequency- and signal-specific iterative weights (useful when high
