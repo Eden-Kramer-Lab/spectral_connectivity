@@ -96,7 +96,7 @@ _NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife", "surrogate_test"})
 # Connectivity.surrogate_test: the surrogate constructions and alternatives it
 # takes, and the measures it refuses by name, with why.
 _SURROGATE_KINDS = ("trial_shuffle", "phase_rotation", "conjugation")
-_SURROGATE_ALTERNATIVES = ("greater", "less", "two-sided")
+_SURROGATE_ALTERNATIVES = ("auto", "greater", "less", "two-sided")
 _SURROGATE_REFUSED_MEASURES = {
     "power": (
         "it describes one signal, and every surrogate keeps each signal's "
@@ -107,6 +107,12 @@ _SURROGATE_REFUSED_MEASURES = {
         "it returns candidate delays at the frequencies its own coherence test "
         "selects, not a statistic. Test magnitude_squared_coherence, or "
         "phase_slope_index for the direction of a lag."
+    ),
+    "coherence_phase": (
+        "a phase is circular, so no ordering of its values is evidence against "
+        "the null, and it is undefined where coherence is weak. Test "
+        "imaginary_coherence (or imaginary_coherency, two-sided) for a lagged "
+        "relation, or phase_locking_value for phase coupling."
     ),
 }
 # Measures that sum over a frequency band (frequency_range) instead of
@@ -2877,7 +2883,7 @@ class Connectivity:
         *,
         kind: Literal["trial_shuffle", "phase_rotation", "conjugation"],
         n_surrogates: int = 999,
-        alternative: Literal["greater", "less", "two-sided"] = "greater",
+        alternative: Literal["auto", "greater", "less", "two-sided"] = "auto",
         fwer_axis: int | tuple[int, ...] | None = None,
         half_bandwidth: float | None = None,
         random_state: int | np.random.Generator | None = None,
@@ -2935,11 +2941,19 @@ class Connectivity:
             Number of surrogates. The smallest p-value is ``1 / (n_surrogates
             + 1)``; the computation takes ``n_surrogates`` times as long as
             the measure.
-        alternative : {"greater", "less", "two-sided"}, default="greater"
+        alternative : {"auto", "greater", "less", "two-sided"}, default="auto"
             Which values are evidence against the null: large values of the
             measure (``"greater"``), small values (``"less"``), or large
-            magnitudes of a signed measure (``"two-sided"``, e.g. for
-            ``imaginary_coherency`` or ``phase_slope_index``).
+            magnitudes (``"two-sided"``). ``"auto"`` resolves to
+            ``"two-sided"`` for the measures whose sign says which signal
+            leads (``imaginary_coherency``, ``phase_lag_index``,
+            ``weighted_phase_lag_index``, ``phase_slope_index``) and to
+            ``"greater"`` for every other measure, including the debiased
+            estimators that can fall below 0 by chance
+            (``pairwise_phase_consistency`` and the debiased squared phase-lag
+            indices) and ``directed_phase_lag_index``, whose ``[..., i, j]``
+            above 0.5 means ``i`` leads ``j``. The result records the
+            resolved value.
         fwer_axis : int or tuple of int or None, default=None
             The axes of the measure's result whose elements form one family
             for ``fwer_p_value``, as in
@@ -3186,6 +3200,8 @@ class Connectivity:
                 f"surrogate_test cannot test {method!r}: {_SURROGATE_REFUSED_MEASURES[method]}"
             )
             raise ValueError(msg)
+        if alternative == "auto":
+            alternative = _signed_measure_alternative(method)
         estimate = _real_array_result(measure(**method_kwargs), method, "surrogate_test")
         if estimate.shape[-2:] != (self.n_signals, self.n_signals):
             msg = (
@@ -7696,6 +7712,23 @@ class Connectivity:
             xp.conj(bandpassed_coherency[..., :-1, :, :]) * bandpassed_coherency[..., 1:, :, :]
         ).sum(axis=-3)
         return adjacent_product.imag
+
+
+def _signed_measure_alternative(method: str) -> Literal["greater", "two-sided"]:
+    """``surrogate_test``'s ``alternative="auto"`` for ``method``.
+
+    ``"two-sided"`` for a registered measure whose range is signed and whose
+    sign says which signal leads; ``"greater"`` otherwise, including the
+    debiased estimators whose range is signed only because a bias correction
+    can push them below 0, and unregistered extension measures.
+    """
+    # The registry imports this module, so it is imported here.
+    from spectral_connectivity._measure_registry import _MEASURE_SPECS
+
+    spec = _MEASURE_SPECS.get(method)
+    if spec is not None and spec.value_range[0] < 0 and spec.sign_convention is not None:
+        return "two-sided"
+    return "greater"
 
 
 def _validated_half_bandwidth(half_bandwidth: Any) -> float:

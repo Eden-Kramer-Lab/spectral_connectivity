@@ -390,7 +390,6 @@ def test_phase_slope_index_band_must_avoid_the_edges(lagged_connectivity):
 @pytest.mark.parametrize(
     ("measure", "kwargs"),
     [
-        ("coherence_phase", {}),
         ("partial_coherence", {}),
         ("phase_locking_value", {}),
         ("pairwise_phase_consistency", {}),
@@ -492,6 +491,12 @@ def test_invalid_arguments_are_refused(small_connectivity, kwargs, error, match)
     [
         ("power", {}, ValueError, "cannot test 'power': it describes one signal"),
         ("delay", {}, ValueError, "cannot test 'delay'"),
+        (
+            "coherence_phase",
+            {},
+            ValueError,
+            "cannot test 'coherence_phase': a phase is circular",
+        ),
         ("coherency", {}, TypeError, "requires a real-valued measure; 'coherency' is complex"),
         ("canonical_coherence", {"group_labels": [0, 1]}, TypeError, "tuple-valued"),
         (
@@ -865,3 +870,44 @@ def test_jackknife_replicates_keep_the_half_bandwidth(lagged_connectivity, monke
     )
     assert seen
     assert set(seen) == {2.0}
+
+
+@pytest.mark.parametrize(
+    ("measure", "expected"),
+    [
+        ("imaginary_coherency", "two-sided"),
+        ("phase_lag_index", "two-sided"),
+        ("weighted_phase_lag_index", "two-sided"),
+        ("magnitude_squared_coherence", "greater"),
+        ("imaginary_coherence", "greater"),
+        ("pairwise_phase_consistency", "greater"),
+        ("debiased_squared_phase_lag_index", "greater"),
+        ("directed_phase_lag_index", "greater"),
+        ("pairwise_spectral_granger_prediction", "greater"),
+    ],
+)
+def test_auto_alternative_is_two_sided_for_lead_lag_signs(
+    lagged_connectivity, measure, expected
+):
+    """'auto' is two-sided where the sign says which signal leads, greater
+    otherwise (a debiased estimate below 0 is chance, not a direction); the
+    result records the resolved alternative, which matches passing it."""
+    automatic = lagged_connectivity.surrogate_test(
+        measure, kind="conjugation", n_surrogates=4, random_state=0
+    )
+    assert automatic.alternative == expected
+    explicit = lagged_connectivity.surrogate_test(
+        measure, kind="conjugation", n_surrogates=4, random_state=0, alternative=expected
+    )
+    np.testing.assert_array_equal(automatic.p_value, explicit.p_value)
+
+
+def test_auto_alternative_of_phase_slope_index_is_two_sided(lagged_connectivity):
+    result = lagged_connectivity.surrogate_test(
+        "phase_slope_index",
+        kind="conjugation",
+        n_surrogates=4,
+        random_state=0,
+        frequency_range=(10, 30),
+    )
+    assert result.alternative == "two-sided"
