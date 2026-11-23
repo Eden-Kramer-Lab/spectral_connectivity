@@ -1012,13 +1012,17 @@ def _minimum_phase_factor_and_flags(
     # up to rounding; the scaling preconditions the iteration for signals
     # whose powers differ by orders of magnitude (see Notes).
     signal_scale = _signal_scale(cross_spectral_matrix)
-    working_cross_spectral_matrix = (
-        working_cross_spectral_matrix
-        / (
-            signal_scale[..., xp.newaxis, :, xp.newaxis]
-            * signal_scale[..., xp.newaxis, xp.newaxis, :]
-        )
-    ).astype(working_dtype, copy=False)
+    # NumPy divides a complex Inf by the real scale as by a complex number,
+    # which gives NaN and warns; such a sub-spectrum is non-finite either way
+    # and is reported as unconverged below.
+    with np.errstate(invalid="ignore"):
+        working_cross_spectral_matrix = (
+            working_cross_spectral_matrix
+            / (
+                signal_scale[..., xp.newaxis, :, xp.newaxis]
+                * signal_scale[..., xp.newaxis, xp.newaxis, :]
+            )
+        ).astype(working_dtype, copy=False)
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # S is fixed across iterations, so factor it once as S = L Lᴴ.
     cross_spectral_square_root = _hermitian_square_root(working_cross_spectral_matrix)

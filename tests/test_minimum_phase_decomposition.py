@@ -935,27 +935,39 @@ def test_rescaling_the_signals_rescales_the_factor(real_signals):
     )
 
 
-def test_a_zero_power_signal_is_factored_as_without_scaling(monkeypatch):
-    """A signal with no power has no scale; it keeps a scale of 1, so its
-    sub-spectrum takes the same route as before scaling was introduced."""
-    spectrum = _real_signal_spectrum(n_signals=2)
-    spectrum[1, :, 1, :] = 0
-    spectrum[1, :, :, 1] = 0
-    spectrum = to_device(spectrum)
-    np.testing.assert_array_equal(to_host(mpd_module._signal_scale(spectrum))[1, 1], 1.0)
-    with warnings.catch_warnings(record=True) as scaled_warnings:
-        warnings.simplefilter("always")
-        scaled = to_host(minimum_phase_decomposition(spectrum))
-    monkeypatch.setattr(
-        mpd_module, "_signal_scale", lambda csm: xp.ones(csm.shape[:-3] + csm.shape[-1:])
+@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+def test_a_zero_power_signal_keeps_a_unit_scale_and_its_window_converges(real_signals):
+    """A signal with no power has no scale to divide by, so it keeps a scale
+    of 1. Its window's zero-lag matrix is singular, so that window starts
+    from the deterministic fallback (with its warning) and, on both paths,
+    converges to a factor that reproduces the spectrum, with the dead
+    signal's row about 1e-8 of the others; the measures then handle the dead
+    signal (spectral Granger returns NaN for a target with no power). Before
+    the covariant start and the scaling, the two-sided path did not converge
+    for this window and returned it as NaN with a warning, while the
+    half-spectrum path converged as now."""
+    signals = _lagged_signals(
+        32, np.random.default_rng(2), dtype=float if real_signals else complex, n_signals=2
     )
-    with warnings.catch_warnings(record=True) as unscaled_warnings:
+    spectrum = _cross_spectrum_of(signals)
+    spectrum[0, :, 1, :] = 0
+    spectrum[0, :, :, 1] = 0
+    assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
+    np.testing.assert_array_equal(
+        to_host(mpd_module._signal_scale(to_device(spectrum)))[0, 1], 1.0
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        unscaled = to_host(minimum_phase_decomposition(spectrum))
-    assert [str(w.message) for w in scaled_warnings] == [
-        str(w.message) for w in unscaled_warnings
-    ]
-    np.testing.assert_array_equal(np.isnan(scaled), np.isnan(unscaled))
+        factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+
+    assert np.isfinite(factor).all()
+    assert _reconstruction_error(spectrum, factor).max() < 1e-7
+    assert np.abs(factor[0, :, 1, :]).max() < 1e-6 * np.abs(factor[0]).max()
+    if not ON_GPU:  # CuPy's Cholesky does not raise, so it takes no fallback start.
+        assert [str(w.message).split(" for ")[0] for w in caught] == [
+            mpd_module.CHOLESKY_FALLBACK_WARNING_START
+        ]
 
 
 def _minimum_phase_ma1_factor(n_fft):
@@ -1028,3 +1040,22 @@ def test_factor_from_a_start_that_is_not_covariant_warns(monkeypatch):
     with pytest.warns(UserWarning, match="not minimum phase for 1 of 1 sub-spectrum"):
         factor = minimum_phase_decomposition(spectrum)
     assert to_host(mpd_module._determinant_winding_number(factor))[0] == pytest.approx(-1)
+
+
+def test_an_infinite_power_window_is_unconverged_without_a_runtime_warning():
+    """A window with an infinite power is non-finite: it is NaN with the
+    non-convergence warning, and scaling its signals emits no NumPy
+    ``RuntimeWarning`` on the way."""
+    spectrum = _cross_spectrum_of(
+        _lagged_signals(32, np.random.default_rng(2), dtype=complex, n_windows=2)
+    )
+    spectrum[1, :, 2, :] = 0
+    spectrum[1, :, :, 2] = 0
+    spectrum[1, :, 2, 2] = np.inf
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        with pytest.warns(UserWarning, match="did not converge for 1 of 2"):
+            factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+    assert np.isnan(factor[1]).all()
+    assert np.isfinite(factor[0]).all()
