@@ -53,6 +53,20 @@ def _generator(random_state: int | np.random.Generator | None) -> np.random.Gene
     return np.random.default_rng(random_state)
 
 
+def _real_scalar(value: Any) -> float | None:
+    """``value`` as a Python ``float`` if it is one real number, else ``None``.
+
+    Any real scalar counts, including a NumPy scalar or a 0-d array such as
+    ``dataset["fs"].values``; booleans (dtype kind ``"b"``), strings and arrays
+    with dimensions do not. Shared by the validators of positive scalar
+    settings so they accept and refuse the same values.
+    """
+    array = np.asarray(value)
+    if array.ndim != 0 or array.dtype.kind not in "iuf":
+        return None
+    return float(array)
+
+
 def _validate_sampling_frequency(sampling_frequency: Any) -> float:
     """Validate a sampling rate and return it as a Python ``float``.
 
@@ -79,8 +93,8 @@ def _validate_sampling_frequency(sampling_frequency: Any) -> float:
     ValueError
         If the rate is not finite and positive.
     """
-    array = np.asarray(sampling_frequency)
-    if array.ndim != 0 or array.dtype.kind not in "iuf":
+    rate = _real_scalar(sampling_frequency)
+    if rate is None:
         if isinstance(sampling_frequency, str):
             how = "Pass it as a number, e.g. sampling_frequency=1000 rather than '1000'."
         else:
@@ -95,7 +109,6 @@ def _validate_sampling_frequency(sampling_frequency: Any) -> float:
             f"{how}"
         )
         raise TypeError(msg)
-    rate = float(array)
     if not np.isfinite(rate) or rate <= 0:
         msg = (
             f"sampling_frequency must be finite and positive, got "

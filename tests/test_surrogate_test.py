@@ -860,10 +860,26 @@ def test_phase_rotation_uses_the_half_bandwidth_from_the_transform(lagged_connec
     assert connectivity.half_bandwidth is None
 
 
-@pytest.mark.parametrize("value", [0.0, -1.0, np.inf, True, "2"])
-def test_connectivity_refuses_an_invalid_half_bandwidth(value):
-    with pytest.raises(ValueError, match="half_bandwidth must be a positive number"):
+@pytest.mark.parametrize(
+    ("value", "error", "match"),
+    [
+        (0.0, ValueError, "half_bandwidth must be a positive number"),
+        (-1.0, ValueError, "half_bandwidth must be a positive number"),
+        (np.inf, ValueError, "half_bandwidth must be a positive number"),
+        (True, TypeError, "half_bandwidth must be a number"),
+        ("2", TypeError, "half_bandwidth must be a number"),
+        (np.array([2.0]), TypeError, "half_bandwidth must be a number"),
+    ],
+)
+def test_connectivity_refuses_an_invalid_half_bandwidth(value, error, match):
+    """Validated like a sampling frequency: a real scalar (a 0-d array too)."""
+    with pytest.raises(error, match=match):
         Connectivity(_coefficients(np.random.default_rng(0)), half_bandwidth=value)
+    accepted = Connectivity(
+        _coefficients(np.random.default_rng(0)), half_bandwidth=np.array(2.0)
+    )
+    assert accepted.half_bandwidth == 2.0
+    assert type(accepted.half_bandwidth) is float
 
 
 def test_resampled_replicates_keep_the_subclass_and_settings(lagged_connectivity):

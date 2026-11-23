@@ -69,6 +69,7 @@ from spectral_connectivity.statistics import (
 from spectral_connectivity.utils import (
     BackendArray,
     _generator,
+    _real_scalar,
     _validated_flag,
     did_you_mean,
     is_positive_integer,
@@ -7870,20 +7871,30 @@ def _signed_measure_alternative(method: str) -> Literal["greater", "two-sided"]:
 
 
 def _validated_half_bandwidth(half_bandwidth: Any) -> float:
-    """``half_bandwidth`` as a float, or a ``ValueError`` unless finite and positive."""
-    if (
-        isinstance(half_bandwidth, (bool, np.bool_))
-        or not isinstance(half_bandwidth, (int, float, np.integer, np.floating))
-        or not np.isfinite(half_bandwidth)
-        or half_bandwidth <= 0
-    ):
+    """``half_bandwidth`` as a float, validated like a sampling frequency.
+
+    Raises
+    ------
+    TypeError
+        If it is not one real number (see :func:`_real_scalar`).
+    ValueError
+        If it is not finite and positive.
+    """
+    value = _real_scalar(half_bandwidth)
+    advice = (
+        "the half-width of the transform's spectral smoothing in the units of "
+        "frequencies (for a Multitaper, frequency_resolution / 2)"
+    )
+    if value is None:
         msg = (
-            "half_bandwidth must be a positive number, the half-width of the "
-            "transform's spectral smoothing in the units of frequencies (for a "
-            f"Multitaper, frequency_resolution / 2); got {half_bandwidth!r}."
+            f"half_bandwidth must be a number, {advice}; got "
+            f"{type(half_bandwidth).__name__} {half_bandwidth!r}."
         )
+        raise TypeError(msg)
+    if not np.isfinite(value) or value <= 0:
+        msg = f"half_bandwidth must be a positive number, {advice}; got {half_bandwidth!r}."
         raise ValueError(msg)
-    return float(half_bandwidth)
+    return value
 
 
 def _real_array_result(
