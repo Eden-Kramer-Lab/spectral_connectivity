@@ -98,6 +98,7 @@ def test_each_window_keeps_its_concentrated_tapers(recording):
     assert (weights == weights[..., :1, :]).all()  # the same at every frequency
     counts = weights[..., 0, 0].sum(axis=-1)
     np.testing.assert_array_equal(counts, EXPECTED_TAPER_COUNTS)
+    np.testing.assert_array_equal(to_host(multitaper.n_kept_tapers), EXPECTED_TAPER_COUNTS)
     # The kept tapers lead.
     np.testing.assert_array_equal(
         weights[..., 0, 0], np.arange(5) < counts[..., np.newaxis].astype(int)
@@ -442,7 +443,10 @@ def test_artifact_handling_is_immutable_and_reported(recording):
     assert multitaper.artifact_handling == "missing_data_tapers"
     with pytest.raises(AttributeError, match="immutable"):
         multitaper.artifact_handling = "drop"
-    kept = "<mask> (22 of 24 trial windows kept, 3 of them with missing-data tapers)"
+    kept = (
+        "<mask> (22 of 24 trial windows kept; 5 had artifacts, 3 rescued with "
+        "missing-data tapers)"
+    )
     assert (
         f"artifact_samples={kept},\n           artifact_handling='missing_data_tapers')"
         in (repr(multitaper))
@@ -451,10 +455,31 @@ def test_artifact_handling_is_immutable_and_reported(recording):
     assert "artifact_handling" not in repr(
         _multitaper(time_series, artifacts, artifact_handling="drop")
     )
+    dropping = _multitaper(time_series, artifacts, artifact_handling="drop")
+    np.testing.assert_array_equal(
+        to_host(dropping.n_kept_tapers), 5 * to_host(dropping.valid_windows)
+    )
     metadata = multitaper._provenance_metadata()
     assert metadata["artifact_handling"] == "missing_data_tapers"
     assert metadata["n_dropped_trial_windows"] == 2
     assert metadata["n_missing_data_taper_trial_windows"] == 3
+
+
+def test_a_window_keeping_one_concentrated_taper_is_dropped():
+    """50 of 128 samples missing at NW = 2 leaves exactly one taper above 0.9."""
+    n_time = 128
+    artifacts = np.zeros((n_time, 2), dtype=bool)
+    artifacts[:50, 1] = True
+    eigenvalues, _ = _brute_force(~artifacts[:, 1], 2)
+    assert eigenvalues[0] > 0.9 > eigenvalues[1]
+    multitaper = _multitaper(
+        np.random.default_rng(6).standard_normal((n_time, 2, 2)),
+        artifacts,
+        time_halfbandwidth_product=2,
+        n_time_samples_per_window=n_time,
+    )
+    np.testing.assert_array_equal(to_host(multitaper.n_kept_tapers), [[3, 0]])
+    np.testing.assert_array_equal(to_host(multitaper.valid_windows), [[True, False]])
 
 
 def test_the_drop_warning_names_the_alternative():

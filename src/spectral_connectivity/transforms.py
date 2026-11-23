@@ -1923,6 +1923,26 @@ Frequency Analysis
         return _readonly_array_copy(self._valid_windows)
 
     @property
+    def n_kept_tapers(self) -> NDArray[np.intp]:
+        """How many tapers each trial window keeps.
+
+        All of them (``n_tapers``) for a window without artifacts, 0 for a
+        dropped one, and, with ``Multitaper(artifact_handling=
+        "missing_data_tapers")``, the number of missing-data tapers a window
+        with artifacts keeps. The kept tapers are the leading ones; the
+        others get observation weight 0.
+
+        Returns
+        -------
+        NDArray[int], shape (n_time_windows, n_trials)
+            A detached read-only copy.
+        """
+        if self._n_kept_tapers is not None:
+            return _readonly_array_copy(self._n_kept_tapers)
+        n_tapers = self._tapers_for_fft().shape[1]
+        return mark_readonly_if_supported(self.valid_windows.astype(xp.intp) * n_tapers)
+
+    @property
     def observation_weights(self) -> NDArray[np.floating] | None:
         """Weights consumed by :class:`Connectivity`: 0 for a dropped trial window.
 
@@ -2334,6 +2354,20 @@ class Multitaper(_WindowedFourierTransform):
         "adaptive_tolerance",
         "time_halfbandwidth_product",
     )
+    # Set by _kept_trial_windows with artifact_handling="missing_data_tapers"
+    # when some window with artifacts is kept: the window and trial indices of
+    # those windows; each one's row in the per-pattern arrays, which hold the
+    # tapers (n_patterns, n_time_samples_per_window, n_tapers), concentrations
+    # (n_patterns, n_tapers), both zero past the ones kept, and valid samples
+    # (n_patterns, n_time_samples_per_window).
+    _gapped_windows: tuple[BackendArray, BackendArray] | None = None
+    _gapped_pattern: BackendArray
+    _gapped_tapers: BackendArray
+    _gapped_concentrations: BackendArray
+    _gapped_valid: BackendArray
+    # Trial windows with artifacts, and those of them kept.
+    _n_gapped_trial_windows: int = 0
+    _n_missing_data_trial_windows: int = 0
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Keep transform parameters immutable once construction has completed."""
@@ -2563,7 +2597,6 @@ class Multitaper(_WindowedFourierTransform):
         if artifact_handling == "missing_data_tapers":
             self._check_missing_data_taper_settings()
         self.artifact_handling = artifact_handling
-        self._gapped_windows: tuple[NDArray[np.intp], NDArray[np.intp]] | None = None
         # Warned only once every check has passed, so an invalid Multitaper
         # (a transposed array among them) only raises.
         self._set_artifact_samples(artifact_samples)
@@ -2945,63 +2978,44 @@ class Multitaper(_WindowedFourierTransform):
 
         With ``artifact_handling="missing_data_tapers"`` this computes the
         missing-data tapers of every distinct artifact pattern among the trial
-        windows (one eigenproblem each), keeps those concentrated above
-        ``MIN_EIGENVALUE_THRESHOLD``, and records what
-        :meth:`_estimate_gapped_windows` and :meth:`_weight_taper_coefficients`
-        read: ``_gapped_windows``, the window and trial indices of the kept
-        windows with artifacts; ``_gapped_pattern``, each one's row in
-        ``_gapped_tapers`` ``(n_patterns, n_time_samples_per_window,
-        n_tapers)``, ``_gapped_concentrations`` ``(n_patterns, n_tapers)``
-        (zero, like the tapers, past the ones kept) and ``_gapped_valid``
-        ``(n_patterns, n_time_samples_per_window)``; and ``_n_kept_tapers``.
+        windows (:func:`_missing_data_taper_sets`) and records the
+        ``_gapped_*`` attributes that :meth:`_estimate_gapped_windows` and
+        :meth:`_weight_taper_coefficients` read, and ``_n_kept_tapers``.
         """
         clean = super()._kept_trial_windows(artifact_windows)
-        self._n_missing_data_trial_windows = 0
         if self.artifact_handling == "drop" or bool(xp.all(clean)):
             return clean
         window_index, trial_index = np.nonzero(~to_numpy(clean))
+        self._n_gapped_trial_windows = int(window_index.size)
         patterns, pattern_index = np.unique(
-            to_numpy(artifact_windows[window_index, trial_index]),
+            to_numpy(artifact_windows[xp.asarray(window_index), xp.asarray(trial_index)]),
             axis=0,
             return_inverse=True,
         )
         pattern_index = pattern_index.reshape(-1)
-        n_tapers = self.n_tapers
-        orientation = to_numpy(self._tapers)
-        half_bandwidth = self.time_halfbandwidth_product / self.n_time_samples_per_window
-        n_kept = np.zeros(len(patterns), dtype=np.intp)
-        tapers, concentrations = [], []
-        for pattern_number, pattern in enumerate(patterns):
-            valid = ~pattern
-            # The concentrations are at most the restricted kernel's trace,
-            # 2 W n_valid, in sum, so below twice the threshold two cannot pass.
-            if 2 * half_bandwidth * np.count_nonzero(valid) <= 2 * MIN_EIGENVALUE_THRESHOLD:
-                continue
-            taper, concentration = _missing_data_slepian_tapers(
-                valid, self.time_halfbandwidth_product, n_tapers, orientation
-            )
-            kept = int(np.count_nonzero(concentration > MIN_EIGENVALUE_THRESHOLD))
-            if kept < 2:
-                continue
-            taper[:, kept:] = 0
-            concentration[kept:] = 0
-            n_kept[pattern_number] = kept
-            tapers.append(taper)
-            concentrations.append(concentration)
-        counts = np.full(clean.shape, n_tapers, dtype=np.intp)
+        n_kept, tapers, concentrations = _missing_data_taper_sets(
+            ~patterns,
+            self.time_halfbandwidth_product,
+            self.n_tapers,
+            to_numpy(self._tapers),
+        )
+        counts = np.full(clean.shape, self.n_tapers, dtype=np.intp)
         counts[window_index, trial_index] = n_kept[pattern_index]
         is_kept = n_kept[pattern_index] > 0
+        self._n_missing_data_trial_windows = int(np.count_nonzero(is_kept))
         if is_kept.any():
-            self._gapped_windows = (window_index[is_kept], trial_index[is_kept])
-            # Each kept pattern's row among the kept patterns.
-            self._gapped_pattern = (np.cumsum(n_kept > 0) - 1)[pattern_index[is_kept]]
-            self._gapped_tapers = xp.asarray(
-                np.stack(tapers) * np.sqrt(self.sampling_frequency)
+            self._gapped_windows = (
+                xp.asarray(window_index[is_kept]),
+                xp.asarray(trial_index[is_kept]),
             )
-            self._gapped_concentrations = xp.asarray(np.stack(concentrations))
+            # Each kept pattern's row among the kept patterns.
+            self._gapped_pattern = xp.asarray(
+                (np.cumsum(n_kept > 0) - 1)[pattern_index[is_kept]]
+            )
+            self._gapped_tapers = xp.asarray(tapers * np.sqrt(self.sampling_frequency))
+            self._gapped_concentrations = xp.asarray(concentrations)
             self._gapped_valid = xp.asarray(~patterns[n_kept > 0])
-            self._n_missing_data_trial_windows = int(np.count_nonzero(is_kept))
-        if np.any(counts[window_index[is_kept], trial_index[is_kept]] < n_tapers):
+        if np.any(n_kept[pattern_index[is_kept]] < self.n_tapers):
             self._n_kept_tapers = _immutable_array_snapshot(xp.asarray(counts))
         kept_windows: BackendArray = xp.asarray(counts > 0)
         return kept_windows
@@ -3049,14 +3063,14 @@ class Multitaper(_WindowedFourierTransform):
         ).swapaxes(1, -1)
 
     def _artifact_samples_description(self) -> str:
-        """The base description, with the trial windows estimated with
-        missing-data tapers."""
+        """The base description, with the trial windows that had artifacts and
+        those of them estimated with missing-data tapers."""
         description = super()._artifact_samples_description()
         if self.artifact_handling == "drop":
             return description
         return (
-            f"{description[:-1]}, {self._n_missing_data_trial_windows} of them with "
-            "missing-data tapers)"
+            f"{description[:-1]}; {self._n_gapped_trial_windows} had artifacts, "
+            f"{self._n_missing_data_trial_windows} rescued with missing-data tapers)"
         )
 
     def _artifact_samples_repr(self) -> str:
@@ -4761,6 +4775,60 @@ def _missing_data_slepian_tapers(
     concentrations = np.zeros(n_tapers)
     concentrations[:n_computed] = eigenvalues[order]
     return tapers, concentrations
+
+
+def _missing_data_taper_sets(
+    valid: NDArray[np.bool_],
+    time_halfbandwidth_product: float,
+    n_tapers: int,
+    orientation: NDArray[np.floating],
+) -> tuple[NDArray[np.intp], NDArray[np.floating], NDArray[np.floating]]:
+    """The missing-data tapers each gap pattern keeps, on the host.
+
+    A pattern keeps its tapers concentrated above ``MIN_EIGENVALUE_THRESHOLD``
+    if there are at least 2 of them, and none otherwise.
+
+    Parameters
+    ----------
+    valid : NDArray[bool], shape (n_patterns, n_time_samples_per_window)
+        ``True`` at each pattern's valid samples.
+    time_halfbandwidth_product : float
+    n_tapers : int
+    orientation : NDArray[float], shape (n_time_samples_per_window, n_tapers)
+        The DPSS tapers, for :func:`_missing_data_slepian_tapers`.
+
+    Returns
+    -------
+    n_kept : NDArray[int], shape (n_patterns,)
+        The tapers each pattern keeps, 0 if it is dropped.
+    tapers : NDArray[float], shape (n_kept_patterns, n_time_samples_per_window, n_tapers)
+        Unit energy, zero past the ones kept, for the patterns that keep any.
+    concentrations : NDArray[float], shape (n_kept_patterns, n_tapers)
+        Zero past the ones kept.
+    """
+    n_patterns, n_time_samples = valid.shape
+    half_bandwidth = time_halfbandwidth_product / n_time_samples
+    n_valid = np.count_nonzero(valid, axis=1)
+    # The concentrations are at most the restricted kernel's trace, 2 W n_valid,
+    # in sum, so below twice the threshold two cannot pass: no eigenproblem.
+    is_solved = 2 * half_bandwidth * n_valid > 2 * MIN_EIGENVALUE_THRESHOLD
+    n_kept = np.zeros(n_patterns, dtype=np.intp)
+    tapers, concentrations = [], []
+    for pattern in np.flatnonzero(is_solved):
+        taper, concentration = _missing_data_slepian_tapers(
+            valid[pattern], time_halfbandwidth_product, n_tapers, orientation
+        )
+        kept = int(np.count_nonzero(concentration > MIN_EIGENVALUE_THRESHOLD))
+        if kept < 2:
+            continue
+        taper[:, kept:] = 0
+        concentration[kept:] = 0
+        n_kept[pattern] = kept
+        tapers.append(taper)
+        concentrations.append(concentration)
+    if not tapers:
+        return n_kept, np.zeros((0, n_time_samples, n_tapers)), np.zeros((0, n_tapers))
+    return n_kept, np.stack(tapers), np.stack(concentrations)
 
 
 def _detrend_valid_samples(
