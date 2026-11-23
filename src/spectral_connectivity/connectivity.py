@@ -2904,14 +2904,28 @@ class Connectivity:
         among the surrogates' values) and a p-value adjusted for testing every
         element of its family (the maximum statistic over the family).
 
+        Choose ``kind`` for the question:
+
+        ===========================  ====================  ===============  ==================
+        Question                     ``kind``              Needs            Evoked response
+        ===========================  ====================  ===============  ==================
+        Covary from trial to trial?  ``"trial_shuffle"``   2+ trials        in the null
+        Independent at all?          ``"phase_rotation"``  half bandwidth   rejected
+        More than zero-lag mixing?   ``"conjugation"``     2+ observations  rejected if lagged
+        ===========================  ====================  ===============  ==================
+
+        "Evoked response" is a stimulus-locked response common to the signals
+        and the same in every trial (see Notes).
+
         Parameters
         ----------
         method : str
             Name of a public, real-valued connectivity measure of pairs of
             signals, e.g. ``"magnitude_squared_coherence"``. Complex-valued,
             tuple-valued and structured measures are refused, as are
-            ``power`` (every surrogate keeps each signal's spectrum) and
-            ``delay`` (candidate delays, not a statistic).
+            ``power`` (every surrogate keeps each signal's spectrum),
+            ``delay`` (candidate delays, not a statistic) and
+            ``coherence_phase`` (circular).
         kind : {"trial_shuffle", "phase_rotation", "conjugation"}
             The surrogate construction, which sets the null hypothesis:
 
@@ -2936,13 +2950,15 @@ class Connectivity:
             - ``"conjugation"``: replace each independent observation (every
               signal and frequency of it together) by its complex conjugate
               with probability 1/2, which for a real signal amounts to
-              reversing that observation in time. Null: the coherency is real at every
-              frequency, as for instantaneous (zero-lag) mixing such as
-              volume conduction of independent sources; exact for circular
-              Gaussian coefficients. Use it to test for lagged interaction
-              (``imaginary_coherence``, the phase-lag indices,
-              ``phase_slope_index``) or for Granger causality beyond what
-              instantaneous mixing produces.
+              reversing that observation in time. Null: the coherency is real
+              at every frequency, as for instantaneous (zero-lag) mixing such
+              as volume conduction of independent sources; exact for circular
+              Gaussian coefficients. Pair it with a measure of lagged
+              interaction: ``imaginary_coherence``, the phase-lag indices,
+              ``phase_slope_index``, or pairwise spectral Granger (for
+              Granger causality beyond what mixing produces). With
+              ``magnitude_squared_coherence`` it asks only whether the
+              coupling exceeds what a real coherency gives.
         n_surrogates : int, default=999
             Number of surrogates. The smallest p-value is ``1 / (n_surrogates
             + 1)``; the computation takes ``n_surrogates`` times as long as
@@ -2968,7 +2984,9 @@ class Connectivity:
             (the default) makes every tested element one family. For a
             pairwise result ``(n_time, n_frequencies, n_signals,
             n_signals)``, ``fwer_axis=(1, 2, 3)`` corrects across
-            frequencies and pairs separately in each time window.
+            frequencies and pairs separately in each time window. The result
+            records the axes as non-negative integers (``None`` as every
+            axis).
         half_bandwidth : float, optional
             For ``kind="phase_rotation"`` only (refused otherwise): the
             half-width of the transform's spectral smoothing, in the units of
@@ -2988,7 +3006,7 @@ class Connectivity:
         Returns
         -------
         SurrogateTestResult
-            The estimate, the element-wise ``p_value`` and the family-wise
+            The estimate, the uncorrected ``p_value`` and the family-wise
             ``fwer_p_value``, each with the measure's own shape (for a
             pairwise measure ``(n_time, n_nonnegative_frequencies, n_signals,
             n_signals)``), and the surrogate maxima of each family. The
@@ -3000,18 +3018,26 @@ class Connectivity:
         ------
         ValueError
             If ``kind``, ``n_surrogates``, ``alternative``, ``fwer_axis`` or
-            ``half_bandwidth`` is invalid; if the expectation does not average
-            what ``kind`` randomizes (trials for ``"trial_shuffle"``,
-            independent observations otherwise) or there are fewer than 2 of
-            them; if ``"trial_shuffle"`` meets observation weights that differ
-            between trials; if ``"phase_rotation"`` meets one-sided
-            coefficients, or a measure that does not return one value per
-            frequency, or a ``phase_slope_index`` band within
-            ``half_bandwidth`` of 0 Hz or Nyquist; or if ``method`` is not a
-            measure this test can use.
+            ``half_bandwidth`` is invalid, or ``kind="phase_rotation"`` has no
+            half bandwidth; if the expectation does not average what ``kind``
+            randomizes (trials for ``"trial_shuffle"``, independent
+            observations otherwise) or there are fewer than 2 of them; if
+            ``"trial_shuffle"`` meets observation weights that differ between
+            trials; if ``"phase_rotation"`` meets one-sided coefficients, or a
+            measure that does not return one value per frequency, or a
+            ``phase_slope_index`` band within ``half_bandwidth`` of 0 Hz or
+            Nyquist; or if ``method`` is not a measure this test can use.
         TypeError
             If ``method`` is not a string, or the measure's result is not a
             real array ending in a ``(n_signals, n_signals)`` pair.
+
+        Warns
+        -----
+        UserWarning
+            If the data allow fewer distinct surrogates than ``n_surrogates``
+            (the p-values stay valid but coarse), or if surrogates return NaN
+            at tested elements (each counts as at least the estimate and sets
+            its family's maximum to infinity).
 
         Notes
         -----
@@ -3025,6 +3051,11 @@ class Connectivity:
         part in a million) of the estimate, and a surrogate the measure
         returns NaN for counts as exceeding it.
 
+        **Which p-value to report.** ``p_value`` is uncorrected: it is the
+        test of one element chosen before looking at the data (one pair at
+        one frequency). To say *where* the measure is significant, among
+        every frequency and pair tested, report ``fwer_p_value``.
+
         **Independent observations.** ``"phase_rotation"`` and
         ``"conjugation"`` draw one phase or flip for each independent
         observation the expectation averages: each trial-taper observation
@@ -3035,40 +3066,24 @@ class Connectivity:
         ``observations_are_independent`` is ``False`` (a ``MorletWavelet``
         smoothing neighborhood, ``Welch`` segments overlapping by more than
         half), and the time windows when ``time_bins_are_independent`` is
-        ``False``. With Welch segments overlapping by 75% (13 per trial, 5
-        trials), randomizing each segment rejected independent signals in
-        19.6% of datasets at nominal 5% (magnitude-squared coherence and
-        pairwise Granger), against 5.0-5.2% with one phase per trial. The
-        axes the expectation keeps (each time window by default) share the
-        draws, so the surrogates keep the dependence between them that the
-        family maximum depends on.
+        ``False``. The axes the expectation keeps (each time window by
+        default) share the draws, so the surrogates keep the dependence
+        between them that the family maximum depends on.
 
-        **Shared stimulus-locked responses.** A response locked to a
-        stimulus, the same in every trial and common to the signals, is in
-        some nulls and not others. ``"trial_shuffle"`` keeps each signal's
-        response in every surrogate, so a shared response is in its null:
-        the test asks about trial-by-trial covariation beyond it.
-        ``"phase_rotation"`` randomizes each trial's and taper's phase, which
-        destroys stimulus-locked timing, so a shared response alone is
-        significant. ``"conjugation"`` keeps a response shared at zero lag in
-        its null (its coherency is real) and rejects one that reaches the
-        signals at different times. Measured with two independent AR(2)
-        noise signals plus the same 10 Hz burst in each of 10 trials (2 s
-        windows, 7 tapers, 600 datasets), rejection at 5-15 Hz: with the
-        burst at zero lag, 4.5-5.6% for the trial shuffle, 4.7-5.9% for
-        conjugation, and 72-74% (magnitude-squared coherence) and 62-64%
-        (pairwise Granger) for phase rotation (3.5-4.1% for the imaginary
-        coherence, which a zero-lag response does not change); with the burst 15 ms later in
-        one signal, 4.2-6.0% for the trial shuffle and 64-86% for the other
-        two. To ask about interaction beyond a common drive, use
-        ``"trial_shuffle"``. Subtracting each signal's mean across trials
-        before the transform removes the response but leaves every trial's
-        residual correlated with the others (by ``-1 / (n_trials - 1)``),
-        which per-trial randomization ignores: with 10 trials phase
-        rotation and conjugation then rejected 6.2-7.7% at nominal 5%, at
-        every frequency (7.0% and 6.5% for magnitude-squared coherence of
-        independent signals with no response, 400 datasets), while the
-        trial shuffle kept 4.9-6.1%; with 40 trials, 5.4% and 5.1%.
+        **Shared stimulus-locked responses.** ``"trial_shuffle"`` keeps each
+        signal's response in every surrogate, so a response common to the
+        signals is in its null: the test asks about trial-by-trial
+        covariation beyond it. ``"phase_rotation"`` randomizes each trial's
+        and taper's phase, which destroys stimulus-locked timing, so a shared
+        response alone is significant. ``"conjugation"`` keeps a response
+        shared at zero lag in its null (its coherency is real) and rejects
+        one that reaches the signals at different times. To ask about
+        interaction beyond a common drive, use ``"trial_shuffle"``.
+        Subtracting each signal's mean across trials before the transform
+        removes the response but leaves every trial's residual correlated
+        with the others (by ``-1 / (n_trials - 1)``), which per-trial
+        randomization ignores, so the other two kinds then give p-values that
+        are too small unless there are many trials (see Measured sizes).
 
         **Multiple comparisons.** ``fwer_p_value`` controls the family-wise
         error rate within each family, not across families: choose the
@@ -3087,15 +3102,12 @@ class Connectivity:
         frequencies near 0 Hz and Nyquist are left untested in the output, but
         the measures that factor the whole spectrum (the spectral Granger
         family, the transfer-function measures) still use them, which
-        spreads a small excess past ``half_bandwidth``: with one trial of 7
-        tapers (6000 datasets), pairwise spectral Granger rejected 5.8% from
-        ``half_bandwidth`` to 1.5 times it from an edge, 5.5% up to twice
-        it, and 5.1% farther away; with 5 trials, 5.3% and 4.8%. Exclude
-        those frequencies from a claim if that matters.
+        spreads a small excess past ``half_bandwidth`` (see Measured sizes);
+        exclude those frequencies from a claim if that matters.
         ``phase_slope_index`` sums over its ``frequency_range``, so that band
         must avoid the untested frequencies.
 
-        **Measured size and power.** Monte Carlo at nominal 5% with 99
+        **Measured sizes.** Monte Carlo rejection rates at nominal 5% with 99
         surrogates per dataset, AR signals sampled at 200 Hz, multitaper
         transforms:
 
@@ -3109,7 +3121,10 @@ class Connectivity:
           4.9-5.1% for pairwise spectral Granger at frequencies more than
           2.5 half bandwidths from an edge, against up to 8.5% (coherence)
           and 8.2% (Granger) within one half bandwidth of 0 Hz or Nyquist,
-          which is why those are not tested.
+          which is why those are not tested. Past that edge, with one trial
+          (6000 datasets), pairwise spectral Granger rejected 5.8% from one
+          to 1.5 half bandwidths from an edge, 5.5% up to two, and 5.1%
+          farther away; with 5 trials, 5.3% and 4.8%.
         - ``"conjugation"``, instantaneous mixing of two independent AR(2)
           sources (cross-weights 0.7), 10 trials, 400 datasets: 5.1% for
           ``imaginary_coherence``, 4.4% for pairwise spectral Granger and
@@ -3119,13 +3134,33 @@ class Connectivity:
           weight), conjugation rejects the imaginary coherence at its 20 Hz
           peak, and the phase slope index, in every dataset, and pairwise
           Granger in 94% (10-90 Hz).
-        - Family-wise error under the global null, the same 2100 datasets
-          with every tested frequency and pair one family: some element was
-          rejected in 5.0-5.1% of datasets with ``"trial_shuffle"``,
-          3.6-3.8% with ``"phase_rotation"`` and 3.9-5.2% with
-          ``"conjugation"``, against every dataset with the uncorrected
-          p-values. Conjugation rejected pairwise Granger at 0 Hz in 6.5% of
-          these datasets (5.8% under the mixing above).
+        - Family-wise error under the global null, the 2100 trial-shuffle
+          datasets with every tested frequency and pair one family: some
+          element was rejected in 5.0-5.1% of datasets with
+          ``"trial_shuffle"``, 3.6-3.8% with ``"phase_rotation"`` and
+          3.9-5.2% with ``"conjugation"``, against every dataset with the
+          uncorrected p-values. Conjugation rejected pairwise Granger at
+          0 Hz in 6.5% of these datasets (5.8% under the mixing above).
+        - Correlated observations, Welch segments overlapping by 75% (13 per
+          trial): randomizing each segment rejected independent signals in
+          19.6% of datasets (5 trials, magnitude-squared coherence and
+          pairwise Granger), against 5.0-5.2% with one phase per trial; under
+          the mixing above with 10 trials, per-segment conjugation rejected
+          11.5-14.8% and per-trial conjugation 4.9%.
+        - A shared stimulus-locked response: two independent AR(2) noise
+          signals plus the same 10 Hz burst in each of 10 trials (2 s
+          windows, 7 tapers, 600 datasets), rejection at 5-15 Hz. With the
+          burst at zero lag: 4.5-5.6% for the trial shuffle, 4.7-5.9% for
+          conjugation, and 72-74% (magnitude-squared coherence) and 62-64%
+          (pairwise Granger) for phase rotation (3.5-4.1% for the imaginary
+          coherence, which a zero-lag response does not change). With the
+          burst 15 ms later in one signal: 4.2-6.0% for the trial shuffle and
+          64-86% for the other two. After subtracting each signal's mean
+          across trials, phase rotation and conjugation rejected 6.2-7.7% at
+          every frequency with 10 trials (7.0% and 6.5% for
+          magnitude-squared coherence of independent signals with no
+          response, 400 datasets) and 5.4% and 5.1% with 40 trials, while the
+          trial shuffle kept 4.9-6.1%.
 
         References
         ----------

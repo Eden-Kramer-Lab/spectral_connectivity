@@ -111,12 +111,14 @@ class SurrogateTestResult:
     estimate : array
         The measure of the original coefficients.
     p_value : array
-        Element-wise Monte Carlo p-value, ``(1 + b) / (n_surrogates + 1)``,
-        where ``b`` counts the surrogates whose statistic at that element is
-        at least the observed one (see ``alternative``). Each is a valid
-        p-value for its own element; correct for testing many elements with
-        ``fwer_p_value`` or with
-        :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`.
+        Uncorrected Monte Carlo p-value of each element, ``(1 + b) /
+        (n_surrogates + 1)``, where ``b`` counts the surrogates whose
+        statistic at that element is at least the observed one (see
+        ``alternative``). It is the test of one element chosen in advance (one
+        pair at one frequency); to say where among many elements the measure
+        is significant, report ``fwer_p_value``, or correct ``p_value`` with
+        :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`
+        for a false discovery rate.
     fwer_p_value : array
         Family-wise adjusted p-value from the maximum statistic (Nichols and
         Holmes [1]_): ``(1 + m) / (n_surrogates + 1)``, where ``m`` counts the
@@ -124,7 +126,7 @@ class SurrogateTestResult:
         tested elements along ``fwer_axis``) is at least the observed
         statistic. Rejecting every element with ``fwer_p_value <= alpha``
         rejects a true null anywhere in the family with probability at most
-        ``alpha``.
+        ``alpha``. This is the p-value to report for where an effect is.
     null_maxima : array, shape (n_surrogates, ...)
         The largest statistic of each surrogate in each family: the axes of
         ``estimate`` not in ``fwer_axis``, in order, follow the surrogate
@@ -139,10 +141,12 @@ class SurrogateTestResult:
         The surrogate construction, which sets the null hypothesis (see
         :meth:`Connectivity.surrogate_test`).
     alternative : str
-        ``"greater"``, ``"less"``, or ``"two-sided"``.
+        ``"greater"``, ``"less"``, or ``"two-sided"``: the alternative used,
+        with ``"auto"`` resolved.
     fwer_axis : tuple of int
-        The axes of ``estimate`` (non-negative) whose tested elements form one
-        family for ``fwer_p_value``.
+        The axes of ``estimate`` whose tested elements form one family for
+        ``fwer_p_value``, normalized: non-negative, in the order given, and
+        every axis when ``fwer_axis=None`` was passed.
 
     References
     ----------
