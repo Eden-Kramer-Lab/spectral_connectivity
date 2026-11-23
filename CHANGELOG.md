@@ -65,19 +65,16 @@ The migration guide for code written against 2.x is
   `TypeError` saying so, where it raised a shape `ValueError`.
 - `Connectivity.surrogate_test(method, kind=...)` tests a real pairwise measure
   against surrogate data and returns a `SurrogateTestResult` (exported from
-  `spectral_connectivity`) with element-wise Monte Carlo p-values and p-values
-  adjusted for the family-wise error rate by the maximum statistic over the
-  axes named by `fwer_axis` (Nichols and Holmes, 2002). `kind` chooses the
-  null hypothesis: `"trial_shuffle"` (signals independent across trials;
-  each signal keeps its stimulus-locked response), `"phase_rotation"` (signals
-  independent; works with one trial; needs `half_bandwidth` and leaves the
-  frequencies within it of 0 Hz and Nyquist untested), and `"conjugation"`
-  (real coherency, as for zero-lag mixing such as volume conduction; tests
-  lagged interaction and Granger causality beyond mixing). Correlated
-  observations (`observations_are_independent=False`) are randomized as whole
-  trials. `alternative` takes `"greater"`, `"less"`, or `"two-sided"`;
-  `random_state` seeds the surrogates. It refuses `power`, `delay`, and
-  complex, tuple-valued, or structured measures.
+  `spectral_connectivity`) with uncorrected Monte Carlo p-values and p-values
+  adjusted for the family-wise error rate by the maximum statistic over
+  `fwer_axis` (Nichols and Holmes, 2002). `kind` chooses the null:
+  `"trial_shuffle"` (signals independent from trial to trial),
+  `"phase_rotation"` (signals independent), or `"conjugation"` (real
+  coherency, as for zero-lag mixing).
+- `Connectivity` takes and exposes `half_bandwidth`, which
+  `Connectivity.from_transform` reads from a transform's optional
+  `half_bandwidth` attribute; `Multitaper.half_bandwidth` is
+  `frequency_resolution / 2`. `surrogate_test(kind="phase_rotation")` uses it.
 - `Connectivity.jackknife(method, leave_out="trial")` leaves out whole trials
   (all their tapers) instead of single trial-taper observations, so the
   interval includes the variability between trials; the default interval is

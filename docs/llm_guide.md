@@ -213,6 +213,29 @@ interval includes the variability between trials:
 
 ```
 
+For significance, `Connectivity.surrogate_test(method, kind=...)` compares the
+measure with its values on surrogate data. `kind` sets the null hypothesis:
+
+| Question | `kind` | A stimulus-locked response common to the signals |
+| --- | --- | --- |
+| Do the signals covary from trial to trial? (2+ trials) | `"trial_shuffle"` | stays in the null |
+| Are the signals independent at all? (one trial is enough) | `"phase_rotation"` | is rejected |
+| Is there more than zero-lag mixing (volume conduction)? | `"conjugation"` | is rejected if lagged |
+
+Report `fwer_p_value` (family-wise over every frequency and pair by default);
+`p_value` is uncorrected:
+
+```python
+>>> tested = connectivity.surrogate_test(
+...     "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=99, random_state=0
+... )
+>>> tested.fwer_p_value.shape == tested.estimate.shape
+True
+>>> tested.alternative  # "auto" resolved for this measure
+'greater'
+
+```
+
 ## Where to look next
 
 - `help(spectral_connectivity.multitaper_connectivity)` for every wrapper

@@ -403,9 +403,10 @@ a variance-stabilizing transformation automatically: log for power,
 For significance, `Connectivity.surrogate_test(method, kind=...)` compares a
 measure with its values on surrogate data: trials shuffled between signals,
 phases rotated, or observations conjugated (time-reversed), each for a
-different null hypothesis. It returns element-wise p-values and p-values
-corrected for the family-wise error rate; see the
-[cookbook recipe](docs/cookbook.md#test-against-surrogate-data).
+different null hypothesis. It returns uncorrected p-values and p-values
+corrected for the family-wise error rate; the
+[cookbook recipe](docs/cookbook.md#test-against-surrogate-data) says which
+kind answers which question.
 
 ## Documentation
 
