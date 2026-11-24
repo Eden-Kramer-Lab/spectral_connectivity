@@ -502,3 +502,41 @@ def test_auto_intensity_is_computed_once_per_instance():
     ) as influence:
         independent.jackknife("partial_coherence", shrinkage="auto")
     assert influence.call_count == 1 + independent.n_observations
+
+
+def test_auto_intensity_cache_is_cleared_by_each_input_setter():
+    """Assigning fourier_coefficients, expectation_type, or observation_weights
+    gives the intensity of a new instance with those inputs, not the cached
+    one (each assignment changes it, so a stale cache would fail)."""
+    rng = np.random.default_rng(12)
+    first, second = (_coefficients(rng, (2, 5, 3, 8, 4)) for _ in range(2))
+    weights = np.ones((2, 5, 3, 8, 1))
+    weights[:, :, :, :2] = 0.0  # no observation at the first two frequencies
+    connectivity = Connectivity(first)
+    previous = connectivity.partial_coherence_shrinkage()
+    for name, value, inputs in [
+        ("fourier_coefficients", second, {"fourier_coefficients": second}),
+        (
+            "expectation_type",
+            "time_tapers",
+            {"fourier_coefficients": second, "expectation_type": "time_tapers"},
+        ),
+        (
+            "observation_weights",
+            weights,
+            {
+                "fourier_coefficients": second,
+                "expectation_type": "time_tapers",
+                "observation_weights": weights,
+            },
+        ),
+    ]:
+        setattr(connectivity, name, value)
+        intensity = connectivity.partial_coherence_shrinkage()
+        np.testing.assert_array_equal(
+            intensity, Connectivity(**inputs).partial_coherence_shrinkage()
+        )
+        assert intensity.shape != previous.shape or not np.array_equal(
+            intensity, previous, equal_nan=True
+        )
+        previous = intensity
