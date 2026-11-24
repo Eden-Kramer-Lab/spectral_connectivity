@@ -166,6 +166,20 @@ def _companion_matrix(coefficients):
     return companion
 
 
+def _normalized_inverse(matrices, loading=None):
+    """``|P_ij|^2 / (P_ii P_jj)`` for ``P = inv(matrices + diag(loading))``.
+
+    The partial coherence of a cross-spectral matrix, ``(..., n, n)``;
+    ``loading``, ``(..., n)``, is added to the diagonal first (none by
+    default)."""
+    identity = np.eye(matrices.shape[-1])
+    if loading is not None:
+        matrices = matrices + loading[..., None, :] * identity
+    precision = np.linalg.solve(matrices, np.broadcast_to(identity, matrices.shape))
+    diagonal = np.real(np.diagonal(precision, axis1=-2, axis2=-1))
+    return np.abs(precision) ** 2 / (diagonal[..., :, None] * diagonal[..., None, :])
+
+
 def _companion_spectral_radius(coefficients):
     """Largest eigenvalue modulus of a VAR's companion matrix (< 1 is stable)."""
     return np.max(np.abs(np.linalg.eigvals(_companion_matrix(coefficients))))

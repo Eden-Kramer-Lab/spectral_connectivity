@@ -33,6 +33,7 @@ from tests._var_oracle import (
     _analytic_var,
     _companion_spectral_radius,
     _fourier_coefficients_with_cross_spectrum,
+    _normalized_inverse,
 )
 
 PHASE_LAG_MEASURES = (
@@ -407,18 +408,6 @@ def test_imaginary_coherency_preserves_pair_orientation():
     assert np.isnan(signed[0, 0])
 
 
-def _normalized_precision(spectrum, loading):
-    """``|P_ij|^2 / (P_ii P_jj)`` for ``P = inv(spectrum + diag(loading))``,
-    with a NaN diagonal."""
-    identity = np.eye(spectrum.shape[-1])
-    precision = np.linalg.solve(spectrum + loading[..., None, :] * identity, identity)
-    diagonal = np.diagonal(precision, axis1=-2, axis2=-1).real
-    expected = np.abs(precision) ** 2 / (diagonal[..., :, None] * diagonal[..., None, :])
-    index = np.arange(spectrum.shape[-1])
-    expected[..., index, index] = np.nan
-    return expected
-
-
 def test_partial_coherence_matches_inverse_spectral_matrix_definition():
     """Each signal's power is loaded by ``regularization`` times itself.
 
@@ -435,12 +424,15 @@ def test_partial_coherence_matches_inverse_spectral_matrix_definition():
 
     spectrum = to_host(conn._expectation_cross_spectral_matrix())[..., :3, :, :]
     power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
+    off_diagonal = ~np.eye(3, dtype=bool)
+    expected = _normalized_inverse(spectrum, 1e-2 * power)
     np.testing.assert_allclose(
-        actual, _normalized_precision(spectrum, 1e-2 * power), rtol=1e-12, equal_nan=True
+        actual[..., off_diagonal], expected[..., off_diagonal], rtol=1e-12
     )
+    assert np.isnan(actual[..., ~off_diagonal]).all()
     rms = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=(-2, -1)))[..., None]
-    uniform = _normalized_precision(spectrum, 1e-2 * rms * np.ones(3))
-    assert np.nanmax(np.abs(actual - uniform)) > 0.1
+    uniform = _normalized_inverse(spectrum, 1e-2 * rms * np.ones(3))
+    assert np.max(np.abs(actual - uniform)[..., off_diagonal]) > 0.1
 
 
 @pytest.mark.parametrize("shrinkage", [None, 0.3, "auto"])

@@ -436,25 +436,28 @@ def test_weighted_phase_lag_family_runs_on_the_device(xp, monkeypatch):
 
 
 def test_partial_coherence_shrinkage_runs_on_the_device(xp, monkeypatch):
-    """The ``"auto"`` intensity (``expand_dims`` over the averaged axes, the
-    reductions of two coefficient arrays) and the shrunk inverse run on device
-    arrays and match the host result."""
-    coefficients = _coefficients(np.random.default_rng(11), shape=(2, 6, 2, 16, 4))
-    device = Connectivity(xp.asarray(coefficients), expectation_type="time_tapers")
-    on_device = (
-        device.partial_coherence_shrinkage(),
-        device.partial_coherence(shrinkage="auto"),
-        device.partial_coherence(shrinkage=0.3),
-    )
+    """The ``"auto"`` intensity (one observation layout, a real and a complex
+    matmul, the in-place conjugate, uniform weights) and the shrunk inverse run
+    on device arrays and match the host result."""
+    rng = np.random.default_rng(11)
+    coefficients = _coefficients(rng, shape=(2, 6, 2, 16, 4))
+    weights = np.full((2, 6, 2, 16, 1), 0.5)
 
+    def run(asarray):
+        connectivity = Connectivity(
+            asarray(coefficients),
+            expectation_type="time_tapers",
+            observation_weights=asarray(weights),
+        )
+        return (
+            connectivity.partial_coherence_shrinkage(),
+            connectivity.partial_coherence(shrinkage="auto"),
+            connectivity.partial_coherence(shrinkage=0.3),
+        )
+
+    on_device = run(xp.asarray)
     monkeypatch.undo()  # back to the NumPy backend for the reference
-    host = Connectivity(coefficients, expectation_type="time_tapers")
-    expected = (
-        host.partial_coherence_shrinkage(),
-        host.partial_coherence(shrinkage="auto"),
-        host.partial_coherence(shrinkage=0.3),
-    )
-    for actual, reference in zip(on_device, expected, strict=True):
+    for actual, reference in zip(on_device, run(np.asarray), strict=True):
         assert isinstance(actual, np.ndarray)
         np.testing.assert_allclose(actual, reference, rtol=1e-12, equal_nan=True)
 

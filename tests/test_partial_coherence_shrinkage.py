@@ -10,6 +10,7 @@ of the replicate mean; an allowance that is not sampling error is stated
 beside its measured value.
 """
 
+import re
 import warnings
 from unittest.mock import patch
 
@@ -18,7 +19,11 @@ import pytest
 
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
 from tests._backend_helpers import to_host
-from tests._var_oracle import _analytic_var, _companion_matrix
+from tests._var_oracle import (
+    _analytic_var,
+    _companion_spectral_radius,
+    _normalized_inverse,
+)
 
 # Bins of a 32-point FFT grid at which the VAR spectra are sampled.
 _FREQUENCY_BINS = [1, 3, 5, 8]
@@ -46,11 +51,10 @@ def _dense_var(n_signals):
 _MODELS = {"chain": _chain_var, "dense": _dense_var}
 
 
-def _normalized_inverse(matrices):
-    """``|P_ij|^2 / (P_ii P_jj)`` for ``P = inv(matrices)``."""
-    precision = np.linalg.inv(matrices)
-    diagonal = np.real(np.diagonal(precision, axis1=-2, axis2=-1))
-    return np.abs(precision) ** 2 / (diagonal[..., :, None] * diagonal[..., None, :])
+def _true_coherency(spectrum):
+    """Coherency ``S_ij / sqrt(S_ii S_jj)`` of a cross-spectral matrix."""
+    power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
+    return spectrum / np.sqrt(power[..., :, None] * power[..., None, :])
 
 
 def _var_replicates(model, n_signals, n_observations, n_replicates, seed=0):
@@ -61,7 +65,7 @@ def _var_replicates(model, n_signals, n_observations, n_replicates, seed=0):
     at ``_FREQUENCY_BINS`` as their covariance.
     """
     coefficients = _MODELS[model](n_signals)
-    assert np.max(np.abs(np.linalg.eigvals(_companion_matrix(coefficients)))) < 1
+    assert _companion_spectral_radius(coefficients) < 1
     _, _, spectrum = _analytic_var(coefficients, np.eye(n_signals), 32)
     spectrum = spectrum[_FREQUENCY_BINS]
     cholesky = np.linalg.cholesky(spectrum)
@@ -73,9 +77,10 @@ def _var_replicates(model, n_signals, n_observations, n_replicates, seed=0):
 
 
 def _mean_and_limit(values):
-    """Replicate mean of ``values`` (replicates first) and five standard errors."""
+    """Replicate mean of ``values`` (replicates on the first axis) and five
+    standard errors of it, for each of its other entries."""
     values = np.asarray(values)
-    return values.mean(), 5 * values.std(ddof=1) / np.sqrt(len(values))
+    return values.mean(axis=0), 5 * values.std(axis=0, ddof=1) / np.sqrt(len(values))
 
 
 def _squared_error(estimate, truth):
@@ -99,22 +104,20 @@ def _coefficients(rng, shape, mixing=0.6):
         (np.nan, ""),
         (np.inf, ""),
         ([0.1], ""),
-        (True, "Booleans are not accepted"),
-        ("Auto", "Strings are case-sensitive"),
+        (True, " Booleans are not accepted."),
+        ("Auto", " Strings are case-sensitive."),
     ],
 )
 def test_rejects_invalid_shrinkage(shrinkage, hint):
     """The message says what each accepted value means."""
     coefficients = np.ones((1, 2, 2, 2, 2), dtype=complex)
-    with pytest.raises(ValueError, match="shrinkage must be None") as error:
+    with pytest.raises(
+        ValueError,
+        match=r"^shrinkage must be None \(no shrinkage\), 'auto' \(estimate the "
+        r"intensity for each time window and frequency\), or a number from 0 to 1 "
+        rf"\(a fixed intensity\), got .*\.{re.escape(hint)}$",
+    ):
         Connectivity(coefficients).partial_coherence(shrinkage=shrinkage)
-    message = str(error.value)
-    assert message.startswith(
-        "shrinkage must be None (no shrinkage), 'auto' (estimate the intensity "
-        "for each time window and frequency), or a number from 0 to 1 (a fixed "
-        "intensity), got "
-    )
-    assert hint in message
 
 
 @pytest.mark.parametrize("intensity", [0.0, 0.3, 1.0])
@@ -126,10 +129,8 @@ def test_fixed_shrinkage_matches_its_definition(intensity):
     actual = connectivity.partial_coherence(shrinkage=intensity)
 
     spectrum = to_host(connectivity._expectation_cross_spectral_matrix())[..., :3, :, :]
-    power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
-    coherency = spectrum / np.sqrt(power[..., :, None] * power[..., None, :])
-    shrunk = (1 - intensity) * coherency + intensity * np.eye(4)
-    expected = _normalized_inverse(shrunk + 1e-12 * np.eye(4))
+    shrunk = (1 - intensity) * _true_coherency(spectrum) + intensity * np.eye(4)
+    expected = _normalized_inverse(shrunk, np.full(4, 1e-12))
     off_diagonal = ~np.eye(4, dtype=bool)
     np.testing.assert_allclose(
         actual[..., off_diagonal], expected[..., off_diagonal], rtol=1e-10, atol=1e-15
@@ -194,19 +195,13 @@ def test_auto_intensity_matches_the_estimator_one_observation_at_a_time(
         )
 
 
-def test_auto_intensity_is_the_same_for_rescaled_and_reordered_signals():
-    """The intensity depends only on the coherencies: rescaling the signals
-    (with arbitrary phases) or reordering them leaves it unchanged."""
+def test_auto_intensity_is_the_same_for_reordered_signals():
+    """Reordering the signals leaves the intensity unchanged, and the shrunk
+    estimate is symmetric (rescaling is tested in test_connectivity.py)."""
     rng = np.random.default_rng(3)
     coefficients = _coefficients(rng, (2, 5, 2, 6, 5))
-    scales = 10.0 ** np.linspace(-6, 6, 5) * np.exp(1j * rng.uniform(-np.pi, np.pi, 5))
     order = rng.permutation(5)
     intensity = Connectivity(coefficients).partial_coherence_shrinkage()
-    np.testing.assert_allclose(
-        Connectivity(coefficients * scales).partial_coherence_shrinkage(),
-        intensity,
-        rtol=1e-12,
-    )
     np.testing.assert_allclose(
         Connectivity(coefficients[..., order]).partial_coherence_shrinkage(),
         intensity,
@@ -216,18 +211,9 @@ def test_auto_intensity_is_the_same_for_rescaled_and_reordered_signals():
     np.testing.assert_allclose(auto, np.swapaxes(auto, -1, -2), rtol=1e-12, equal_nan=True)
 
 
+@pytest.mark.parametrize("model", ["chain", "dense"])
 @pytest.mark.parametrize(
-    ("model", "n_signals", "n_observations"),
-    [
-        ("chain", 8, 10),
-        ("dense", 8, 10),
-        ("chain", 8, 20),
-        ("dense", 8, 20),
-        ("chain", 16, 20),
-        ("dense", 16, 20),
-        ("chain", 16, 40),
-        ("dense", 16, 40),
-    ],
+    ("n_signals", "n_observations"), [(8, 10), (8, 20), (16, 20), (16, 40)]
 )
 def test_auto_shrinkage_lowers_the_error_with_few_observations(
     model, n_signals, n_observations
@@ -245,22 +231,8 @@ def test_auto_shrinkage_lowers_the_error_with_few_observations(
     assert mean + limit < 0
 
 
-def _true_coherency(spectrum):
-    power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
-    return spectrum / np.sqrt(power[..., :, None] * power[..., None, :])
-
-
-@pytest.mark.parametrize(
-    ("model", "n_signals", "n_observations"),
-    [
-        ("chain", 8, 10),
-        ("dense", 8, 10),
-        ("chain", 8, 40),
-        ("dense", 8, 40),
-        ("chain", 16, 20),
-        ("dense", 16, 20),
-    ],
-)
+@pytest.mark.parametrize("model", ["chain", "dense"])
+@pytest.mark.parametrize(("n_signals", "n_observations"), [(8, 10), (8, 40), (16, 20)])
 def test_auto_intensity_is_near_the_monte_carlo_optimum(model, n_signals, n_observations):
     """The intensity is near the one that minimizes the replicates' squared
     error of the shrunk coherencies, ``1 - sum Re(conj(rho) r) / sum |r|^2``
@@ -283,9 +255,7 @@ def test_auto_intensity_is_near_the_monte_carlo_optimum(model, n_signals, n_obse
     ).mean(axis=0)
     optimum = 1 - aligned / squared
 
-    intensity = connectivity.partial_coherence_shrinkage()
-    mean = intensity.mean(axis=0)
-    limit = 5 * intensity.std(axis=0, ddof=1) / np.sqrt(intensity.shape[0])
+    mean, limit = _mean_and_limit(connectivity.partial_coherence_shrinkage())
     assert np.all(np.abs(mean - optimum) <= 0.15 * optimum + limit)
 
 
@@ -312,27 +282,14 @@ def test_auto_intensity_falls_as_one_over_n_and_results_approach_unshrunk(model)
     variance = (1 - squared_rho) * (1 - squared_rho / 2) / n_observations
     first_order = variance.sum(axis=-1) / (squared_rho + variance).sum(axis=-1)
 
-    intensity = connectivity.partial_coherence_shrinkage()
-    mean = intensity.mean(axis=0)
-    limit = 5 * intensity.std(axis=0, ddof=1) / np.sqrt(intensity.shape[0])
+    mean, limit = _mean_and_limit(connectivity.partial_coherence_shrinkage())
     assert np.all(np.abs(mean - first_order) <= 0.03 * first_order + limit)
     assert np.all(mean < 0.05)
     assert changes[1] < 0.15 * changes[0]
 
 
-@pytest.mark.parametrize(
-    ("model", "n_signals", "n_observations"),
-    [
-        ("chain", 8, 7),
-        ("dense", 8, 7),
-        ("chain", 8, 4),
-        ("dense", 8, 4),
-        ("chain", 16, 15),
-        ("dense", 16, 15),
-        ("chain", 16, 8),
-        ("dense", 16, 8),
-    ],
-)
+@pytest.mark.parametrize("model", ["chain", "dense"])
+@pytest.mark.parametrize(("n_signals", "n_observations"), [(8, 7), (8, 4), (16, 15), (16, 8)])
 def test_auto_shrinkage_is_usable_with_fewer_observations_than_signals(
     model, n_signals, n_observations
 ):
