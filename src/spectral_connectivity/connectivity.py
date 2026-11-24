@@ -3569,6 +3569,37 @@ class Connectivity:
             "The intensity estimates each coherency's sampling variance from "
             "the observations as independent samples",
         )
+        squared_coherency, mean_squared_influence = self._coherency_influence(
+            cross_spectral_density
+        )
+        power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
+        has_power = power > 0  # False for NaN (a bin no observation weights)
+        off_diagonal = 1 - xp.eye(self.n_signals, dtype=power.dtype)
+        counts = self._observation_counts_per_bin(power.shape[-2])
+        variance_sum = xp.sum(mean_squared_influence * off_diagonal, axis=(-2, -1)) / (
+            xp.maximum(counts, 2) - 1
+        )
+        coherence_sum = xp.sum(squared_coherency * off_diagonal, axis=(-2, -1))
+        # Every coherency exactly 0: nothing to keep, and any intensity gives
+        # the same partial coherence.
+        intensity = xp.clip(
+            _divide_where(variance_sum, coherence_sum, coherence_sum > 0, 1.0), 0.0, 1.0
+        )
+        # Also NaN where non-finite coefficients reach the powers.
+        undefined = (
+            (counts < 2) | ~xp.any(has_power, axis=-1) | ~xp.all(xp.isfinite(power), axis=-1)
+        )
+        return xp.where(undefined, xp.nan, intensity)
+
+    def _coherency_influence(
+        self, cross_spectral_density: BackendArray
+    ) -> tuple[BackendArray, BackendArray]:
+        """``(|r_ij|^2, mean_k |psi_kij|^2)`` for each bin of the coherency
+        ``r`` of ``cross_spectral_density`` (non-negative frequencies), with
+        ``psi_kij = w_kij - (r_ij / 2) (u_ki + u_kj)`` the delta-method
+        influence of observation ``k`` (see the Notes of
+        :meth:`partial_coherence`). Pairs with a zero-power signal are 0.
+        """
         power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
         root_power = xp.sqrt(power)
         has_power = root_power > 0  # False for NaN (a bin no observation weights)
@@ -3610,22 +3641,7 @@ class Connectivity:
                 + 2 * power_products
             )
         )
-        off_diagonal = 1 - xp.eye(self.n_signals, dtype=power.dtype)
-        counts = self._observation_counts_per_bin(power.shape[-2])
-        variance_sum = xp.sum(mean_squared_influence * off_diagonal, axis=(-2, -1)) / (
-            xp.maximum(counts, 2) - 1
-        )
-        coherence_sum = xp.sum(squared_coherency * off_diagonal, axis=(-2, -1))
-        # Every coherency exactly 0: nothing to keep, and any intensity gives
-        # the same partial coherence.
-        intensity = xp.clip(
-            _divide_where(variance_sum, coherence_sum, coherence_sum > 0, 1.0), 0.0, 1.0
-        )
-        # Also NaN where non-finite coefficients reach the powers.
-        undefined = (
-            (counts < 2) | ~xp.any(has_power, axis=-1) | ~xp.all(xp.isfinite(power), axis=-1)
-        )
-        return xp.where(undefined, xp.nan, intensity)
+        return squared_coherency, mean_squared_influence
 
     def _observation_counts_per_bin(self, n_frequencies: int) -> int | BackendArray:
         """The observations with nonzero weight in each reduced bin of the
