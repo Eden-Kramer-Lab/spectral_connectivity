@@ -55,22 +55,15 @@ The migration guide for code written against 2.x is
   counterparts of `time_reversed_spectral_granger_prediction` for checking
   whether a direction reverses under time reversal (Winkler et al., 2016).
 - `partial_coherence(shrinkage=...)` shrinks each cross-spectral matrix
-  toward its diagonal before inverting it, `(1 - lambda) * S + lambda *
-  diag(S)`, which multiplies every coherency by `1 - lambda`: a fixed
-  `lambda` in [0, 1], or `"auto"`, which estimates it for each time window
-  and frequency from the trials x tapers by the Ledoit-Wolf / Schäfer-Strimmer
-  intensity for shrinkage toward the diagonal, for complex data, with a
-  delta-method variance of each coherency. `Connectivity.partial_coherence_shrinkage()`
-  returns those intensities, for reporting. The default, `None`, does not
-  shrink; the wrappers take it in `connectivity_kwargs`. Against the exact
-  partial coherence of simulated VARs with 8 and 16 signals, `"auto"` lowered
-  the mean squared error to 0.06-0.09 of the unshrunk error with 1.25
-  observations per signal and to 0.28-0.58 with 2.5, and with fewer
-  observations than signals, where the unshrunk estimate is forced toward 1
-  or unrelated to the data, its error was below that of estimating 0. With
-  100 to 400 observations it changed the error by -16% to +34%. With
-  shrinkage, the warning for fewer observations than signals says that the
-  estimate then rests on the intensity.
+  toward its diagonal before inverting it, multiplying every coherency by
+  `1 - lambda`: a fixed `lambda` in [0, 1], or `"auto"`, the Ledoit-Wolf /
+  Schäfer-Strimmer intensity estimated for each time window and frequency.
+  `Connectivity.partial_coherence_shrinkage()` returns those intensities, for
+  reporting. The default, `None`, does not shrink; the wrappers take it in
+  `connectivity_kwargs`. Use `"auto"` with at most about 2.5 trials x tapers
+  per signal: against simulated VARs it lowered the mean squared error there
+  in every case (to 0.01-0.80 of the unshrunk error), while from 5 per signal
+  on it can raise it, by up to 2.2 times in the cases simulated.
 - `adjust_for_multiple_comparisons(..., axis=...)`: the axes whose tests form
   one family, as in `scipy.stats.false_discovery_control`, so each slice
   along the other axes (each time window, say) is corrected on its own. The
@@ -1206,8 +1199,9 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `regularization` times the matrix's RMS entry, which perturbed a signal far
   weaker than the others by far more than `regularization` of its own size.
   It is now invariant under rescaling the signals; before, signal amplitudes
-  from 1e-6 to 1e6 moved the default result by up to 0.36 from that of the same
-  data at one scale. For signals of comparable power the default result
+  from 1e-6 to 1e6 moved the default result by up to about 0.95 from that of
+  the same data at one scale (8 signals, three simulated dense VARs: 0.91-0.95
+  with 10 observations, 0.56-0.60 with 30, 0.38-0.51 with 100). For signals of comparable power the default result
   changed by at most 1e-12 with 100 observations and 4e-11 with 10 (8 signals,
   a simulated dense VAR); with fewer observations than signals, where it
   warns, the loading sets the estimate and it changed by up to 0.45.

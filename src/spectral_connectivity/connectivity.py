@@ -3260,9 +3260,16 @@ class Connectivity:
             every bin: 0 does not shrink, and 1 makes every partial coherence 0.
             ``"auto"`` estimates ``lambda`` for each time window and frequency
             from the averaged observations (see Notes); use
-            :meth:`partial_coherence_shrinkage` to report it. Shrinkage lowers
-            the error of the estimate when the observations (trials x tapers)
-            are few for the number of signals, at the cost of a bias toward 0.
+            :meth:`partial_coherence_shrinkage` to report it. Unlike
+            ``regularization``, a tiny loading for numerical stability,
+            shrinkage is a statistical choice that changes the estimate: it
+            lowers its error when the observations (trials x tapers) are few
+            for the number of signals, at the cost of a bias toward 0. Use
+            ``"auto"`` with at most about 2.5 observations per signal, where
+            it lowered the error in every case simulated; from 5 per signal on
+            it can raise it (see Notes). The wrappers record the setting
+            (``arg_shrinkage``) but not the intensities: compute them with
+            ``Connectivity.from_transform(transform).partial_coherence_shrinkage()``.
 
         Returns
         -------
@@ -3323,15 +3330,46 @@ class Connectivity:
         the unshrunk one. ``"auto"`` makes two more passes over the
         coefficients, each as costly as computing the cross-spectral matrix.
 
-        In simulations of VARs with 8 and 16 signals (complex Gaussian
-        observations with the model's exact spectrum), ``"auto"`` lowered the
-        mean squared error against the model's partial coherence to 0.06-0.09
-        of the unshrunk error with 1.25 observations per signal and to
-        0.28-0.58 with 2.5; with fewer observations than signals its error was
-        below that of estimating 0 for every pair. With 100 to 400
-        observations it changed the error by -16% to +34% (by at most 2.4e-4):
-        the intensity minimizes the error of the coherencies, not of their
-        inverse.
+        The intensity is a first-order estimate. At 5 observations it
+        averaged 0.77-0.98 of the Monte Carlo optimum (4 to 32 signals, lowest
+        with the most). With 10 to 40 observations it was within about 10% of
+        the optimum in the VARs simulated below; where the optimum is near 0
+        (strongly coherent signals) it can be several times the optimum while
+        staying small (0.067 against 0.037 for 4 signals with 25
+        observations). For independent signals, whose optimum is 1, it
+        averaged 0.74-0.96.
+
+        In simulations of a chain and a dense VAR with 4, 8 and 16 signals
+        (complex Gaussian observations with the model's exact spectrum, 500
+        replicates), ``"auto"`` changed the mean squared error against the
+        model's partial coherence as follows, by observations per signal:
+
+        - 0.5 to 2.5: lowered it in every case, to 0.01-0.80 of the unshrunk
+          error (to 0.01-0.21 at 1 to 1.25; with fewer observations than
+          signals, for 8 and 16 signals, also below the error of estimating 0
+          for every pair);
+        - 5: lowered it in four of the six cases (to 0.54-0.86) and raised it
+          in two (to 1.12 and 1.63 times, by at most 4.9e-3);
+        - 10 to 100: lowered it for the chain with 4 and 8 signals (to
+          0.73-0.97) and otherwise left it unchanged or raised it, by up to
+          2.2 times (by at most 3.2e-3).
+
+        The intensity minimizes the error of the coherencies, not of their
+        inverse, which is why it can hurt with many observations.
+
+        **What to report.** Shrinkage changes the estimand, toward 0. Report
+        the setting, for ``"auto"`` the median and range of the intensities
+        (:meth:`partial_coherence_shrinkage`), and the numbers of trials,
+        tapers and signals. Under ``"auto"`` the intensity falls with the
+        number of observations, so conditions with different trial counts are
+        shrunk by different amounts and biased differently: compare them with
+        one fixed intensity or with matched counts. :meth:`jackknife`
+        re-estimates the intensity in every leave-one-out replicate, so its
+        intervals are for the shrunk estimand.
+
+        See Also
+        --------
+        partial_coherence_shrinkage : The intensities ``shrinkage="auto"`` uses.
 
         References
         ----------
@@ -3505,6 +3543,10 @@ class Connectivity:
         averaged 0.74-0.96 in simulations (2 to 16 signals, 6 to 100
         observations). It treats the observations as independent, and warns
         when the transform reports them correlated.
+
+        See Also
+        --------
+        partial_coherence : The estimate these intensities shrink.
 
         Examples
         --------
