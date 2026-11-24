@@ -3536,10 +3536,10 @@ class Connectivity:
             if shrinkage == "auto"
             else shrinkage
         )
-        diagonal_part = cross_spectral_density * xp.eye(
-            self.n_signals, dtype=cross_spectral_density.real.dtype
-        )
-        shrunk = (1 - intensity) * cross_spectral_density + intensity * diagonal_part
+        # (1 - lambda) S + lambda diag(S) as one product: the powers are kept
+        # exactly and every off-diagonal entry is multiplied by 1 - lambda.
+        off_diagonal = 1 - xp.eye(self.n_signals, dtype=cross_spectral_density.real.dtype)
+        shrunk = cross_spectral_density * (1 - intensity * off_diagonal)
         return cross_spectral_density, shrunk, shrinkage
 
     @_asnumpy
