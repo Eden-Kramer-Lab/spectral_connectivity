@@ -11,6 +11,7 @@ beside its measured value.
 """
 
 import warnings
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -507,3 +508,40 @@ def test_wrappers_take_shrinkage_in_connectivity_kwargs():
     np.testing.assert_allclose(
         result.values, connectivity.partial_coherence(shrinkage="auto"), equal_nan=True
     )
+
+
+def test_auto_intensity_is_computed_once_per_instance():
+    """``partial_coherence_shrinkage()`` after ``partial_coherence(shrinkage=
+    "auto")`` reuses the intensity, still checks the observations, and returns
+    a copy; ``clear_cache`` and every jackknife replicate recompute it."""
+    rng = np.random.default_rng(11)
+    connectivity = Connectivity(
+        _coefficients(rng, (1, 4, 2, 6, 3)), observations_are_independent=False
+    )
+    with patch.object(
+        connectivity, "_coherency_influence", wraps=connectivity._coherency_influence
+    ) as influence:
+        with pytest.warns(UserWarning, match="assumes independent observations"):
+            shrunk = connectivity.partial_coherence(shrinkage="auto")
+        with pytest.warns(UserWarning, match="assumes independent observations"):
+            intensity = connectivity.partial_coherence_shrinkage()
+        assert influence.call_count == 1
+        intensity[...] = 0.5  # the caller's copy
+        with pytest.warns(UserWarning, match="assumes independent observations"):
+            np.testing.assert_array_equal(
+                connectivity.partial_coherence(shrinkage="auto"), shrunk
+            )
+        connectivity.clear_cache()
+        with pytest.warns(UserWarning, match="assumes independent observations"):
+            connectivity.partial_coherence_shrinkage()
+        assert influence.call_count == 2
+
+    independent = Connectivity(_coefficients(rng, (1, 4, 2, 6, 3)))
+    with patch.object(
+        Connectivity,
+        "_coherency_influence",
+        autospec=True,
+        side_effect=Connectivity._coherency_influence,
+    ) as influence:
+        independent.jackknife("partial_coherence", shrinkage="auto")
+    assert influence.call_count == 1 + independent.n_observations

@@ -3618,21 +3618,19 @@ class Connectivity:
             assumption="The intensity estimates each coherency's sampling "
             "variance from the observations as independent samples",
         )
-        return self._partial_coherence_shrinkage_intensity(
-            self._nonnegative_cross_spectral_matrix()
-        )
+        return self._partial_coherence_shrinkage_intensity
 
-    def _partial_coherence_shrinkage_intensity(
-        self, cross_spectral_density: BackendArray
-    ) -> BackendArray:
-        """``lambda`` of ``partial_coherence(shrinkage="auto")`` for each bin.
-
-        ``cross_spectral_density`` is the expected cross-spectral matrix at the
-        non-negative frequencies, ``(..., n_nonnegative_frequencies,
-        n_signals, n_signals)``; returns ``(..., n_nonnegative_frequencies)``.
-        The estimator is in the Notes of :meth:`partial_coherence`. With zero
-        observation weights each bin counts the observations it keeps.
+    @cached_property
+    def _partial_coherence_shrinkage_intensity(self) -> BackendArray:
+        """``lambda`` of ``partial_coherence(shrinkage="auto")`` for each bin,
+        ``(..., n_nonnegative_frequencies)``, cached: ``"auto"`` has no
+        settings, so :meth:`partial_coherence_shrinkage` after
+        ``partial_coherence(shrinkage="auto")`` reuses it. Read-only for its
+        consumers. The estimator is in the Notes of :meth:`partial_coherence`.
+        With zero observation weights each bin counts the observations it
+        keeps.
         """
+        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
         power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
         root_power = xp.sqrt(power)
         has_power = power > 0  # False for NaN (a bin with no observation weights)
