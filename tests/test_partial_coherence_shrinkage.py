@@ -90,11 +90,30 @@ def _coefficients(rng, shape, mixing=0.6):
     return white @ (np.eye(n_signals) + mixing * rng.standard_normal((n_signals, n_signals)))
 
 
-@pytest.mark.parametrize("shrinkage", [-0.1, 1.5, np.nan, np.inf, True, "Auto", [0.1]])
-def test_rejects_invalid_shrinkage(shrinkage):
+@pytest.mark.parametrize(
+    ("shrinkage", "hint"),
+    [
+        (-0.1, ""),
+        (1.5, ""),
+        (np.nan, ""),
+        (np.inf, ""),
+        ([0.1], ""),
+        (True, "Booleans are not accepted"),
+        ("Auto", "Strings are case-sensitive"),
+    ],
+)
+def test_rejects_invalid_shrinkage(shrinkage, hint):
+    """The message says what each accepted value means."""
     coefficients = np.ones((1, 2, 2, 2, 2), dtype=complex)
-    with pytest.raises(ValueError, match="shrinkage must be None, 'auto', or a number"):
+    with pytest.raises(ValueError, match="shrinkage must be None") as error:
         Connectivity(coefficients).partial_coherence(shrinkage=shrinkage)
+    message = str(error.value)
+    assert message.startswith(
+        "shrinkage must be None (no shrinkage), 'auto' (estimate the intensity "
+        "for each time window and frequency), or a number from 0 to 1 (a fixed "
+        "intensity), got "
+    )
+    assert hint in message
 
 
 @pytest.mark.parametrize("intensity", [0.0, 0.3, 1.0])
@@ -325,7 +344,9 @@ def test_auto_shrinkage_is_usable_with_fewer_observations_than_signals(
     intensity."""
     connectivity, spectrum = _var_replicates(model, n_signals, n_observations, 400, seed=3)
     truth = _normalized_inverse(spectrum)
-    with pytest.warns(UserWarning, match="Only the shrinkage toward its diagonal"):
+    with pytest.warns(
+        UserWarning, match=r"see Connectivity\.partial_coherence_shrinkage\(\)\), not"
+    ):
         shrunk = connectivity.partial_coherence(shrinkage="auto")
     off_diagonal = ~np.eye(n_signals, dtype=bool)
     assert np.isfinite(shrunk[..., off_diagonal]).all()
@@ -346,19 +367,42 @@ def test_zero_shrinkage_warns_as_no_shrinkage_with_few_observations():
     for shrinkage in (None, 0.0):
         with pytest.warns(UserWarning, match="the estimate is forced to 1"):
             connectivity.partial_coherence(shrinkage=shrinkage)
-    with pytest.warns(UserWarning, match="Only the shrinkage toward its diagonal"):
+    with pytest.warns(
+        UserWarning,
+        match=r"only the shrinkage makes it invertible: the result is "
+        r"set by the shrinkage intensity \(0\.2\), not conditioned",
+    ):
         connectivity.partial_coherence(shrinkage=0.2)
 
 
 def test_auto_shrinkage_needs_two_observations():
+    """Each error names its call; only partial_coherence offers a fixed
+    shrinkage. A fixed one runs, and its warning says the shrinkage, not the
+    data, sets the result (which is the same for any data)."""
     rng = np.random.default_rng(5)
     connectivity = Connectivity(_coefficients(rng, (1, 1, 1, 4, 3)))
-    with pytest.raises(ValueError, match="requires at least 2 observations"):
+    with pytest.raises(
+        ValueError,
+        match=r'^partial_coherence\(shrinkage="auto"\) requires at least 2 .* or a fixed '
+        "shrinkage between 0 and 1.$",
+    ):
         connectivity.partial_coherence(shrinkage="auto")
-    with pytest.raises(ValueError, match="requires at least 2 observations"):
+    with pytest.raises(
+        ValueError, match=r"^partial_coherence_shrinkage\(\) requires"
+    ) as error:
         connectivity.partial_coherence_shrinkage()
+    assert "fixed shrinkage" not in str(error.value)
+    with pytest.warns(
+        UserWarning,
+        match=r"single observation .* set by the shrinkage intensity \(0\.5\) and the "
+        "number of signals regardless of the data",
+    ):
+        shrunk = connectivity.partial_coherence(shrinkage=0.5)
+    other = Connectivity(_coefficients(rng, (1, 1, 1, 4, 3)))
     with pytest.warns(UserWarning, match="single observation"):
-        connectivity.partial_coherence(shrinkage=0.5)
+        np.testing.assert_allclose(
+            other.partial_coherence(shrinkage=0.5), shrunk, atol=1e-12, equal_nan=True
+        )
 
 
 def test_auto_intensity_is_nan_where_partial_coherence_is_undefined():
@@ -391,9 +435,18 @@ def test_auto_shrinkage_refuses_weights_that_reweight_observations():
     coefficients = _coefficients(rng, (1, 6, 2, 4, 3))
     weights = rng.uniform(0.5, 1.5, (1, 6, 2, 4, 1))
     connectivity = Connectivity(coefficients, observation_weights=weights)
-    with pytest.raises(ValueError, match="does not support non-uniform observation_weights"):
+    with pytest.raises(
+        ValueError,
+        match=r'^partial_coherence\(shrinkage="auto"\) does not support non-uniform .* '
+        "'keep', an expectation_type that keeps the time axis, or a fixed shrinkage between 0 "
+        r"and 1\.$",
+    ):
         connectivity.partial_coherence(shrinkage="auto")
-    with pytest.raises(ValueError, match="does not support non-uniform observation_weights"):
+    with pytest.raises(
+        ValueError,
+        match=r"^partial_coherence_shrinkage\(\) does not support non-uniform .* "
+        r"'keep', or an expectation_type that keeps the time axis\.$",
+    ):
         connectivity.partial_coherence_shrinkage()
     connectivity.partial_coherence(shrinkage=0.3)  # a fixed intensity counts nothing
 
@@ -414,7 +467,7 @@ def test_auto_intensity_counts_only_the_observations_weights_keep(monkeypatch):
     dropped = coefficients.copy()
     dropped[0, :3] = np.nan  # omitted by a zero weight, so never used
     monkeypatch.setattr(
-        Connectivity, "_require_uniform_observation_weights", lambda *args: None
+        Connectivity, "_require_uniform_observation_weights", lambda *args, **kwargs: None
     )
     with pytest.warns(UserWarning, match="NaN or Inf"):
         weighted = Connectivity(dropped, observation_weights=keep)

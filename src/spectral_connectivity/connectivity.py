@@ -270,8 +270,18 @@ def _validated_shrinkage(value: Any) -> float | Literal["auto"] | None:
         return None
     if isinstance(value, str) and value == "auto":
         return "auto"
-    message = f"shrinkage must be None, 'auto', or a number in [0, 1], got {value!r}."
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+    message = (
+        "shrinkage must be None (no shrinkage), 'auto' (estimate the intensity "
+        "for each time window and frequency), or a number from 0 to 1 (a fixed "
+        f"intensity), got {value!r}."
+    )
+    if isinstance(value, str):
+        message += " Strings are case-sensitive."
+    elif isinstance(value, bool):
+        message += " Booleans are not accepted."
+    if isinstance(value, (str, bool)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
         raise ValueError(message)
     intensity = float(value)
     if not 0.0 <= intensity <= 1.0:  # also rejects NaN
@@ -1734,18 +1744,26 @@ class Connectivity:
             )
             raise ValueError(msg)
 
-    def _require_uniform_observation_weights(self, measure: str, reason: str) -> None:
+    def _require_uniform_observation_weights(
+        self, measure: str, reason: str, *, other_remedy: str | None = None
+    ) -> None:
         """Raise if observation weights are non-uniform for a measure that
-        assumes equally weighted independent observations."""
+        assumes equally weighted independent observations. ``other_remedy``
+        ends the list of remedies the message closes with."""
         if self._observation_weights_are_uniform:
             return
+        remedies = [
+            "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep'",
+            "an expectation_type that keeps the time axis",
+        ]
+        if other_remedy is not None:
+            remedies.append(other_remedy)
         msg = (
             f"{measure} does not support non-uniform observation_weights. "
             f"{reason} Non-uniform weights come from a smoothing_kernel other "
             "than 'boxcar', or from edge_mode='nan' when the time axis is part "
             "of the expectation (the edge mask zeroes some observations). Use "
-            "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or an "
-            "expectation_type that keeps the time axis."
+            f"{', '.join(remedies[:-1])}, or {remedies[-1]}."
         )
         raise ValueError(msg)
 
@@ -3352,17 +3370,32 @@ class Connectivity:
         cross_spectral_density = self._nonnegative_cross_spectral_matrix()
         # Before any warning: "auto" raises for a single observation.
         intensity = (
-            self._partial_coherence_shrinkage_intensity(cross_spectral_density)[
-                ..., xp.newaxis, xp.newaxis
-            ]
+            self._partial_coherence_shrinkage_intensity(
+                cross_spectral_density,
+                caller='partial_coherence(shrinkage="auto")',
+                fixed_shrinkage_remedy=True,
+            )[..., xp.newaxis, xp.newaxis]
             if shrinkage == "auto"
             else shrinkage
         )
+        shrinks = shrinkage is not None and shrinkage != 0
+        # The intensity used, as the warnings name it.
+        used = (
+            "see Connectivity.partial_coherence_shrinkage()"
+            if shrinkage == "auto"
+            else f"{shrinkage:g}"
+            if shrinks
+            else ""
+        )
         self._warn_single_observation_degenerate(
             "partial_coherence",
-            "the cross-spectral matrix has rank one and its inverse is fixed by "
-            "the null space: the estimate is 1 for every pair of two signals and "
-            "otherwise unrelated to the data",
+            "the cross-spectral matrix has rank one and only the shrinkage makes "
+            "it invertible: every partial coherence is set by the shrinkage "
+            f"intensity ({used}) and the number of signals"
+            if shrinks
+            else "the cross-spectral matrix has rank one and its inverse is fixed "
+            "by the null space: the estimate is 1 for every pair of two signals "
+            "and otherwise unrelated to the data",
         )
         n_observations = self.n_observations
         # The inverse of a rank-deficient cross-spectral matrix is dominated by
@@ -3377,7 +3410,7 @@ class Connectivity:
                 f"averaged trials x tapers), fewer than the {self.n_signals} "
                 "signals, so the cross-spectral matrix is rank-deficient"
             )
-            if shrinkage is None or shrinkage == 0:
+            if not shrinks:
                 consequence = (
                     " and its inverse is dominated by the null space: the "
                     "estimate is forced to 1 for every pair (one missing "
@@ -3385,12 +3418,10 @@ class Connectivity:
                 )
             else:
                 consequence = (
-                    ". Only the shrinkage toward its diagonal makes it "
-                    "invertible, so the estimate rests on the shrinkage "
-                    "intensity: a small one leaves it dominated by the null "
-                    "space, and the closer it is to 1, the closer the estimate is "
-                    "to (1 - intensity)**2 times the coherence, which does not "
-                    "condition on the other signals."
+                    f" and only the shrinkage makes it invertible: the result is "
+                    f"set by the shrinkage intensity ({used}), not conditioned "
+                    "on the other signals. Near 1 it is about (1 - intensity)**2 "
+                    "times the coherence; near 0 the null space dominates it."
                 )
             warnings.warn(
                 f"{few}{consequence} Provide more trials or tapers than "
@@ -3495,11 +3526,17 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         return self._partial_coherence_shrinkage_intensity(
-            self._nonnegative_cross_spectral_matrix()
+            self._nonnegative_cross_spectral_matrix(),
+            caller="partial_coherence_shrinkage()",
+            fixed_shrinkage_remedy=False,
         )
 
     def _partial_coherence_shrinkage_intensity(
-        self, cross_spectral_density: BackendArray
+        self,
+        cross_spectral_density: BackendArray,
+        *,
+        caller: str,
+        fixed_shrinkage_remedy: bool,
     ) -> BackendArray:
         """``lambda`` of ``partial_coherence(shrinkage="auto")`` for each bin.
 
@@ -3508,25 +3545,28 @@ class Connectivity:
         n_signals, n_signals)``; returns ``(..., n_nonnegative_frequencies)``.
         The estimator is in the Notes of :meth:`partial_coherence`. With zero
         observation weights each bin counts the observations it keeps.
+        ``caller`` names the call in errors and warnings, and
+        ``fixed_shrinkage_remedy`` offers a fixed shrinkage as a remedy.
         """
-        measure = 'partial_coherence(shrinkage="auto")'
+        fixed_shrinkage = "a fixed shrinkage between 0 and 1"
         if self.n_observations < 2:
             msg = (
-                f"{measure} requires at least 2 observations (n_observations == "
-                f"n_trials * n_tapers), but got {self.n_observations}. Its "
+                f"{caller} requires at least 2 observations (n_observations == "
+                f"n_trials * n_tapers), but got {self.n_observations}. The "
                 "intensity estimates each coherency's variance across the "
                 "observations, which is undefined for one. Use more trials or "
-                "tapers, or a fixed shrinkage between 0 and 1."
+                f"tapers{', or ' + fixed_shrinkage if fixed_shrinkage_remedy else ''}."
             )
             raise ValueError(msg)
         self._require_uniform_observation_weights(
-            measure,
-            "Its intensity estimates each coherency's variance from equally "
-            "weighted independent observations; use a fixed shrinkage instead.",
+            caller,
+            "The intensity estimates each coherency's variance from equally "
+            "weighted independent observations.",
+            other_remedy=fixed_shrinkage if fixed_shrinkage_remedy else None,
         )
         self._warn_correlated_observations(
-            measure,
-            "Its intensity estimates each coherency's sampling variance from "
+            caller,
+            "The intensity estimates each coherency's sampling variance from "
             "the observations as independent samples",
         )
         power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
