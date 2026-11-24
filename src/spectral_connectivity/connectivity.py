@@ -2162,7 +2162,6 @@ class Connectivity:
         fourier_coefficients: NDArray[np.complexfloating] | None = None,
         *,
         dtype: DTypeLike | None = None,
-        conjugated_coefficients: NDArray[Any] | None = None,
     ) -> NDArray[np.complexfloating]:
         """Expected cross-spectral matrix via a single batched matmul.
 
@@ -2187,10 +2186,6 @@ class Connectivity:
             non-negative frequencies); observation weights are sliced to match.
         dtype : complex dtype, optional
             Precision of the product; ``self._dtype`` by default.
-        conjugated_coefficients : array, optional
-            Coefficients of the same shape as ``fourier_coefficients`` whose
-            conjugate is the right factor, giving ``mean_obs f_i * conj(g_j)``;
-            ``fourier_coefficients`` itself by default.
 
         Returns
         -------
@@ -2213,12 +2208,18 @@ class Connectivity:
         # signals) so the averaged axes collapse into a single observation axis
         # adjacent to signals, ready for a batched matmul.
         order = [*kept_axes, *batch_axes, *average_axes, signal_axis]
+        observations = xp.transpose(fourier_coefficients, order)
+
         n_observations = int(
             np.prod([fourier_coefficients.shape[axis] for axis in average_axes])
         )
         n_signals = fourier_coefficients.shape[signal_axis]
-        leading_shape = tuple(
-            fourier_coefficients.shape[axis] for axis in [*kept_axes, *batch_axes]
+        observations = observations.reshape(
+            (
+                *observations.shape[: len(kept_axes) + len(batch_axes)],
+                n_observations,
+                n_signals,
+            )
         )
         weights = None
         if self._observation_weights is not None:
@@ -2230,33 +2231,20 @@ class Connectivity:
                 [*kept_axes, frequency_axis, *average_axes],
             ).reshape(
                 (
-                    *leading_shape[: len(kept_axes) + 1],
+                    *observations.shape[: len(kept_axes) + 1],
                     *(1,) * (len(batch_axes) - 1),
                     n_observations,
                 )
             )
-
-        def observations_of(coefficients: BackendArray) -> BackendArray:
-            observations = xp.transpose(coefficients, order).reshape(
-                (*leading_shape, n_observations, n_signals)
+            observations = _weight_observations(
+                observations, xp.sqrt(weights)[..., xp.newaxis]
             )
-            if weights is not None:
-                observations = _weight_observations(
-                    observations, xp.sqrt(weights)[..., xp.newaxis]
-                )
-            # Cast before multiplying (see _complex_inner_product).
-            return observations.astype(self._dtype if dtype is None else dtype, copy=False)
-
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
-        observations = observations_of(fourier_coefficients)
-        conjugated = (
-            observations
-            if conjugated_coefficients is None
-            else observations_of(conjugated_coefficients)
-        )
+        # Cast before multiplying (see _complex_inner_product).
+        observations = observations.astype(self._dtype if dtype is None else dtype, copy=False)
         cross_spectral_matrix: NDArray[np.complexfloating] = xp.matmul(
-            xp.swapaxes(observations, -1, -2), xp.conj(conjugated)
+            xp.swapaxes(observations, -1, -2), xp.conj(observations)
         )
         if weights is None:
             return cross_spectral_matrix / n_observations
@@ -3645,12 +3633,9 @@ class Connectivity:
         The estimator is in the Notes of :meth:`partial_coherence`. With zero
         observation weights each bin counts the observations it keeps.
         """
-        squared_coherency, mean_squared_influence = self._coherency_influence(
-            cross_spectral_density
-        )
         power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
-        has_power = power > 0  # False for NaN (a bin no observation weights)
-        off_diagonal = 1 - xp.eye(self.n_signals, dtype=power.dtype)
+        root_power = xp.sqrt(power)
+        has_power = power > 0  # False for NaN (a bin with no observation weights)
         # Count each bin's kept observations, not n_observations: the uniform-
         # weights guard admits only equal weights today, but once it admits
         # weights that only drop observations, the raw count would give a wrong
@@ -3660,6 +3645,10 @@ class Connectivity:
             if self._observation_weights is None
             else self._valid_observation_counts[..., : power.shape[-2]]
         )
+        squared_coherency, mean_squared_influence = self._coherency_influence(
+            cross_spectral_density, root_power, has_power, counts
+        )
+        off_diagonal = 1 - xp.eye(self.n_signals, dtype=power.dtype)
         variance_sum = xp.sum(mean_squared_influence * off_diagonal, axis=(-2, -1)) / (
             xp.maximum(counts, 2) - 1
         )
@@ -3676,37 +3665,63 @@ class Connectivity:
         return xp.where(undefined, xp.nan, intensity)
 
     def _coherency_influence(
-        self, cross_spectral_density: BackendArray
+        self,
+        cross_spectral_density: BackendArray,
+        root_power: BackendArray,
+        has_power: BackendArray,
+        counts: int | BackendArray,
     ) -> tuple[BackendArray, BackendArray]:
         """``(|r_ij|^2, mean_k |psi_kij|^2)`` for each bin of the coherency
         ``r`` of ``cross_spectral_density`` (non-negative frequencies), with
         ``psi_kij = w_kij - (r_ij / 2) (u_ki + u_kj)`` the delta-method
         influence of observation ``k`` (see the Notes of
-        :meth:`partial_coherence`). Pairs with a zero-power signal are 0.
+        :meth:`partial_coherence`). ``root_power`` and ``has_power`` are
+        ``sqrt(S_ii)`` and ``S_ii > 0``, ``(..., n_nonnegative_frequencies,
+        n_signals)``, and ``counts`` the observations each bin keeps. Pairs
+        with a zero-power signal are 0. Observation weights must only keep or
+        drop observations, which the callers' guard ensures.
         """
-        power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
-        root_power = xp.sqrt(power)
-        has_power = root_power > 0  # False for NaN (a bin no observation weights)
-        # Each observation over its signal's root power in its bin: x / sqrt(S_ii).
-        averaged = self._expectation_axes
-        normalized = _divide_where(
-            self._nonnegative_fourier_coefficients(),
-            xp.expand_dims(root_power, averaged),
-            xp.expand_dims(has_power, averaged),
-            0.0,
+        coefficients = self._nonnegative_fourier_coefficients()
+        bins = root_power.shape[:-1]  # (*kept observation axes, frequency)
+        n_observations, n_signals = self.n_observations, self.n_signals
+        averaged_last = [*self._kept_observation_axes, 3, *self._expectation_axes]
+        # One layout, (*bins, observation, signal), with each observation over
+        # its signal's root power in its bin (0 for a signal without power).
+        scale = xp.where(has_power, 1 / xp.where(has_power, root_power, 1), 0)
+        observations = (
+            xp.transpose(coefficients, [*averaged_last, 4]).reshape(
+                (*bins, n_observations, n_signals)
+            )
+            * scale[..., xp.newaxis, :]
         )
-        relative_power = xp.real(normalized * xp.conj(normalized))  # u
+        if self._observation_weights is not None:
+            # Leave out the zero-weight observations, which may be NaN.
+            kept = xp.transpose(
+                self._observation_weights[..., : bins[-1], 0] > 0, averaged_last
+            ).reshape((*bins, n_observations))
+            observations = _weight_observations(
+                observations, kept[..., xp.newaxis].astype(root_power.dtype)
+            )
+        per_bin = xp.maximum(xp.asarray(counts, dtype=root_power.dtype), 1)[
+            ..., xp.newaxis, xp.newaxis
+        ]
+        relative_power = observations.real**2 + observations.imag**2  # u
+        # Means over the observations of u_i u_j (a real product) and of
+        # u_i w_ij = conj(sum_k conj(u_ki x_ki) x_kj) / n.
+        power_products = (
+            xp.matmul(xp.swapaxes(relative_power, -1, -2), relative_power) / per_bin
+        )
+        conjugated = relative_power * observations
+        xp.conj(conjugated, out=conjugated)
+        weighted_coherency = (
+            xp.conj(xp.matmul(xp.swapaxes(conjugated, -1, -2), observations)) / per_bin
+        )
         pair_has_power = has_power[..., :, xp.newaxis] & has_power[..., xp.newaxis, :]
         coherency = _divide_where(
             cross_spectral_density,
             root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :],
             pair_has_power,
             0.0,
-        )
-        # Means over the observations of u_i u_j and of u_i w_ij.
-        power_products = xp.real(self._reduced_cross_spectral_matrix(relative_power))
-        weighted_coherency = self._reduced_cross_spectral_matrix(
-            relative_power * normalized, conjugated_coefficients=normalized
         )
         product_diagonal = xp.diagonal(power_products, axis1=-2, axis2=-1)
         squared_coherency = _squared_magnitude(coherency)
