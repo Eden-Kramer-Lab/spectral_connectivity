@@ -253,10 +253,17 @@ class MultivariateConnectivityResult:
     patterns: NDArray[np.floating] | None = None
 
 
+def _is_real_number(value: Any) -> bool:
+    """Whether ``value`` is a Python or NumPy real number other than a boolean."""
+    return not isinstance(value, bool) and isinstance(
+        value, (int, float, np.integer, np.floating)
+    )
+
+
 def _validated_regularization(value: Any) -> float:
     """Return a finite non-negative scalar regularization factor."""
     message = f"regularization must be a finite non-negative scalar, got {value!r}."
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+    if not _is_real_number(value):
         raise ValueError(message)
     regularization = float(value)
     if not np.isfinite(regularization) or regularization < 0:
@@ -268,25 +275,22 @@ def _validated_shrinkage(value: Any) -> float | Literal["auto"] | None:
     """Return ``None``, ``"auto"``, or a shrinkage intensity in [0, 1]."""
     if value is None:
         return None
-    if isinstance(value, str) and value == "auto":
-        return "auto"
     message = (
         "shrinkage must be None (no shrinkage), 'auto' (estimate the intensity "
         "for each time window and frequency), or a number from 0 to 1 (a fixed "
         f"intensity), got {value!r}."
     )
     if isinstance(value, str):
-        message += " Strings are case-sensitive."
-    elif isinstance(value, bool):
-        message += " Booleans are not accepted."
-    if isinstance(value, (str, bool)) or not isinstance(
-        value, (int, float, np.integer, np.floating)
-    ):
+        if value == "auto":
+            return "auto"
+        msg = f"{message} Strings are case-sensitive."
+        raise ValueError(msg)
+    if isinstance(value, bool):
+        msg = f"{message} Booleans are not accepted."
+        raise ValueError(msg)
+    if not _is_real_number(value) or not 0.0 <= float(value) <= 1.0:  # rejects NaN
         raise ValueError(message)
-    intensity = float(value)
-    if not 0.0 <= intensity <= 1.0:  # also rejects NaN
-        raise ValueError(message)
-    return intensity
+    return float(value)
 
 
 def _validated_rank(rank: int | None) -> int | None:
@@ -1744,58 +1748,64 @@ class Connectivity:
             )
             raise ValueError(msg)
 
-    def _require_uniform_observation_weights(
-        self, measure: str, reason: str, *, other_remedy: str | None = None
-    ) -> None:
+    def _require_uniform_observation_weights(self, measure: str, reason: str) -> None:
         """Raise if observation weights are non-uniform for a measure that
-        assumes equally weighted independent observations. ``other_remedy``
-        ends the list of remedies the message closes with."""
+        assumes equally weighted independent observations."""
         if self._observation_weights_are_uniform:
             return
-        remedies = [
-            "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep'",
-            "an expectation_type that keeps the time axis",
-        ]
-        if other_remedy is not None:
-            remedies.append(other_remedy)
         msg = (
             f"{measure} does not support non-uniform observation_weights. "
             f"{reason} Non-uniform weights come from a smoothing_kernel other "
             "than 'boxcar', or from edge_mode='nan' when the time axis is part "
             "of the expectation (the edge mask zeroes some observations). Use "
-            f"{', '.join(remedies[:-1])}, or {remedies[-1]}."
+            "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or an "
+            "expectation_type that keeps the time axis."
         )
         raise ValueError(msg)
 
-    def _validate_debiasing_observations(self, measure: str) -> None:
-        """Raise if a bias-corrected measure has too few observations.
+    def _validate_counted_observations(
+        self,
+        measure: str,
+        *,
+        why: str = (
+            "This bias correction divides by a factor that is zero when "
+            "n_observations < 2, so it is undefined for a single observation."
+        ),
+        remedy: str = (
+            "more trials/tapers, or the non-debiased measure "
+            "(phase_lag_index / phase_locking_value)"
+        ),
+        weights_reason: str = (
+            "Its finite-sample correction assumes equally weighted independent "
+            "observations; use a non-debiased measure instead."
+        ),
+        assumption: str = (
+            "Its finite-sample bias correction treats every observation as an "
+            "independent sample"
+        ),
+    ) -> None:
+        """Raise if a measure that counts its observations has too few.
 
-        The debiased phase-lag index and pairwise phase consistency divide by
-        ``n_observations - 1`` (respectively ``n_observations ** 2 -
-        n_observations``), which is zero for a single observation and would
-        otherwise return silent inf/NaN.
+        The debiased phase-lag index and pairwise phase consistency (the
+        defaults describe them) divide by ``n_observations - 1``
+        (respectively ``n_observations ** 2 - n_observations``), which is zero
+        for a single observation and would otherwise return silent inf/NaN;
+        the ``"auto"`` shrinkage intensity of partial coherence estimates a
+        variance across the observations. ``why`` says why one observation is
+        not enough and ``remedy`` what to use instead; ``weights_reason`` and
+        ``assumption`` go to the refusal of reweighting observation weights
+        and to the warning for correlated observations.
         """
         n_observations = self.n_observations
         if n_observations < 2:
             msg = (
                 f"{measure} requires at least 2 observations "
                 f"(n_observations == n_trials * n_tapers), but got "
-                f"{n_observations}. This bias correction divides by a factor "
-                f"that is zero when n_observations < 2, so it is undefined for a "
-                f"single observation. Use more trials/tapers, or the "
-                f"non-debiased measure (phase_lag_index / phase_locking_value)."
+                f"{n_observations}. {why} Use {remedy}."
             )
             raise ValueError(msg)
-        self._require_uniform_observation_weights(
-            measure,
-            "Its finite-sample correction assumes equally weighted independent "
-            "observations; use a non-debiased measure instead.",
-        )
-        self._warn_correlated_observations(
-            measure,
-            "Its finite-sample bias correction treats every observation as an "
-            "independent sample",
-        )
+        self._require_uniform_observation_weights(measure, weights_reason)
+        self._warn_correlated_observations(measure, assumption)
 
     def _warn_correlated_observations(
         self,
@@ -3421,67 +3431,55 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         regularization = _validated_regularization(regularization)
-        shrinkage = _validated_shrinkage(shrinkage)
-        # Drop negative frequencies before the per-bin inversion, not after.
-        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
         # Before any warning: "auto" raises for a single observation.
-        intensity = (
-            self._partial_coherence_shrinkage_intensity(
-                cross_spectral_density,
-                caller='partial_coherence(shrinkage="auto")',
-                fixed_shrinkage_remedy=True,
-            )[..., xp.newaxis, xp.newaxis]
-            if shrinkage == "auto"
-            else shrinkage
+        cross_spectral_density, shrunk, shrinkage = self._shrunk_cross_spectral_matrix(
+            shrinkage
         )
-        shrinks = shrinkage is not None and shrinkage != 0
-        # The intensity used, as the warnings name it.
-        used = (
-            "see Connectivity.partial_coherence_shrinkage()"
-            if shrinkage == "auto"
-            else f"{shrinkage:g}"
-            if shrinks
-            else ""
-        )
-        self._warn_single_observation_degenerate(
-            "partial_coherence",
-            "the cross-spectral matrix has rank one and only the shrinkage makes "
-            "it invertible: every partial coherence is set by the shrinkage "
-            f"intensity ({used}) and the number of signals"
-            if shrinks
-            else "the cross-spectral matrix has rank one and its inverse is fixed "
-            "by the null space: the estimate is 1 for every pair of two signals "
-            "and otherwise unrelated to the data",
-        )
-        n_observations = self.n_observations
-        # The inverse of a rank-deficient cross-spectral matrix is dominated by
-        # its null space: with one null direction the normalized off-diagonal
-        # precision has unit magnitude for every pair, and with more it is still
-        # unrelated to the data. (A single observation already warned above.)
-        # Shrinkage makes the matrix invertible, but the estimate then rests on
-        # the intensity.
-        if 2 <= n_observations < self.n_signals:
-            few = (
-                f"partial_coherence uses {n_observations} observations (the "
-                f"averaged trials x tapers), fewer than the {self.n_signals} "
-                "signals, so the cross-spectral matrix is rank-deficient"
+        n_observations, n_signals = self.n_observations, self.n_signals
+        if shrinkage is None:
+            # The inverse of a rank-deficient cross-spectral matrix is dominated
+            # by its null space: with one null direction the normalized
+            # off-diagonal precision has unit magnitude for every pair, and with
+            # more it is still unrelated to the data.
+            self._warn_single_observation_degenerate(
+                "partial_coherence",
+                "the cross-spectral matrix has rank one and its inverse is fixed "
+                "by the null space: the estimate is 1 for every pair of two "
+                "signals and otherwise unrelated to the data",
             )
-            if not shrinks:
-                consequence = (
-                    " and its inverse is dominated by the null space: the "
-                    "estimate is forced to 1 for every pair (one missing "
-                    "observation) or is otherwise unrelated to the data."
+            consequence = (
+                "and its inverse is dominated by the null space: the estimate is "
+                "forced to 1 for every pair (one missing observation) or is "
+                "otherwise unrelated to the data."
+            )
+            few = 2 <= n_observations < n_signals
+        else:
+            # Shrinkage makes the matrix invertible, but the estimate then rests
+            # on the intensity. ("auto" has raised for a single observation.)
+            used = (
+                "see Connectivity.partial_coherence_shrinkage()"
+                if shrinkage == "auto"
+                else f"{shrinkage:g}"
+            )
+            consequence = (
+                "and only the shrinkage makes it invertible: the result is set by "
+                f"the shrinkage intensity ({used}), not conditioned on the other "
+                "signals. Near 1 it is about (1 - intensity)**2 times the "
+                "coherence; near 0 the null space dominates it."
+                + (
+                    " With one observation it does not depend on the data."
+                    if n_observations == 1
+                    else ""
                 )
-            else:
-                consequence = (
-                    f" and only the shrinkage makes it invertible: the result is "
-                    f"set by the shrinkage intensity ({used}), not conditioned "
-                    "on the other signals. Near 1 it is about (1 - intensity)**2 "
-                    "times the coherence; near 0 the null space dominates it."
-                )
+            )
+            few = n_observations < n_signals
+        if few:
             warnings.warn(
-                f"{few}{consequence} Provide more trials or tapers than "
-                "signals, or analyze fewer signals.",
+                f"partial_coherence uses {n_observations} "
+                f"observation{'' if n_observations == 1 else 's'} (the averaged "
+                f"trials x tapers), fewer than the {n_signals} signals, so the "
+                f"cross-spectral matrix is rank-deficient {consequence} Provide "
+                "more trials or tapers than signals, or analyze fewer signals.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
@@ -3501,15 +3499,8 @@ class Connectivity:
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
-        if intensity is not None:
-            diagonal_part = cross_spectral_density * xp.eye(
-                self.n_signals, dtype=cross_spectral_density.real.dtype
-            )
-            cross_spectral_density = (
-                1 - intensity
-            ) * cross_spectral_density + intensity * diagonal_part
-        identity = xp.eye(self.n_signals, dtype=cross_spectral_density.dtype)
-        safe_spectrum = xp.where(zero_power, identity, cross_spectral_density)
+        identity = xp.eye(n_signals, dtype=shrunk.dtype)
+        safe_spectrum = xp.where(zero_power, identity, shrunk)
         precision = _regularized_inverse(
             safe_spectrum, regularization=regularization, per_signal=True
         )
@@ -3527,9 +3518,41 @@ class Connectivity:
         )
         result = xp.clip(_squared_magnitude(partial_coherency), 0.0, 1.0)
         result = xp.where(zero_power, xp.nan, result)
-        diagonal = xp.arange(self.n_signals)
+        diagonal = xp.arange(n_signals)
         result[..., diagonal, diagonal] = xp.nan
         return result
+
+    def _shrunk_cross_spectral_matrix(
+        self, shrinkage: Any
+    ) -> tuple[BackendArray, BackendArray, float | Literal["auto"] | None]:
+        """The cross-spectral matrix at the non-negative frequencies, shrunk.
+
+        Validates ``shrinkage`` (0 means none), runs the checks of ``"auto"``,
+        and returns ``(S, shrunk S, shrinkage)``: ``S`` and its shrunk form,
+        ``(..., n_nonnegative_frequencies, n_signals, n_signals)`` (the same
+        array without shrinkage), and the validated ``shrinkage`` (``None``,
+        ``"auto"``, or a float in ``(0, 1]``).
+        """
+        shrinkage = _validated_shrinkage(shrinkage)
+        if shrinkage == 0:
+            shrinkage = None
+        # Drop negative frequencies before the per-bin inversion, not after.
+        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
+        if shrinkage is None:
+            return cross_spectral_density, cross_spectral_density, None
+        intensity = (
+            self._auto_shrinkage_intensity(
+                'partial_coherence(shrinkage="auto")',
+                other_remedy="a fixed shrinkage between 0 and 1",
+            )[..., xp.newaxis, xp.newaxis]
+            if shrinkage == "auto"
+            else shrinkage
+        )
+        diagonal_part = cross_spectral_density * xp.eye(
+            self.n_signals, dtype=cross_spectral_density.real.dtype
+        )
+        shrunk = (1 - intensity) * cross_spectral_density + intensity * diagonal_part
+        return cross_spectral_density, shrunk, shrinkage
 
     @_asnumpy
     def partial_coherence_shrinkage(self) -> NDArray[np.floating]:
@@ -3585,18 +3608,34 @@ class Connectivity:
         True
         """
         self._validate_multiple_signals()
+        return self._auto_shrinkage_intensity("partial_coherence_shrinkage()").copy()
+
+    def _auto_shrinkage_intensity(
+        self, caller: str, other_remedy: str | None = None
+    ) -> BackendArray:
+        """``lambda`` of ``partial_coherence(shrinkage="auto")`` for each bin,
+        ``(..., n_nonnegative_frequencies)``, after the checks of a measure
+        that counts its observations. ``caller`` names the call in their
+        errors and warning; ``other_remedy`` is offered besides more trials or
+        tapers."""
+        alternative = "" if other_remedy is None else f", or {other_remedy}"
+        self._validate_counted_observations(
+            caller,
+            why="The intensity estimates each coherency's variance across the "
+            "observations, which is undefined for one.",
+            remedy=f"more trials or tapers{alternative}",
+            weights_reason="The intensity estimates each coherency's variance "
+            "from equally weighted independent observations"
+            + ("." if other_remedy is None else f"; use {other_remedy} instead."),
+            assumption="The intensity estimates each coherency's sampling "
+            "variance from the observations as independent samples",
+        )
         return self._partial_coherence_shrinkage_intensity(
-            self._nonnegative_cross_spectral_matrix(),
-            caller="partial_coherence_shrinkage()",
-            fixed_shrinkage_remedy=False,
+            self._nonnegative_cross_spectral_matrix()
         )
 
     def _partial_coherence_shrinkage_intensity(
-        self,
-        cross_spectral_density: BackendArray,
-        *,
-        caller: str,
-        fixed_shrinkage_remedy: bool,
+        self, cross_spectral_density: BackendArray
     ) -> BackendArray:
         """``lambda`` of ``partial_coherence(shrinkage="auto")`` for each bin.
 
@@ -3605,30 +3644,7 @@ class Connectivity:
         n_signals, n_signals)``; returns ``(..., n_nonnegative_frequencies)``.
         The estimator is in the Notes of :meth:`partial_coherence`. With zero
         observation weights each bin counts the observations it keeps.
-        ``caller`` names the call in errors and warnings, and
-        ``fixed_shrinkage_remedy`` offers a fixed shrinkage as a remedy.
         """
-        fixed_shrinkage = "a fixed shrinkage between 0 and 1"
-        if self.n_observations < 2:
-            msg = (
-                f"{caller} requires at least 2 observations (n_observations == "
-                f"n_trials * n_tapers), but got {self.n_observations}. The "
-                "intensity estimates each coherency's variance across the "
-                "observations, which is undefined for one. Use more trials or "
-                f"tapers{', or ' + fixed_shrinkage if fixed_shrinkage_remedy else ''}."
-            )
-            raise ValueError(msg)
-        self._require_uniform_observation_weights(
-            caller,
-            "The intensity estimates each coherency's variance from equally "
-            "weighted independent observations.",
-            other_remedy=fixed_shrinkage if fixed_shrinkage_remedy else None,
-        )
-        self._warn_correlated_observations(
-            caller,
-            "The intensity estimates each coherency's sampling variance from "
-            "the observations as independent samples",
-        )
         squared_coherency, mean_squared_influence = self._coherency_influence(
             cross_spectral_density
         )
@@ -5637,7 +5653,7 @@ class Connectivity:
         >>> bool(debiased_pli[0, 20, 0, 1] > 0.05)  # lagged coupling at 10 Hz (bin 20)
         True
         """
-        self._validate_debiasing_observations("debiased_squared_phase_lag_index")
+        self._validate_counted_observations("debiased_squared_phase_lag_index")
         n_observations = self.n_observations
         mean_sign, mean_nonzero, mean_absolute = self._imaginary_cross_spectrum_moments(
             "sign", "nonzero", "absolute"
@@ -5700,7 +5716,7 @@ class Connectivity:
         >>> bool(debiased_wpli[0, 20, 0, 1] > 0.3)  # lagged coupling at 10 Hz (bin 20)
         True
         """
-        self._validate_debiasing_observations("debiased_squared_weighted_phase_lag_index")
+        self._validate_counted_observations("debiased_squared_weighted_phase_lag_index")
         n_observations = self.n_observations
         mean_imaginary, mean_squared, mean_absolute = self._imaginary_cross_spectrum_moments(
             "imaginary", "squared", "absolute"
@@ -5766,7 +5782,7 @@ class Connectivity:
         >>> bool(ppc[0, 20, 0, 1] > 0.3)  # consistent phase difference at 10 Hz (bin 20)
         True
         """
-        self._validate_debiasing_observations("pairwise_phase_consistency")
+        self._validate_counted_observations("pairwise_phase_consistency")
         n_observations = self.n_observations
         plv_sum = self._phase_locking_value() * n_observations
         ppc = (plv_sum * plv_sum.conjugate() - n_observations) / (

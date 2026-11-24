@@ -394,12 +394,12 @@ def test_auto_shrinkage_needs_two_observations():
     assert "fixed shrinkage" not in str(error.value)
     with pytest.warns(
         UserWarning,
-        match=r"single observation .* set by the shrinkage intensity \(0\.5\) and the "
-        "number of signals regardless of the data",
+        match=r"uses 1 observation .* set by the shrinkage intensity \(0\.5\), not "
+        r"conditioned .* With one observation it does not depend on the data\.",
     ):
         shrunk = connectivity.partial_coherence(shrinkage=0.5)
     other = Connectivity(_coefficients(rng, (1, 1, 1, 4, 3)))
-    with pytest.warns(UserWarning, match="single observation"):
+    with pytest.warns(UserWarning, match="uses 1 observation"):
         np.testing.assert_allclose(
             other.partial_coherence(shrinkage=0.5), shrunk, atol=1e-12, equal_nan=True
         )
@@ -437,17 +437,18 @@ def test_auto_shrinkage_refuses_weights_that_reweight_observations():
     connectivity = Connectivity(coefficients, observation_weights=weights)
     with pytest.raises(
         ValueError,
-        match=r'^partial_coherence\(shrinkage="auto"\) does not support non-uniform .* '
-        "'keep', an expectation_type that keeps the time axis, or a fixed shrinkage between 0 "
-        r"and 1\.$",
+        match=r'^partial_coherence\(shrinkage="auto"\) does not support non-uniform '
+        r"observation_weights\. The intensity .* observations; use a fixed shrinkage "
+        r"between 0 and 1 instead\. Non-uniform",
     ):
         connectivity.partial_coherence(shrinkage="auto")
     with pytest.raises(
         ValueError,
-        match=r"^partial_coherence_shrinkage\(\) does not support non-uniform .* "
-        r"'keep', or an expectation_type that keeps the time axis\.$",
-    ):
+        match=r"^partial_coherence_shrinkage\(\) does not support non-uniform "
+        r"observation_weights\. The intensity .* independent observations\. Non-uniform",
+    ) as error:
         connectivity.partial_coherence_shrinkage()
+    assert "fixed shrinkage" not in str(error.value)
     connectivity.partial_coherence(shrinkage=0.3)  # a fixed intensity counts nothing
 
 
