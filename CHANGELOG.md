@@ -1198,11 +1198,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `regularization` times the matrix's RMS entry, which perturbed a signal far
   weaker than the others by far more than `regularization` of its own size.
   It is now invariant under rescaling the signals; before, signal amplitudes
-  from 1e-6 to 1e6 moved the default result by up to about 0.95 from that of
-  the same data at one scale (8 signals, three simulated dense VARs: 0.91-0.95
-  with 10 observations, 0.56-0.60 with 30, 0.38-0.51 with 100). For signals of comparable power the default result
-  changed by at most 1e-12 with 100 observations and 4e-11 with 10 (8 signals,
-  a simulated dense VAR); with fewer observations than signals, where it
+  from 1e-6 to 1e6 moved the default result by up to 0.98 from that of the
+  same data at one scale (simulated dense 8-signal VARs with 10 to 100
+  observations). For signals of comparable power the default result changed
+  by about 1e-11 or less; with fewer observations than signals, where it
   warns, the loading sets the estimate and it changed by up to 0.45.
 - Wilson initialization and solves isolate rank-deficient sub-spectra instead of
   poisoning a whole batch. A unit whose Cholesky start fails starts from the

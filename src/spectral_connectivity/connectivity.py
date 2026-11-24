@@ -3336,7 +3336,7 @@ class Connectivity:
         where the variance is ``(1 - |rho|^2) (1 - |rho|^2 / 2) / n``: it
         overstates the intensity where coherence is high. ``lambda``
         decreases as ``1/n``, so with many observations the result approaches
-        the unshrunk one. ``"auto"`` took 1.8-2.0 times as long as no
+        the unshrunk one. ``"auto"`` took about twice as long as no
         shrinkage and 1.3-1.8 times its peak memory (16 to 64 signals, 100 to
         1400 observations, 251 to 1001 frequencies, one or 100 time windows);
         :meth:`partial_coherence_shrinkage` then reuses the intensity.
@@ -3346,8 +3346,7 @@ class Connectivity:
         with the most). With 10 to 40 observations it was within about 10% of
         the optimum in the VARs simulated below; where the optimum is near 0
         (strongly coherent signals) it can be several times the optimum while
-        staying small (0.067 against 0.037 for 4 signals with 25
-        observations). For independent signals, whose optimum is 1, it
+        staying small. For independent signals, whose optimum is 1, it
         averaged 0.74-0.96.
 
         In simulations of a chain and a dense VAR with 4, 8 and 16 signals
@@ -3370,16 +3369,16 @@ class Connectivity:
         ``"auto"`` with at most about 2.5 observations per signal.
 
         **What to report.** Shrinkage changes the estimand, toward 0. Report
-        the setting, for ``"auto"`` the median and range of the intensities
-        (:meth:`partial_coherence_shrinkage`; the wrappers record the setting,
-        ``arg_shrinkage``, but not the intensities, so compute them with
-        ``Connectivity.from_transform(transform).partial_coherence_shrinkage()``),
-        and the numbers of trials, tapers and signals. Under ``"auto"`` the intensity falls with the
-        number of observations, so conditions with different trial counts are
-        shrunk by different amounts and biased differently: compare them with
-        one fixed intensity or with matched counts. :meth:`jackknife`
-        re-estimates the intensity in every leave-one-out replicate, so its
-        intervals are for the shrunk estimand.
+        the setting, for ``"auto"`` the median and range of the intensities,
+        and the numbers of trials, tapers and signals. The wrappers record the
+        setting (``arg_shrinkage``) but not the intensities; compute them with
+        ``Connectivity.from_transform(transform).partial_coherence_shrinkage()``.
+        Under ``"auto"`` the intensity falls with the number of observations,
+        so conditions with different trial counts are shrunk by different
+        amounts and biased differently: compare them with one fixed intensity
+        or with matched counts. :meth:`jackknife` re-estimates the intensity
+        in every leave-one-out replicate, so its intervals are for the shrunk
+        estimand.
 
         See Also
         --------
