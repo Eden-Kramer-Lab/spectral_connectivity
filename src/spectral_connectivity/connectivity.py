@@ -3275,17 +3275,11 @@ class Connectivity:
             ``None`` does not shrink. A number in ``[0, 1]`` is ``lambda`` for
             every bin: 0 does not shrink, and 1 makes every partial coherence 0.
             ``"auto"`` estimates ``lambda`` for each time window and frequency
-            from the averaged observations (see Notes); use
-            :meth:`partial_coherence_shrinkage` to report it. Unlike
+            from the averaged observations, and
+            :meth:`partial_coherence_shrinkage` returns it. Unlike
             ``regularization``, a tiny loading for numerical stability,
-            shrinkage is a statistical choice that changes the estimate: it
-            lowers its error when the observations (trials x tapers) are few
-            for the number of signals, at the cost of a bias toward 0. Use
-            ``"auto"`` with at most about 2.5 observations per signal, where
-            it lowered the error in every case simulated; from 5 per signal on
-            it can raise it (see Notes). The wrappers record the setting
-            (``arg_shrinkage``) but not the intensities: compute them with
-            ``Connectivity.from_transform(transform).partial_coherence_shrinkage()``.
+            shrinkage is a statistical choice that changes the estimate; see
+            Notes for when it helps and what to report.
 
         Returns
         -------
@@ -3306,8 +3300,7 @@ class Connectivity:
         signal's partial coherence with itself, which is 1.
         This undirected measure is distinct from partial directed coherence.
         Regularization stabilizes inversion but also changes the estimand, so
-        analyses should report a non-default value. So does shrinkage: report
-        its value, or the intensities ``"auto"`` chose.
+        analyses should report a non-default value.
 
         The averaged trials x tapers are the observations. With fewer
         observations than signals the cross-spectral matrix is rank-deficient
@@ -3343,8 +3336,10 @@ class Connectivity:
         where the variance is ``(1 - |rho|^2) (1 - |rho|^2 / 2) / n``: it
         overstates the intensity where coherence is high. ``lambda``
         decreases as ``1/n``, so with many observations the result approaches
-        the unshrunk one. ``"auto"`` makes two more passes over the
-        coefficients, each as costly as computing the cross-spectral matrix.
+        the unshrunk one. ``"auto"`` took 1.8-2.0 times as long as no
+        shrinkage and 1.3-1.8 times its peak memory (16 to 64 signals, 100 to
+        1400 observations, 251 to 1001 frequencies, one or 100 time windows);
+        :meth:`partial_coherence_shrinkage` then reuses the intensity.
 
         The intensity is a first-order estimate. At 5 observations it
         averaged 0.77-0.98 of the Monte Carlo optimum (4 to 32 signals, lowest
@@ -3371,12 +3366,15 @@ class Connectivity:
           2.2 times (by at most 3.2e-3).
 
         The intensity minimizes the error of the coherencies, not of their
-        inverse, which is why it can hurt with many observations.
+        inverse, which is why it can hurt with many observations. Use
+        ``"auto"`` with at most about 2.5 observations per signal.
 
         **What to report.** Shrinkage changes the estimand, toward 0. Report
         the setting, for ``"auto"`` the median and range of the intensities
-        (:meth:`partial_coherence_shrinkage`), and the numbers of trials,
-        tapers and signals. Under ``"auto"`` the intensity falls with the
+        (:meth:`partial_coherence_shrinkage`; the wrappers record the setting,
+        ``arg_shrinkage``, but not the intensities, so compute them with
+        ``Connectivity.from_transform(transform).partial_coherence_shrinkage()``),
+        and the numbers of trials, tapers and signals. Under ``"auto"`` the intensity falls with the
         number of observations, so conditions with different trial counts are
         shrunk by different amounts and biased differently: compare them with
         one fixed intensity or with matched counts. :meth:`jackknife`
@@ -3564,14 +3562,11 @@ class Connectivity:
 
         Notes
         -----
-        The estimator is in the Notes of :meth:`partial_coherence`. Values
-        near 0 mean the coherencies are estimated precisely enough to be
-        kept; values near 1 mean they are indistinguishable from sampling
-        noise. It decreases as ``1 / n_observations`` where the signals are
-        coherent. For independent signals the optimum is 1, and the estimate
-        averaged 0.74-0.96 in simulations (2 to 16 signals, 6 to 100
-        observations). It treats the observations as independent, and warns
-        when the transform reports them correlated.
+        Values near 0 mean the coherencies are estimated precisely enough to
+        be kept; values near 1 mean they are indistinguishable from sampling
+        noise. The estimator, its accuracy, and what to report are in the
+        Notes of :meth:`partial_coherence`. It treats the observations as
+        independent, and warns when the transform reports them correlated.
 
         See Also
         --------

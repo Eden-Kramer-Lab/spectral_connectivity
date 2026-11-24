@@ -61,9 +61,8 @@ The migration guide for code written against 2.x is
   `Connectivity.partial_coherence_shrinkage()` returns those intensities, for
   reporting. The default, `None`, does not shrink; the wrappers take it in
   `connectivity_kwargs`. Use `"auto"` with at most about 2.5 trials x tapers
-  per signal: against simulated VARs it lowered the mean squared error there
-  in every case (to 0.01-0.80 of the unshrunk error), while from 5 per signal
-  on it can raise it, by up to 2.2 times in the cases simulated.
+  per signal; with more it can raise the error (see the `partial_coherence`
+  Notes).
 - `adjust_for_multiple_comparisons(..., axis=...)`: the axes whose tests form
   one family, as in `scipy.stats.false_discovery_control`, so each slice
   along the other axes (each time window, say) is corrected on its own. The
