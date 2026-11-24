@@ -2390,6 +2390,24 @@ class Connectivity:
             return True
         return bool(xp.all(flattened == flattened[..., :1]))
 
+    def _valid_counts_over(self, axes: tuple[int, ...]) -> BackendArray:
+        """Observations with nonzero weight over the observation ``axes``.
+
+        Shape: the other observation axes, then ``n_fft_samples``. Only with
+        observation weights.
+        """
+        assert self._observation_weights is not None
+        counts: BackendArray = xp.count_nonzero(
+            self._observation_weights[..., 0] > 0, axis=axes
+        )
+        return counts
+
+    @cached_property
+    def _valid_observation_counts(self) -> BackendArray:
+        """Observations with nonzero weight in each reduced bin, ``(*kept
+        observation axes, n_fft_samples)``; only with observation weights."""
+        return self._valid_counts_over(self._expectation_axes)
+
     @property
     def _expectation_axes(self) -> tuple[int, ...]:
         """Observation axes reduced by the configured expectation."""
@@ -3617,7 +3635,15 @@ class Connectivity:
         power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
         has_power = power > 0  # False for NaN (a bin no observation weights)
         off_diagonal = 1 - xp.eye(self.n_signals, dtype=power.dtype)
-        counts = self._observation_counts_per_bin(power.shape[-2])
+        # Count each bin's kept observations, not n_observations: the uniform-
+        # weights guard admits only equal weights today, but once it admits
+        # weights that only drop observations, the raw count would give a wrong
+        # intensity without any error.
+        counts = (
+            self.n_observations
+            if self._observation_weights is None
+            else self._valid_observation_counts[..., : power.shape[-2]]
+        )
         variance_sum = xp.sum(mean_squared_influence * off_diagonal, axis=(-2, -1)) / (
             xp.maximum(counts, 2) - 1
         )
@@ -3684,18 +3710,6 @@ class Connectivity:
             )
         )
         return squared_coherency, mean_squared_influence
-
-    def _observation_counts_per_bin(self, n_frequencies: int) -> int | BackendArray:
-        """The observations with nonzero weight in each reduced bin of the
-        first ``n_frequencies`` frequencies, ``(..., n_frequencies)``;
-        :attr:`n_observations` without observation weights."""
-        if self._observation_weights is None:
-            return self.n_observations
-        counts: BackendArray = xp.count_nonzero(
-            self._observation_weights[..., :n_frequencies, 0] > 0,
-            axis=self._expectation_axes,
-        )
-        return counts
 
     def _validated_group_indices(
         self, group_labels: NDArray[Any]
