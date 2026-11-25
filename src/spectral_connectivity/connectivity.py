@@ -3311,8 +3311,8 @@ class Connectivity:
         elif half_bandwidth is not None:
             msg = (
                 f"half_bandwidth applies only to kind='phase_rotation', whose "
-                f"surrogates are invalid near 0 Hz and Nyquist; kind={kind!r} "
-                "tests every frequency. Drop half_bandwidth."
+                f"surrogates are invalid within it of 0 Hz and Nyquist; "
+                f"kind={kind!r} does not use it. Drop half_bandwidth."
             )
             raise ValueError(msg)
         method, measure = self._resampled_measure(method, "surrogate_test")
@@ -3479,16 +3479,18 @@ class Connectivity:
                     "with other signals' trials, so the expectation must average "
                     f"trials; this Connectivity has expectation_type="
                     f"{self.expectation_type!r}. Build it with "
-                    "expectation_type='trials_tapers' (the default), or use "
-                    "kind='phase_rotation' or 'conjugation', which randomize single "
-                    "observations."
+                    "expectation_type='trials_tapers' (the default), or average "
+                    "independent time windows (e.g. expectation_type='time_tapers') "
+                    "and use kind='phase_rotation' or 'conjugation', which randomize "
+                    "each averaged window."
                 )
                 raise ValueError(msg)
             n_trials = shape[1]
             if n_trials < 2:
                 msg = (
                     "surrogate_test(kind='trial_shuffle') needs at least 2 trials to "
-                    f"shuffle; got {n_trials}. With one trial use "
+                    f"shuffle; got {n_trials}. With one trial, average independent "
+                    "time windows (e.g. expectation_type='time_tapers') and use "
                     "kind='phase_rotation' (independence) or kind='conjugation' (no "
                     "lagged interaction)."
                 )
