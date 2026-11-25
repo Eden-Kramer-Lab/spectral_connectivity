@@ -946,6 +946,18 @@ def _block_spectral_granger_from_model(
     hermitian_total_target_spectrum = (
         total_target_spectrum + _conjugate_transpose(total_target_spectrum)
     ) / 2.0
+    # The log-determinant ratio is unchanged by scaling both blocks to the
+    # target signals' unit power at each bin, D T D and D I D with D the
+    # inverse square root of T's diagonal. In the signals' own units, powers
+    # far apart make the eigenvalues and determinants mix those units, and
+    # rounding erased the smallest eigenvalue of a three-signal block whose
+    # signals were rescaled by 1e-4 and 1e4. A signal without power at a bin
+    # keeps a scale of 1 there (its total spectrum is singular, the value NaN).
+    target_power = xp.real(xp.diagonal(hermitian_total_target_spectrum, axis1=-2, axis2=-1))
+    inverse_scale = 1 / xp.sqrt(xp.where(target_power > 0, target_power, 1))
+    normalizer = inverse_scale[..., :, xp.newaxis] * inverse_scale[..., xp.newaxis, :]
+    hermitian_total_target_spectrum = hermitian_total_target_spectrum * normalizer
+    intrinsic = intrinsic * normalizer
     # A failed factorization leaves NaN in ``intrinsic``, and a target block
     # with no power is singular (both log-determinants -inf, their difference
     # NaN). The calling measure reports those NaN pairs, so the floating-point
