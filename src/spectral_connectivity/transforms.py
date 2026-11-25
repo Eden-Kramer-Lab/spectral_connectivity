@@ -4945,7 +4945,10 @@ def _missing_data_slepian_tapers(
         Unit energy, zero at the missing samples; columns past the number of
         valid samples are zero.
     concentrations : NDArray[float], shape (n_tapers,)
-        Decreasing; zero for those zero columns.
+        Decreasing; zero for those zero columns. They are the eigenvalues:
+        within a group of nearly equal ones, whose tapers are rotated toward
+        the DPSS, a rotated taper's own concentration can differ from its
+        entry by up to the group's spread (7e-7 at NW = 8).
     """
     n_time_samples = valid.shape[0]
     (valid_times,) = np.nonzero(valid)
