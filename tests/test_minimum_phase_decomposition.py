@@ -21,7 +21,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
 )
 from tests._backend_helpers import ON_GPU, to_device, to_host, xp
-from tests._var_oracle import _analytic_var
+from tests._var_oracle import _analytic_var, _dense_stable_var, _mirrored
 
 
 def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
@@ -1084,7 +1084,7 @@ def test_a_winding_aliased_by_a_coarse_grid_is_not_reported(real_signals):
     filter_response = 1 - coefficient * np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
     power = np.abs(filter_response) ** 2
     if real_signals:  # exactly symmetric, not only to rounding
-        power[n_fft // 2 + 1 :] = power[1 : n_fft // 2][::-1]
+        power = _mirrored(power)
     diagonal = (slice(None), np.arange(n_signals), np.arange(n_signals))
     spectrum = np.zeros((n_fft, n_signals, n_signals), dtype=complex)
     spectrum[diagonal] = power[:, np.newaxis]
@@ -1110,13 +1110,8 @@ def test_winding_number_of_a_determinant_too_small_to_multiply_is_counted():
         n_signals
     )
     delay = np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
-    factor = np.broadcast_to(np.linalg.cholesky(covariance), (n_fft, n_signals, n_signals))
-    factor = (
-        factor
-        * np.where(np.arange(n_signals) == n_signals - 1, delay[:, np.newaxis], 1)[
-            :, np.newaxis, :
-        ]
-    )
+    factor = np.tile(np.linalg.cholesky(covariance), (n_fft, 1, 1)).astype(complex)
+    factor[..., -1] *= delay[:, np.newaxis]
     with np.errstate(all="ignore"):  # NumPy's det and slogdet warn here
         assert abs(np.linalg.det(factor[0])) < 1e-180
         winding = to_host(
@@ -1139,6 +1134,31 @@ def test_winding_number_is_not_counted_where_the_phase_jumps_between_bins():
     )
     assert winding[0] == pytest.approx(1)
     assert np.isnan(winding[1])
+
+
+@_BOTH_FACTORIZATION_PATHS
+def test_a_factor_that_is_not_minimum_phase_warns_on_both_paths(real_signals, monkeypatch):
+    """From the start ``chol(R0)ᵀ``, the exact spectrum of this dense VAR
+    of signals of comparable power converges to a factor whose determinant
+    winds once around zero, on the two-sided path and on the half-spectrum
+    one that real signals take, where the determinant on the negative
+    frequencies is mirrored from the others before its winding is counted.
+    From the covariant start (``U Uᵀ = R0``) it factors without a
+    warning."""
+    coefficients, noise_covariance = _dense_stable_var(3, 1, 0.99, seed=857449258)
+    spectrum = _analytic_var(coefficients, noise_covariance, 4096)[2]
+    spectrum = to_device(_mirrored(spectrum) if real_signals else spectrum)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        minimum_phase_decomposition(spectrum[np.newaxis])
+    monkeypatch.setattr(
+        mpd_module,
+        "_reverse_cholesky",
+        lambda matrices: xp.linalg.cholesky(matrices).swapaxes(-1, -2),
+    )
+    with pytest.warns(UserWarning, match="not minimum phase for 1 of 1 sub-spectrum"):
+        factor = minimum_phase_decomposition(spectrum[np.newaxis])
+    assert to_host(mpd_module._determinant_winding_number(factor))[0] == pytest.approx(-1)
 
 
 def test_an_infinite_power_window_is_unconverged_without_a_runtime_warning():

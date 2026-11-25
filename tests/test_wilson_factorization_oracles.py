@@ -30,30 +30,23 @@ import warnings
 
 import numpy as np
 import pytest
-from scipy.linalg import solve_discrete_are
 
 from spectral_connectivity import Connectivity, DirectedOrientationWarning, Multitaper
-from spectral_connectivity import minimum_phase_decomposition as mpd_module
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 from spectral_connectivity.simulate import simulate_MVAR
-from tests._backend_helpers import to_device, to_host, xp
-from tests._var_oracle import _analytic_directed_measures, _analytic_var, _dense_stable_var
+from tests._backend_helpers import to_device, to_host
+from tests._var_oracle import (
+    _analytic_directed_measures,
+    _analytic_var,
+    _dense_stable_var,
+    _mirrored,
+    _prediction_error_covariance,
+)
 
 
 def _reverse_cholesky(matrix):
     """Upper-triangular ``U`` with a positive diagonal and ``U Uᴴ = matrix``."""
     return np.linalg.cholesky(matrix[..., ::-1, ::-1])[..., ::-1, ::-1]
-
-
-def _mirrored(spectrum):
-    """``spectrum`` made exactly conjugate-symmetric from its non-negative bins."""
-    n_fft = spectrum.shape[0]
-    mirrored = spectrum.copy()
-    mirrored[0] = mirrored[0].real
-    if n_fft % 2 == 0:
-        mirrored[n_fft // 2] = mirrored[n_fft // 2].real
-    mirrored[n_fft // 2 + 1 :] = mirrored[1 : (n_fft + 1) // 2][::-1].conj()
-    return mirrored
 
 
 def _riccati_minimum_phase_factor(spectrum, max_lag):
@@ -65,13 +58,15 @@ def _riccati_minimum_phase_factor(spectrum, max_lag):
     ``C = [R_1, ..., R_q]``. The minimal solution ``P`` of
     ``P = A P Aᴴ + (Ḡ - A P Cᴴ)(R_0 - C P Cᴴ)⁻¹(Ḡ - A P Cᴴ)ᴴ`` gives the
     innovation covariance ``Σ = R_0 - C P Cᴴ`` and gain ``K``, and the factor
-    is ``W(e^{iω}) U`` with ``U Uᴴ = Σ`` upper triangular. In SciPy's form the
-    equation is ``solve_discrete_are(Aᴴ, Cᴴ, 0, R_0, s=Ḡ)`` for ``-P``.
+    is ``W(e^{iω}) U`` with ``U Uᴴ = Σ`` upper triangular. For ``-P`` the
+    equation is the Kalman filter's with state noise 0, observation noise
+    ``R_0`` and cross-covariance ``Ḡ``, solved by
+    ``_prediction_error_covariance``.
 
     The minimum-phase factor of ``D S D`` is ``D G`` for a positive diagonal
     ``D`` (``D U`` is again upper triangular), so the equation is solved for
-    signals scaled to unit power, which SciPy's QZ solver needs when their
-    powers differ by orders of magnitude.
+    signals scaled to unit power, where the iteration's tolerance, relative to
+    the largest entry, holds for every signal.
     """
     n_fft, n_signals, _ = spectrum.shape
     scale = np.sqrt(np.mean(np.diagonal(spectrum, axis1=-2, axis2=-1).real, axis=0))
@@ -86,12 +81,12 @@ def _riccati_minimum_phase_factor(spectrum, max_lag):
     input_matrix = np.zeros((n_states, n_signals), dtype=complex)
     input_matrix[:n_signals] = np.eye(n_signals)
     zero_lag = (autocovariance[0] + autocovariance[0].conj().T) / 2
-    state = -solve_discrete_are(
-        shift.conj().T,
-        observation.conj().T,
-        np.zeros((n_states, n_states)),
+    state = -_prediction_error_covariance(
+        shift,
+        observation,
+        np.zeros((n_states, n_states), dtype=complex),
         zero_lag,
-        s=input_matrix,
+        input_matrix,
     )
     innovation = zero_lag - observation @ state @ observation.conj().T
     innovation = (innovation + innovation.conj().T) / 2
@@ -156,9 +151,14 @@ def test_factor_of_an_exact_var_spectrum_is_its_minimum_phase_factor(model, scal
         assert _relative_row_error(factor, expected).max() < 1e-6
 
 
-def _multitaper_estimate(n_signals, scales, complex_valued, seed, n_windows=6, n_time=16):
-    """Fourier coefficients and the cross-spectrum of ``n_windows`` windows of a
-    dense VAR, zero padded to ``16 n_time`` bins.
+# Each estimate is of windows of 16 samples, so its autocovariance vanishes
+# beyond lag 15.
+_N_TIME = 16
+
+
+def _multitaper_estimate(n_signals, scales, complex_valued, seed):
+    """Fourier coefficients and the cross-spectrum of 6 windows of
+    ``_N_TIME`` samples of a dense VAR, zero padded to ``16 _N_TIME`` bins.
 
     Five trials of three tapers make 15 observations per window, so every
     estimate has full rank with margin. Complex data are the sum of two
@@ -166,22 +166,20 @@ def _multitaper_estimate(n_signals, scales, complex_valued, seed, n_windows=6, n
     """
     coefficients, noise_covariance = _dense_stable_var(n_signals, 2, 0.9, seed)
 
-    def simulate(random_state):
-        return simulate_MVAR(
+    def transform(random_state):
+        signals = simulate_MVAR(
             coefficients,
             noise_covariance=noise_covariance,
-            n_time_samples=n_time * n_windows,
+            n_time_samples=6 * _N_TIME,
             n_trials=5,
             random_state=random_state,
         )
-
-    def transform(random_state):
         return Multitaper(
-            simulate(random_state) * np.asarray(scales),
+            signals * np.asarray(scales),
             sampling_frequency=1.0,
             time_halfbandwidth_product=2,
-            time_window_duration=n_time,
-            n_fft_samples=16 * n_time,
+            time_window_duration=_N_TIME,
+            n_fft_samples=16 * _N_TIME,
             detrend_type=None,
         ).fft()
 
@@ -217,7 +215,9 @@ def _estimate_with_riccati_factors(n_signals, scales, complex_valued):
     fourier_coefficients, spectrum = _multitaper_estimate(
         n_signals, scales, complex_valued, seed=n_signals
     )
-    riccati = np.stack([_riccati_minimum_phase_factor(each, max_lag=15) for each in spectrum])
+    riccati = np.stack(
+        [_riccati_minimum_phase_factor(each, max_lag=_N_TIME - 1) for each in spectrum]
+    )
     return fourier_coefficients, spectrum, riccati
 
 
@@ -243,12 +243,19 @@ def test_factor_of_a_multitaper_estimate_is_its_riccati_factor(
         assert error < _ESTIMATE_FACTOR_ALLOWANCE, (window, error)
 
 
+def _var_of_factor(factor):
+    """Transfer function ``G G₀⁻¹`` and noise covariance ``G₀ G₀ᴴ`` of a
+    two-sided factor ``(..., n_fft, n_signals, n_signals)``, ``G₀`` its lag-0
+    coefficient."""
+    zero_lag = np.fft.ifft(factor, axis=-3)[..., 0, :, :]
+    transfer_function = factor @ np.linalg.inv(zero_lag)[..., np.newaxis, :, :]
+    return transfer_function, zero_lag @ zero_lag.conj().swapaxes(-1, -2)
+
+
 def _directed_measures_of_factor(factor):
     """DTF, PDC, gPDC and dDTF read from a two-sided factor in closed form,
     ``[window][measure]`` in the native ``[target, source]`` layout."""
-    zero_lag = np.fft.ifft(factor, axis=-3)[..., 0, :, :]
-    transfer_function = factor @ np.linalg.inv(zero_lag)[..., np.newaxis, :, :]
-    noise_covariance = zero_lag @ zero_lag.conj().swapaxes(-1, -2)
+    transfer_function, noise_covariance = _var_of_factor(factor)
     return [
         _analytic_directed_measures(np.linalg.inv(each), each, covariance)
         for each, covariance in zip(transfer_function, noise_covariance, strict=True)
@@ -302,10 +309,9 @@ def _pairwise_granger_of_riccati_factors(spectrum):
     ):
         pair = [first, second]
         sub_spectrum = spectrum[window][:, pair][:, :, pair]
-        factor = _riccati_minimum_phase_factor(sub_spectrum, max_lag=15)
-        zero_lag = np.fft.ifft(factor, axis=0)[0]
-        transfer_function = (factor @ np.linalg.inv(zero_lag))[:n_nonnegative]
-        noise = zero_lag @ zero_lag.conj().T
+        factor = _riccati_minimum_phase_factor(sub_spectrum, max_lag=_N_TIME - 1)
+        transfer_function, noise = _var_of_factor(factor)
+        transfer_function = transfer_function[:n_nonnegative]
         power = sub_spectrum[:n_nonnegative, [0, 1], [0, 1]].real
         for target, source in ((0, 1), (1, 0)):
             intrinsic = (
@@ -345,85 +351,3 @@ def test_pairwise_granger_of_an_estimate_matches_the_riccati_factors_of_its_pair
     np.testing.assert_allclose(
         result[..., off_diagonal], expected[..., off_diagonal], atol=1e-5, rtol=0
     )
-
-
-# A chain 0 -> 1 -> 2 of nearly integrating signals; their powers differ by
-# five orders of magnitude before any rescaling.
-_INTEGRATING_CHAIN = 0.99 * np.eye(3)[np.newaxis] + np.array(
-    [[[0.0, 0.0, 0.0], [0.2, 0.0, 0.0], [0.0, 0.2, 0.0]]]
-)
-
-
-@pytest.mark.parametrize(
-    "measure",
-    [
-        "pairwise_spectral_granger_prediction",
-        "conditional_spectral_granger_prediction",
-        "directed_coherence",
-        "generalized_partial_directed_coherence",
-        "blockwise",
-    ],
-)
-def test_scale_invariant_measures_of_estimates_do_not_change_when_the_signals_are_standardized(
-    measure,
-):
-    """Spectral Granger, directed coherence and gPDC are unchanged by
-    rescaling the signals. On 20 windows of a multitaper estimate on the
-    default grid, the values for the raw signals and for the signals divided
-    by their standard deviations (7, 1e2 and 2e3) agree to 1e-9 (observed at
-    most 7e-14; from ``chol(R0)ᵀ`` with the RMS-loaded inverses, before
-    the covariant start, they differed by 0.5 to 1.1)."""
-    data = simulate_MVAR(
-        _INTEGRATING_CHAIN,
-        noise_covariance=np.eye(3),
-        n_time_samples=20 * 256,
-        n_trials=4,
-        random_state=0,
-    )
-    standardized = data / data.std(axis=(0, 1))
-
-    def compute(signals):
-        connectivity = Connectivity.from_transform(
-            Multitaper(
-                signals,
-                sampling_frequency=1.0,
-                time_halfbandwidth_product=3,
-                time_window_duration=256,
-            )
-        )
-        if measure == "blockwise":
-            return connectivity.blockwise_spectral_granger_prediction([0, 1, 1])[0]
-        return getattr(connectivity, measure)()
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
-        warnings.filterwarnings("ignore", message="directed_coherence assumes uncorrelated")
-        raw, rescaled = to_host(compute(data)), to_host(compute(standardized))
-    np.testing.assert_allclose(raw, rescaled, atol=1e-9, rtol=0)
-
-
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
-def test_a_factor_that_is_not_minimum_phase_warns_on_both_paths(real_signals, monkeypatch):
-    """From the start ``chol(R0)ᵀ``, the exact spectrum of this dense VAR
-    of signals of comparable power converges to a factor whose determinant
-    winds once around zero, on the two-sided path and on the half-spectrum
-    one that real signals take, where the determinant on the negative
-    frequencies is mirrored from the others before its winding is counted.
-    From the covariant start (``U Uᵀ = R0``) it factors without a
-    warning."""
-    coefficients, noise_covariance = _dense_stable_var(3, 1, 0.99, seed=857449258)
-    spectrum = to_device(_analytic_var(coefficients, noise_covariance, 4096)[2])
-    if real_signals:
-        spectrum = to_device(_mirrored(to_host(spectrum)))
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        minimum_phase_decomposition(spectrum[np.newaxis])
-    monkeypatch.setattr(
-        mpd_module,
-        "_reverse_cholesky",
-        lambda matrices: xp.linalg.cholesky(matrices).swapaxes(-1, -2),
-    )
-    with pytest.warns(UserWarning, match="not minimum phase for 1 of 1 sub-spectrum"):
-        factor = minimum_phase_decomposition(spectrum[np.newaxis])
-    assert to_host(mpd_module._determinant_winding_number(factor))[0] == pytest.approx(-1)

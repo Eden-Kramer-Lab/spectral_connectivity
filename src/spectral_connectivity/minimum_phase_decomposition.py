@@ -17,7 +17,7 @@ from spectral_connectivity._array_utils import (
     _conjugate_transpose,
     _divide_where,
 )
-from spectral_connectivity._backend import fft, ifft, irfft, rfft, xp
+from spectral_connectivity._backend import fft, fftfreq, ifft, irfft, rfft, xp
 from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
 logger = getLogger(__name__)
@@ -479,44 +479,16 @@ def _grid_winding_number(phase: NDArray[np.complexfloating]) -> NDArray[np.float
     return winding
 
 
-def _interpolated_factor(
-    factor: NDArray[np.complexfloating], refinement: int
-) -> NDArray[np.complexfloating]:
-    """Trigonometric interpolation of a factor onto a grid ``refinement`` times finer.
-
-    The factor's lag coefficients, zero-padded between the positive and the
-    negative lags (the lag ``n / 2`` of an even grid split between them),
-    transformed back; the result equals ``factor`` on every ``refinement``-th
-    bin.
-
-    Parameters
-    ----------
-    factor : NDArray[complexfloating], shape (n_fft_samples, n_signals, n_signals)
-        Factor on every bin of a grid, in standard FFT order.
-    refinement : int
-
-    Returns
-    -------
-    NDArray[complexfloating], shape (refinement * n_fft_samples, n_signals, n_signals)
-    """
-    n_fft_samples = factor.shape[-3]
-    n_fine = refinement * n_fft_samples
-    coefficients = ifft(factor, axis=-3)
-    padded = xp.zeros((n_fine, *factor.shape[-2:]), dtype=coefficients.dtype)
-    n_positive = (n_fft_samples + 1) // 2  # lags 0 to (n - 1) // 2
-    n_negative = (n_fft_samples - 1) // 2
-    padded[:n_positive] = coefficients[:n_positive]
-    padded[n_fine - n_negative :] = coefficients[n_fft_samples - n_negative :]
-    if n_fft_samples % 2 == 0:
-        half_nyquist = coefficients[n_fft_samples // 2] / 2
-        padded[n_fft_samples // 2] = half_nyquist
-        padded[n_fine - n_fft_samples // 2] = half_nyquist
-    interpolated: NDArray[np.complexfloating] = fft(padded, axis=-3)
-    return interpolated
-
-
 def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
     """Winding number of ``det G`` on which two successive finer grids agree.
+
+    The grids of ``WINDING_REFINEMENTS`` interpolate the factor
+    trigonometrically: its lag coefficients ``c`` (the lag ``n / 2`` of an
+    even grid split between the positive and the negative side) give it a
+    fraction ``j / R`` of a bin off the grid as ``fft(c * exp(-2πi lag j /
+    (R n)))``. Each grid interleaves the shifts ``j`` it needs, and only their
+    determinant phases are kept, so no array larger than the factor is held
+    and each shift is transformed once for all the grids.
 
     Parameters
     ----------
@@ -529,11 +501,26 @@ def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
         The count of the first two successive grids of
         ``WINDING_REFINEMENTS`` that count the same, or NaN if none do.
     """
+    n_fft_samples = factor.shape[-3]
+    finest = WINDING_REFINEMENTS[-1]
+    coefficients = ifft(factor, axis=-3)
+    lags = fftfreq(n_fft_samples, 1 / n_fft_samples)
+    phases = {0: _determinant_phase(factor)}
     previous = np.nan
     for refinement in WINDING_REFINEMENTS:
-        count = float(
-            _grid_winding_number(_determinant_phase(_interpolated_factor(factor, refinement)))
-        )
+        shifts = range(0, finest, finest // refinement)
+        for shift in shifts:
+            if shift not in phases:
+                ramp = xp.exp(-2j * np.pi * lags * shift / (finest * n_fft_samples)).astype(
+                    coefficients.dtype, copy=False
+                )
+                if n_fft_samples % 2 == 0:
+                    ramp[n_fft_samples // 2] = np.cos(np.pi * shift / finest)
+                phases[shift] = _determinant_phase(
+                    fft(coefficients * ramp[:, xp.newaxis, xp.newaxis], axis=-3)
+                )
+        fine_phase = xp.stack([phases[shift] for shift in shifts], axis=-1).reshape(-1)
+        count = float(_grid_winding_number(fine_phase))
         if abs(count - previous) < 0.5:  # False while either is NaN
             return count
         previous = count
@@ -553,11 +540,9 @@ def _determinant_winding_number(
     positive constant and leaves it unchanged. The count is reliable only if
     the phase changes by much less than ``π`` between neighbouring bins, so a
     factor whose largest increment reaches ``WINDING_MAX_PHASE_INCREMENT`` is
-    reported as NaN (not tested). Steps of more than ``π`` alias to small
-    ones that pass that guard, so a nonzero count is recounted on grids 2,
-    4, 8 and 16 times finer (see ``WINDING_REFINEMENTS``), interpolating the
-    factor's lag coefficients, and stands only if two successive finer grids
-    agree on it: the count they agree on is returned, or NaN if none do.
+    reported as NaN (not tested). A nonzero count is recounted by
+    :func:`_refined_winding_number` on the grids of ``WINDING_REFINEMENTS``,
+    which returns the count two successive grids agree on, or NaN.
 
     As a test of minimum phase it is best effort: a factor that is not
     minimum phase but whose determinant does not wind countably (a causal
@@ -591,7 +576,7 @@ def _determinant_winding_number(
     counted = xp.abs(winding) > 0.5
     if bool(xp.any(counted)):
         # Rare (a factor flagged on its own grid), so one sub-spectrum at a
-        # time: the finest grid holds 16 times the factor's bins.
+        # time.
         flat_factor = factor.reshape(-1, *factor.shape[-3:])
         flat_winding = winding.reshape(-1)
         for index in to_numpy(xp.flatnonzero(counted)).tolist():
@@ -932,8 +917,8 @@ def minimum_phase_decomposition(
     coarse for the spectrum the iteration can converge to a wrong factor
     whose determinant does not wind: four coincident resonators at radius
     0.995 factor 0.8 off with no warning on 4096 bins, and correctly on
-    16384. The count costs 0.1-0.3 of an iteration; recounting a flagged
-    sub-spectrum costs 1-30 of its iterations.
+    16384. The count costs 0.1-0.5 of an iteration; recounting a flagged
+    sub-spectrum costs 2-14 of its iterations.
 
     Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
     computed once, which lets sub-spectra with near-collinear channels converge.
@@ -1099,10 +1084,8 @@ def _minimum_phase_factor_and_flags(
     # the zero-lag matrix singular: its window would start from the Cholesky
     # fallback, or from NaN on CuPy, whose Cholesky does not raise. Factor it
     # as an independent white signal of unit power instead; the factor is
-    # then that of the other signals with a 1 for it, and its scale (eps
-    # times the weakest signal's) makes that 1 a rounding-level power. A zero
-    # row and column would reproduce S exactly but leave the lag-0
-    # coefficient and noise covariance singular for the directed measures.
+    # then that of the other signals with a 1 for it, and its scale makes
+    # that 1 a rounding-level power (see Notes of minimum_phase_decomposition).
     working_cross_spectral_matrix = (
         working_cross_spectral_matrix
         + no_power[..., xp.newaxis, xp.newaxis, :] * identity_matrix
