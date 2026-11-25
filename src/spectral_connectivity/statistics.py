@@ -104,9 +104,12 @@ class SurrogateTestResult:
     pairwise connectivity measure. An element is tested unless it is on the
     diagonal (a signal with itself), its estimate is not finite, or its
     frequency is within ``half_bandwidth`` of 0 Hz or Nyquist (for
-    ``kind="phase_rotation"``) or is 0 Hz or Nyquist (for
-    ``kind="conjugation"``); both p-values are NaN where it is not, and it is
-    in no family's maximum.
+    ``kind="phase_rotation"``) or its coefficients are real, which
+    conjugation leaves unchanged (for ``kind="conjugation"``: the
+    frequencies of :attr:`Connectivity.real_valued_frequencies
+    <spectral_connectivity.Connectivity.real_valued_frequencies>`, and 0 Hz
+    and Nyquist of a real signal); both p-values are NaN where it is not, and
+    it is in no family's maximum.
 
     Attributes
     ----------

@@ -390,6 +390,39 @@ def test_conjugation_leaves_0_hz_and_nyquist_untested(n_fft, is_one_sided):
     assert np.isfinite(psi.p_value[0, 0, 1])
 
 
+def _dft(time_series):
+    """Coefficients of (n_fft, trial, signal) series by a DFT matrix, laid out
+    as (time window, trial, taper, frequency, signal). Unlike an FFT of a real
+    series, this leaves rounding in the imaginary part at Nyquist."""
+    n_fft = time_series.shape[0]
+    index = np.arange(n_fft)
+    dft = np.exp(-2j * np.pi * np.outer(index, index) / n_fft)
+    return np.einsum("ft,tks->kfs", dft, time_series)[None, :, None]
+
+
+@pytest.mark.parametrize("complex_signal", [False, True])
+def test_conjugation_tests_0_hz_and_nyquist_of_a_complex_signal(complex_signal):
+    """0 Hz and Nyquist of a real signal are real, to rounding when its
+    coefficients were computed elsewhere, and are not tested; those of a
+    complex signal are not real, conjugation changes them, and they are
+    tested like every other frequency."""
+    rng = np.random.default_rng(31)
+    time_series = rng.standard_normal((16, 12, 2))
+    if complex_signal:
+        time_series = time_series + 1j * rng.standard_normal((16, 12, 2))
+    connectivity = Connectivity(_dft(time_series))
+    # Exactly real only at 0 Hz of the real signal: Nyquist carries rounding.
+    expected_real = np.zeros(9, dtype=bool)
+    expected_real[0] = not complex_signal
+    np.testing.assert_array_equal(connectivity.real_valued_frequencies, expected_real)
+    result = connectivity.surrogate_test(
+        "magnitude_squared_coherence", kind="conjugation", n_surrogates=9, random_state=0
+    )
+    edges = np.isnan(result.p_value[0, [0, -1], 0, 1])
+    assert edges.all() if not complex_signal else not edges.any()
+    assert np.isfinite(result.p_value[0, 1:-1, 0, 1]).all()
+
+
 def test_phase_slope_index_band_must_avoid_the_edges(lagged_connectivity):
     """A band clear of the edges is tested whole; one reaching into them is refused."""
     result = lagged_connectivity.surrogate_test(

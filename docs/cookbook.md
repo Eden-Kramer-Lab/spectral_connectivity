@@ -377,8 +377,8 @@ sets the null, so choose it for the question:
   it, use `"trial_shuffle"`. Subtracting each signal's mean across trials
   first leaves p-values too small unless there are many trials (5.5-7.0% of
   tests rejected at nominal 5% with 10 trials, about 5% with 40).
-- `"conjugation"` conjugates (time-reverses) random trials. 0 Hz and Nyquist,
-  which it leaves unchanged, are not tested. Instantaneous mixing of
+- `"conjugation"` conjugates (time-reverses) random trials. 0 Hz and Nyquist
+  of a real signal, which it leaves unchanged, are not tested. Instantaneous mixing of
   independent sources is in its null, so pair it with
   a measure of lagged interaction: `imaginary_coherence`, the phase-lag
   indices, `phase_slope_index`, or pairwise spectral Granger. With

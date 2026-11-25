@@ -3005,10 +3005,13 @@ class Connectivity:
               frequency, as for instantaneous (zero-lag) mixing such as volume
               conduction of independent sources; exact when the signals are
               stationary and Gaussian, whose distribution such mixing leaves
-              unchanged by time reversal. Needs at least 2 units. The
-              coefficients at 0 Hz and Nyquist are real, so conjugation leaves
-              them unchanged and those two frequencies are not tested, nor
-              any other of :attr:`real_valued_frequencies`. Pair it
+              unchanged by time reversal. Needs at least 2 units. Conjugation
+              leaves real coefficients unchanged, so the frequencies of
+              :attr:`real_valued_frequencies` are not tested, nor are 0 Hz and
+              Nyquist where their coefficients are real to rounding, as they
+              are for a real signal. For the coefficients of a complex signal,
+              passed directly, 0 Hz and Nyquist are tested like any other
+              frequency. Pair it
               with a measure of lagged interaction: ``imaginary_coherence``,
               the phase-lag indices, ``phase_slope_index``, or pairwise
               spectral Granger (for Granger causality beyond what mixing
@@ -3068,8 +3071,9 @@ class Connectivity:
             n_signals)``), and the surrogate maxima of each family. The
             diagonal, non-finite estimates, the frequencies within
             ``half_bandwidth`` of 0 Hz and Nyquist (for ``"phase_rotation"``)
-            and 0 Hz, Nyquist and :attr:`real_valued_frequencies` (for
-            ``"conjugation"``) are not tested: their p-values are NaN, and
+            and the frequencies whose coefficients are real (for
+            ``"conjugation"``: :attr:`real_valued_frequencies`, and 0 Hz and
+            Nyquist of a real signal) are not tested: their p-values are NaN, and
             they are in no family's maximum. For directed measures
             ``[..., i, j]`` is ``i -> j``.
 
@@ -3738,11 +3742,12 @@ class Connectivity:
         are not circular), so the frequencies there are not tested, and a
         measure that sums over a band (``phase_slope_index``) is tested only
         if its band avoids them. ``"conjugation"`` leaves unchanged, and so
-        does not test, 0 Hz, Nyquist of an even two-sided FFT, and every
-        frequency of :attr:`real_valued_frequencies` (each coefficient's
-        imaginary part exactly 0, as at Nyquist of one-sided input of an even
-        FFT length); a band-summed measure, or one whose frequency axis cannot
-        be located, is tested whole. ``"trial_shuffle"`` tests every
+        does not test, every frequency of :attr:`real_valued_frequencies`
+        (each coefficient's imaginary part exactly 0, as at Nyquist of
+        one-sided input of an even FFT length), and 0 Hz and Nyquist of an
+        even two-sided FFT where their coefficients are real to rounding (as
+        for a real signal); a band-summed measure, or one whose frequency axis
+        cannot be located, is tested whole. ``"trial_shuffle"`` tests every
         frequency.
 
         Raises
@@ -3779,10 +3784,17 @@ class Connectivity:
             if not per_frequency:
                 return everywhere
             # Exactly real coefficients also mark Nyquist of one-sided input,
-            # which does not record whether its FFT length was even.
-            untouched = (grid == 0) | self._real_valued_frequency_mask
+            # which does not record whether its FFT length was even. 0 Hz and
+            # Nyquist of an even two-sided FFT are real for a real signal but
+            # may carry rounding from an FFT computed elsewhere, so they are
+            # left out when real to rounding; for a complex signal they are
+            # not real, and conjugation changes them like any other bin.
+            untouched = self._real_valued_frequency_mask.copy()
+            edges = grid == 0
             if not self._is_one_sided and n_fft_samples % 2 == 0:
-                untouched[-1] = True
+                edges[-1] = True
+            if edges.any():
+                untouched[edges] |= self._real_to_rounding(np.flatnonzero(edges))
             conjugated: NDArray[np.bool_] = ~untouched.reshape(-1, *trailing)
             return conjugated
         assert half_bandwidth is not None
@@ -3832,6 +3844,34 @@ class Connectivity:
             raise ValueError(msg)
         valid_by_frequency: NDArray[np.bool_] = valid.reshape(-1, *trailing)
         return valid_by_frequency
+
+    def _real_to_rounding(self, bins: NDArray[np.intp]) -> NDArray[np.bool_]:
+        """Whether every finite coefficient at each of ``bins`` is real to rounding.
+
+        Rounding is the square root of the coefficients' machine epsilon
+        times their largest finite magnitude anywhere, so a bin whose own
+        coefficients are small (0 Hz after detrending) is judged on the
+        scale of the FFT that computed it.
+
+        Parameters
+        ----------
+        bins : NDArray[intp], shape (n_bins,)
+            Indices into the frequency axis of the coefficients.
+
+        Returns
+        -------
+        NDArray[bool], shape (n_bins,)
+            Host array.
+        """
+        coefficients = self._fourier_coefficients
+        magnitude = xp.abs(coefficients)
+        scale = xp.max(xp.where(xp.isfinite(magnitude), magnitude, 0.0))
+        tolerance = np.sqrt(np.finfo(coefficients.real.dtype).eps) * scale
+        imaginary = xp.abs(coefficients[..., xp.asarray(bins), :].imag)
+        real: NDArray[np.bool_] = to_numpy(
+            xp.all((imaginary <= tolerance) | xp.isnan(imaginary), axis=(0, 1, 2, 4))
+        )
+        return real
 
     @_asnumpy
     def power(self, *, one_sided: bool | None = None) -> NDArray[np.floating]:
