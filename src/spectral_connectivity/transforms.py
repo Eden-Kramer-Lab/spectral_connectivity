@@ -1772,13 +1772,8 @@ Frequency Analysis
         """``(n_time_samples, n_trials)``, ``True`` at the samples no kept trial
         window covers: the artifacts, the rest of each dropped trial window
         that no kept window overlaps, and any sample past the last window."""
-        assert self._artifact_samples is not None
-        n_time, n_trials = self._artifact_samples.shape
-        kept = (
-            xp.ones((len(self.time), n_trials), dtype=xp.int64)
-            if self._valid_windows is None
-            else self._valid_windows.astype(xp.int64)
-        )
+        n_time, n_trials = self._time_series.shape[:2]
+        kept = self.valid_windows.astype(xp.int64)
         # Each kept window adds 1 from its first sample and removes it after
         # its last; the running sum counts the kept windows over each sample.
         # The starts are distinct, as are the ends, so each += sees each index once.
