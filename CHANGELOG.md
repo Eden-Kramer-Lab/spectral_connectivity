@@ -1226,13 +1226,20 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   DTF, PDC, and dDTF covariant.
 - The factorization warns, as a best-effort check, when a converged factor's
   determinant winds around zero (so the factor is not minimum phase); the
-  spectral Granger measures warn once per call, naming the signal pairs. In
-  the sweep of 400 random dense VARs it caught all 9 failures of the old
-  start, and it flagged nothing in the test suite or in 720 windows of
-  zero-padded multitaper estimates. It cannot judge a determinant whose
-  phase turns by more than `π/2` between bins (a zero near the unit circle
-  on a coarse grid), and a factor that fails to be minimum phase without its
-  determinant winding countably is not caught.
+  spectral Granger measures warn once per call, naming the signal pairs. The
+  winding is counted from the determinant's unit phase where it turns by less
+  than `π/2` between bins, and a nonzero count is recounted on grids 2 to 16
+  times finer, so that steps a coarse grid aliases do not warn. It catches
+  most wrong factors but not all: in sweeps of 800 random dense VARs factored
+  from the old start it caught 41 of the 44 that converged to a wrong factor
+  (the three it missed were off by 2e-4 to 3e-2), and it flagged none of the
+  800 factors from the new start, nothing in the test suite, and none of
+  1440 windows of zero-padded multitaper estimates. It cannot judge a
+  determinant whose phase turns by more than `π/2` between bins, and a
+  factor that fails to be minimum phase without its determinant winding
+  countably is not caught; that includes a grid too coarse for the
+  spectrum, where four coincident resonators at radius 0.995 factor 0.8 off
+  with no warning on 4096 bins (and correctly on 16384).
 - The Wilson iteration builds each update from a square root of the
   cross-spectrum, so it is Hermitian positive semidefinite by construction.
   Sub-spectra with near-duplicate channels (condition numbers from about 1e10)
