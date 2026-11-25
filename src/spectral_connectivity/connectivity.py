@@ -3340,9 +3340,10 @@ class Connectivity:
         decreases as ``1/n``, so with many observations the result approaches
         the unshrunk one. Partial coherence is then read from the shrunk
         matrix, as Schäfer & Strimmer read partial correlations (their
-        Sections 2.4 and 3). ``"auto"`` took about twice as long as no
-        shrinkage and 1.3-1.8 times its peak memory (16 to 64 signals, 100 to
-        1400 observations, 251 to 1001 frequencies, one or 100 time windows);
+        Sections 2.4 and 3). ``"auto"`` took 1.4-2.4 times as long as no
+        shrinkage and allocated 1.3-1.6 times its peak memory, the input
+        aside (16 to 64 signals, 100 to 1400 observations, 251 to 1001
+        frequencies, one or 100 time windows, on the CPU);
         :meth:`partial_coherence_shrinkage` then reuses the intensity.
 
         The intensity is a first-order estimate. At 5 observations it
