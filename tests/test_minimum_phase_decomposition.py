@@ -1197,9 +1197,8 @@ def test_the_recount_keeps_the_winding_of_a_causal_factor_with_a_slow_tail():
     zero ``z₀`` outside the unit circle (``|z₀| = 1.12``): a causal factor
     that is not minimum phase, winding once round zero clockwise. Its pole
     at radius 0.91 leaves a tail of a tenth of its largest lag coefficient at
-    lag 16. The recount reads
-    the lags as causal, 0 to ``n - 1``, as the Wilson iteration builds them,
-    and keeps the count of -1.
+    lag 16. The recount reads the lags as causal, 0 to ``n - 1``, as the
+    Wilson iteration builds them, and keeps the count of -1.
 
     Regression: the recount interpolated on lags -16 to 15, read that tail
     as negative lags and counted 0, so the factor was not flagged."""
