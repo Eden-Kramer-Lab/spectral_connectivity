@@ -17,7 +17,7 @@ from spectral_connectivity._array_utils import (
     _conjugate_transpose,
     _divide_where,
 )
-from spectral_connectivity._backend import fft, fftfreq, ifft, irfft, rfft, xp
+from spectral_connectivity._backend import fft, ifft, irfft, rfft, xp
 from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
 logger = getLogger(__name__)
@@ -124,11 +124,12 @@ def _signal_scale(
     The square root of the signal's power averaged over the frequency axis
     (-3), its zero-lag autocovariance on the grid. A signal with non-finite
     power gets a scale of 1 (its sub-spectrum is not finite). A signal with no
-    power gets ``eps`` times the smallest scale of the signals with power (or
-    ``eps`` if none has power), so the factor's row for it, that of an
-    independent white signal of unit power once unscaled (see
-    :func:`_minimum_phase_factor_and_flags`), reconstructs a power ``eps²``
-    times that of the weakest signal.
+    power in a sub-spectrum where some signal has power is factored as white:
+    it gets ``eps`` times the smallest scale of the signals with power, so the
+    factor's row for it, that of an independent white signal of unit power
+    once unscaled (see :func:`_minimum_phase_factor_and_flags`), reconstructs
+    a power ``eps²`` times that of the weakest signal. A sub-spectrum where no
+    signal has power is not factored (it is singular, and returned as NaN).
 
     Parameters
     ----------
@@ -140,8 +141,9 @@ def _signal_scale(
     -------
     scale : NDArray[floating], shape (..., n_signals)
         Positive scale of each signal, in float64 or wider.
-    no_power : NDArray[bool], shape (..., n_signals)
-        Signals whose power is zero at every frequency.
+    white : NDArray[bool], shape (..., n_signals)
+        Signals whose power is zero at every frequency, in sub-spectra where
+        some signal has power.
     """
     # Accumulate in the wider dtype: a float32 mean of powers near 1e37
     # overflows to Inf.
@@ -152,10 +154,9 @@ def _signal_scale(
     )
     has_power = xp.isfinite(power) & (power > 0)
     scale = xp.sqrt(xp.where(has_power, power, 1))
-    no_power = power == 0
+    white = (power == 0) & xp.any(has_power, axis=-1, keepdims=True)
     weakest = xp.min(xp.where(has_power, scale, xp.inf), axis=-1, keepdims=True)
-    weakest = xp.where(xp.isfinite(weakest), weakest, 1)
-    return xp.where(no_power, xp.finfo(scale.dtype).eps * weakest, scale), no_power
+    return xp.where(white, xp.finfo(scale.dtype).eps * weakest, scale), white
 
 
 def _reverse_cholesky(matrices: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -482,13 +483,16 @@ def _grid_winding_number(phase: NDArray[np.complexfloating]) -> NDArray[np.float
 def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
     """Winding number of ``det G`` on which two successive finer grids agree.
 
-    The grids of ``WINDING_REFINEMENTS`` interpolate the factor
-    trigonometrically: its lag coefficients ``c`` (the lag ``n / 2`` of an
-    even grid split between the positive and the negative side) give it a
+    The grids of ``WINDING_REFINEMENTS`` interpolate the factor as a causal
+    filter: its lag coefficients ``c`` on lags ``0`` to ``n - 1`` give it a
     fraction ``j / R`` of a bin off the grid as ``fft(c * exp(-2πi lag j /
-    (R n)))``. Each grid interleaves the shifts ``j`` it needs, and only their
-    determinant phases are kept, so no array larger than the factor is held
-    and each shift is transformed once for all the grids.
+    (R n)))``. A Wilson factor is a product of updates, each causal on lags
+    ``0`` to ``n / 2``, so its lags are those of a causal filter wrapped
+    round the grid; an interpolant on lags ``-n / 2`` to ``n / 2`` would read
+    the wrapped tail as negative lags and can lose a real winding. Each grid
+    interleaves the shifts ``j`` it needs, and only their determinant phases
+    are kept, so no array larger than the factor is held and each shift is
+    transformed once for all the grids.
 
     Parameters
     ----------
@@ -504,7 +508,7 @@ def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
     n_fft_samples = factor.shape[-3]
     finest = WINDING_REFINEMENTS[-1]
     coefficients = ifft(factor, axis=-3)
-    lags = fftfreq(n_fft_samples, 1 / n_fft_samples)
+    lags = xp.arange(n_fft_samples)
     phases = {0: _determinant_phase(factor)}
     previous = np.nan
     for refinement in WINDING_REFINEMENTS:
@@ -514,8 +518,6 @@ def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
                 ramp = xp.exp(-2j * np.pi * lags * shift / (finest * n_fft_samples)).astype(
                     coefficients.dtype, copy=False
                 )
-                if n_fft_samples % 2 == 0:
-                    ramp[n_fft_samples // 2] = np.cos(np.pi * shift / finest)
                 phases[shift] = _determinant_phase(
                     fft(coefficients * ramp[:, xp.newaxis, xp.newaxis], axis=-3)
                 )
@@ -549,7 +551,8 @@ def _determinant_winding_number(
     factor with zeros outside the unit circle that the count misses, or an
     anticausal one) passes it, and so does one whose determinant turns by
     ``WINDING_MAX_PHASE_INCREMENT`` or more between bins, as near a zero close
-    to the unit circle on a coarse grid.
+    to the unit circle on a coarse grid, or one whose winding the grid
+    aliases to 0, which is not recounted.
 
     Parameters
     ----------
@@ -904,16 +907,22 @@ def minimum_phase_decomposition(
     window needs no fallback start, and its row of the factor is ``eps``
     times the weakest other signal's scale: it reconstructs a power
     ``eps²`` times that signal's, where an exactly zero row would leave the
-    factor singular for the directed measures.
+    factor singular for the directed measures. A window where no signal has
+    power has nothing to factor; it is returned as NaN with the
+    non-convergence warning.
 
     A converged factor whose ``det G(e^{iω})`` winds around zero is not
     minimum phase and gives a ``UserWarning``; its factor is returned as
     computed. The winding is counted where the phase turns by less than
     ``π / 2`` between bins, and since steps of more than ``π`` alias to
     small ones, a nonzero count is recounted on grids 2 to 16 times finer,
-    interpolating the factor's lag coefficients, and stands only if two of
-    them agree. The check is best effort. It cannot judge a determinant
-    whose phase turns by ``π / 2`` or more between bins, and on a grid too
+    interpolating the factor as a causal filter on lags ``0`` to
+    ``n_fft_samples - 1`` (the iteration's factor is a product of causal
+    updates, wrapped round the grid), and stands only if two of them agree.
+    The check is best effort. It cannot judge a determinant whose phase
+    turns by ``π / 2`` or more between bins. A count of 0 is not recounted,
+    so a real winding that the grid aliases to 0 is missed: a factor of 8
+    signals that winds -4 times counted 0 on 8 bins. And on a grid too
     coarse for the spectrum the iteration can converge to a wrong factor
     whose determinant does not wind: four coincident resonators at radius
     0.995 factor 0.8 off with no warning on 4096 bins, and correctly on
@@ -1067,7 +1076,7 @@ def _minimum_phase_factor_and_flags(
     # D^-1 G for its factor G. The covariant start makes that the factor of S
     # up to rounding; the scaling preconditions the iteration for signals
     # whose powers differ by orders of magnitude (see Notes).
-    signal_scale, no_power = _signal_scale(cross_spectral_matrix)
+    signal_scale, white = _signal_scale(cross_spectral_matrix)
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # NumPy divides a complex Inf by the real scale as by a complex number,
     # which gives NaN and warns; such a sub-spectrum is non-finite either way
@@ -1086,9 +1095,10 @@ def _minimum_phase_factor_and_flags(
     # as an independent white signal of unit power instead; the factor is
     # then that of the other signals with a 1 for it, and its scale makes
     # that 1 a rounding-level power (see Notes of minimum_phase_decomposition).
+    # A window where no signal has power has nothing to factor: it stays
+    # singular and is returned as NaN.
     working_cross_spectral_matrix = (
-        working_cross_spectral_matrix
-        + no_power[..., xp.newaxis, xp.newaxis, :] * identity_matrix
+        working_cross_spectral_matrix + white[..., xp.newaxis, xp.newaxis, :] * identity_matrix
     )
     # S is fixed across iterations, so factor it once as S = L Lᴴ.
     cross_spectral_square_root = _hermitian_square_root(working_cross_spectral_matrix)
