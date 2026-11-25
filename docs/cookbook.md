@@ -436,19 +436,25 @@ AR(2) with poles of radius 0.77) and by up to 37% for one spanning 2400
 span taken over the window's 64 FFT frequencies. Other gap positions gave
 1-13% (a single 4- to 12-sample gap at 165 positions, under 6% for 68% of
 them) and 7-70% (two 3-sample gaps at 325, median 34%), and the difference
-grows toward Nyquist. Several short gaps can leak far more than one long one:
-for 500-sample windows (NW = 4) of an AR(1) with coefficient 0.99 (spanning
-about 40000), two 5-sample gaps changed the expected spectrum by up to 55%
-and one 20-sample gap by 2.4%, a bandwidth or more above 0 Hz. In exchange
-the valid samples are used: with three of four trials gapped in every window, the variance of white-noise power is a third of
-that of `"drop"`. Building the transform finds the tapers of each distinct
-pattern of artifacts in a trial window, about 2 ms per pattern for 1000
-samples and 65 ms for 60000. With multithreaded OpenBLAS on many cores, as in
-the NumPy 1.24 and SciPy 1.11-era wheels, that eigensolver (ARPACK) can be
-190-840 times slower per pattern (600 ms against 3.2 ms for 1000 samples at
-NW = 4, on 18 threads). If building the transform is slow, set
-`OPENBLAS_NUM_THREADS=1` before starting Python, or build it within
-`threadpoolctl.threadpool_limits(1)`. Windows without artifacts are unchanged.
+grows toward Nyquist. Several short gaps can leak far more than one long one,
+depending on how far apart they are. For 500-sample windows (NW = 4) of an
+AR(1) with coefficient 0.99 (spanning about 40000), a bandwidth or more above
+0 Hz, one 20-sample gap at the window's center (samples 240-259) changed the
+expected spectrum by 2.4% (1.5-10.3% over its positions, above 5% only within
+25 samples of either end), and two 5-sample gaps at samples 200 and 300 by 52%.
+Over a grid of positions two 5-sample gaps changed it by 6-70% (median 41%)
+when 30 or more samples apart, but by 3-36% (median 8%) when closer, as they
+then act much like one gap (4.9% at samples 240 and 255). In exchange the
+valid samples are used: with three of four trials gapped in every window, the
+variance of white-noise power is a third of that of `"drop"`. Building the
+transform finds the tapers of each distinct pattern of artifacts in a trial
+window, about 2 ms per pattern for 1000 samples and 65 ms for 60000. With
+multithreaded OpenBLAS on many cores, as in the NumPy 1.24 and SciPy
+1.11-era wheels, that eigensolver (ARPACK) can be 190-840 times slower per
+pattern (600 ms against 3.2 ms for 1000 samples at NW = 4, on 18 threads). If
+building the transform is slow, set `OPENBLAS_NUM_THREADS=1` before starting
+Python, or build it within `threadpoolctl.threadpool_limits(1)`. Windows
+without artifacts are unchanged.
 :::
 
 ## Group measures: canonical coherence between areas
