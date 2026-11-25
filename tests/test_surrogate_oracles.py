@@ -77,21 +77,22 @@ def _connectivities(series, n_trials, sampling_frequency, nw, **connectivity_kwa
     ]
 
 
-def _p_values(connectivities, measure, kind, seed, **kwargs):
-    """(n_replicates, n_frequencies) p-values of pair (0, 1), one call each."""
+def _results(connectivities, measure, kind, seed):
+    """One surrogate_test per replicate, each with its own seed."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        results = [
+        return [
             connectivity.surrogate_test(
-                measure,
-                kind=kind,
-                n_surrogates=_N_SURROGATES,
-                random_state=seed + index,
-                **kwargs,
+                measure, kind=kind, n_surrogates=_N_SURROGATES, random_state=seed + index
             )
             for index, connectivity in enumerate(connectivities)
         ]
-    return np.stack([result.p_value[0, :, 0, 1] for result in results]), results
+
+
+def _p_values(connectivities, measure, kind, seed):
+    """(n_replicates, n_frequencies) p-values of pair (0, 1), one call each."""
+    results = _results(connectivities, measure, kind, seed)
+    return np.stack([result.p_value[0, :, 0, 1] for result in results])
 
 
 def _per_replicate_rate(p_values, level, band=np.s_[:]):
@@ -136,20 +137,14 @@ def zero_lag_mixture():
 
 
 def _check_trial_shuffle_size(connectivities, measure="magnitude_squared_coherence"):
-    p_values, _ = _p_values(connectivities, measure, "trial_shuffle", 0)
+    p_values = _p_values(connectivities, measure, "trial_shuffle", 0)
     _assert_size(p_values, f"trial_shuffle {measure}")
     # Every frequency is tested, 0 Hz and Nyquist too.
     _assert_size(p_values, f"trial_shuffle {measure} at 0 Hz and Nyquist", np.s_[[0, -1]])
 
 
-def _check_rotation_size(connectivities, label, measure="magnitude_squared_coherence"):
-    p_values, _ = _p_values(connectivities, measure, "phase_rotation", 10_000)
-    _assert_size(p_values, label)
-    return p_values
-
-
 def _check_conjugation_size(connectivities, measure):
-    p_values, _ = _p_values(connectivities, measure, "conjugation", 20_000)
+    p_values = _p_values(connectivities, measure, "conjugation", 20_000)
     # 0 Hz and Nyquist, which conjugation leaves unchanged, are NaN.
     assert np.isnan(p_values[:, [0, -1]]).all()
     _assert_size(p_values, f"conjugation {measure}")
@@ -167,7 +162,10 @@ def test_trial_shuffle_size_at_several_levels(independent_ten_trials, measure, n
 def test_phase_rotation_size_at_several_levels(independent_ten_trials):
     """Every tested frequency, from W = 2 Hz to Nyquist - W; the untested ones
     are exactly those within W of 0 and 32 Hz."""
-    p_values = _check_rotation_size(independent_ten_trials, "phase_rotation")
+    p_values = _p_values(
+        independent_ten_trials, "magnitude_squared_coherence", "phase_rotation", 10_000
+    )
+    _assert_size(p_values, "phase_rotation")
     untested = np.isnan(p_values).all(axis=0)
     frequencies = np.arange(33)
     np.testing.assert_array_equal(untested, (frequencies < 2) | (frequencies > 30))
@@ -179,7 +177,7 @@ def test_phase_rotation_size_of_pairwise_granger(independent_ten_trials):
     past W. Measured with 300 replicates (19 surrogates) at alpha=0.05: 5.4%
     over every tested frequency, 7.1% within 1.5 W of an edge (2-3 and 29-30
     Hz)."""
-    p_values, _ = _p_values(independent_ten_trials[:100], _GRANGER, "phase_rotation", 11_000)
+    p_values = _p_values(independent_ten_trials[:100], _GRANGER, "phase_rotation", 11_000)
     _assert_size(p_values, "phase_rotation Granger", levels=(0.05, 0.25), allowance=0.01)
 
 
@@ -214,19 +212,8 @@ def four_independent_signals():
     return _connectivities(_ar1(rng, 32, 600 * 10, 4), 10, 32, 2)
 
 
-def _family_rejections(connectivities, kind, seed, fwer_axis=None):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        results = [
-            connectivity.surrogate_test(
-                "magnitude_squared_coherence",
-                kind=kind,
-                n_surrogates=_N_SURROGATES,
-                random_state=seed + index,
-                fwer_axis=fwer_axis,
-            )
-            for index, connectivity in enumerate(connectivities)
-        ]
+def _family_rejections(connectivities, kind, seed):
+    results = _results(connectivities, "magnitude_squared_coherence", kind, seed)
     smallest_fwer = np.array([np.nanmin(result.fwer_p_value) for result in results])
     smallest_raw = np.array([np.nanmin(result.p_value) for result in results])
     return smallest_fwer, smallest_raw
@@ -307,7 +294,7 @@ def test_power_rises_with_the_true_coherence(kind, measure, band, power_at_half)
             random_state=200 + index,
         )
         connectivities = _connectivities(series, n_trials, 64, 2)
-        p_values, _ = _p_values(connectivities, measure, kind, 40_000 + 1000 * index)
+        p_values = _p_values(connectivities, measure, kind, 40_000 + 1000 * index)
         rates.append(_per_replicate_rate(p_values, 0.05, band))
     null_mean, null_limit = replicate_mean_and_limit(rates[0])
     assert abs(null_mean - 0.05) <= null_limit
@@ -344,7 +331,7 @@ def test_zero_lag_and_lagged_coupling(
 ):
     """Docs: conjugation keeps zero-lag mixing in its null and rejects lagged
     coupling; rotation and the shuffle (null: independence) reject both."""
-    zero_lag, _ = _p_values(zero_lag_mixture[:100], measure, kind, 50_000)
+    zero_lag = _p_values(zero_lag_mixture[:100], measure, kind, 50_000)
     zero_lag_rate = _per_replicate_rate(zero_lag, 0.05).mean()
     if rejects_zero_lag:
         assert zero_lag_rate > 0.95
@@ -352,7 +339,7 @@ def test_zero_lag_and_lagged_coupling(
         assert zero_lag_rate < 0.1
     # Lagged: conjugation's imaginary coherence is tested where Im is large.
     band = np.s_[8:25] if kind == "conjugation" else np.s_[:]
-    lagged, _ = _p_values(lagged_coupling, measure, kind, 60_000)
+    lagged = _p_values(lagged_coupling, measure, kind, 60_000)
     assert _per_replicate_rate(lagged, 0.05, band).mean() > 0.85
 
 
@@ -375,17 +362,14 @@ def test_a_shared_evoked_response_is_in_the_shuffle_null_but_not_the_rotation_nu
     series += evoked[:, np.newaxis, np.newaxis]
     connectivities = _connectivities(series, n_trials, sampling_frequency, 2)
     evoked_band = np.s_[5:16]
-    rates = {}
-    for kind in ("trial_shuffle", "conjugation", "phase_rotation"):
-        # Rotation rejects in most tests; 30 replicates show it.
-        tested = connectivities[:30] if kind == "phase_rotation" else connectivities
-        p_values, _ = _p_values(tested, "magnitude_squared_coherence", kind, 70_000)
-        rates[kind] = _per_replicate_rate(p_values, 0.05, evoked_band)
-    shuffle_mean, limit = replicate_mean_and_limit(rates["trial_shuffle"])
-    assert abs(shuffle_mean - 0.05) <= limit, shuffle_mean
-    conjugation_mean, limit = replicate_mean_and_limit(rates["conjugation"])
-    assert abs(conjugation_mean - 0.05) <= limit, conjugation_mean
-    assert rates["phase_rotation"].mean() > 0.5
+    for kind in ("trial_shuffle", "conjugation"):
+        p_values = _p_values(connectivities, "magnitude_squared_coherence", kind, 70_000)
+        _assert_size(p_values, kind, band=evoked_band, levels=(0.05,))
+    # Rotation rejects in most tests; 30 replicates show it.
+    p_values = _p_values(
+        connectivities[:30], "magnitude_squared_coherence", "phase_rotation", 70_000
+    )
+    assert _per_replicate_rate(p_values, 0.05, evoked_band).mean() > 0.5
 
 
 # --------------------------------------------------------------------------
@@ -603,7 +587,7 @@ def narrowband_independent():
 
 
 def _check_narrowband_size(connectivities, kind):
-    p_values, _ = _p_values(connectivities, "magnitude_squared_coherence", kind, 70_000)
+    p_values = _p_values(connectivities, "magnitude_squared_coherence", kind, 70_000)
     _assert_size(p_values, kind, band=np.s_[17:24], levels=(0.05, 0.25))
 
 
@@ -654,7 +638,7 @@ def test_one_recording_is_tested_by_its_averaged_windows(steep_one_recording, ki
     )
     with pytest.raises(ValueError, match="this Connectivity has 1 "):
         single_window.surrogate_test("magnitude_squared_coherence", kind=kind)
-    p_values, _ = _p_values(steep_one_recording, "magnitude_squared_coherence", kind, 80_000)
+    p_values = _p_values(steep_one_recording, "magnitude_squared_coherence", kind, 80_000)
     _assert_size(p_values, f"{kind} 4-7 Hz", band=np.s_[4:8], levels=(0.05, 0.25))
     _assert_size(p_values, f"{kind} every tested frequency", levels=(0.05, 0.25))
 
