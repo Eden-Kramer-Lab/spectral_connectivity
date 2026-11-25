@@ -407,6 +407,39 @@ def test_imaginary_coherency_preserves_pair_orientation():
     assert np.isnan(signed[0, 0])
 
 
+def test_imaginary_coherency_is_nan_where_power_is_not_finite_and_zero_where_it_is_zero():
+    """A pair is NaN where a signal's power is NaN (a bin with no observation)
+    or infinite (overflow): coherency masks both with nan + 0j, whose imaginary
+    part is 0. A pair with a zero-power signal stays 0, as documented."""
+    rng = np.random.default_rng(3)
+    # (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    coefficients = rng.standard_normal((1, 6, 1, 4, 4)) + 1j * rng.standard_normal(
+        (1, 6, 1, 4, 4)
+    )
+    # A real coefficient whose square overflows: power inf (a complex one's
+    # cross term inf - inf would make it NaN).
+    coefficients[..., 1] = 1e160 * coefficients[..., 1].real
+    coefficients[..., 2] = 0.0  # zero power
+    coefficients[0, 2, 0, :, 3] = np.nan  # NaN power
+    with warnings.catch_warnings():
+        # The NaN-coefficient, overflow, and zero-power warnings.
+        warnings.simplefilter("ignore")
+        connectivity = Connectivity(coefficients)
+        power = connectivity.power(one_sided=False)[0]
+        signed = connectivity.imaginary_coherency()[0]
+    assert np.isposinf(power[:, 1]).all()
+    assert np.isnan(power[:, 3]).all()
+    not_finite = np.array([False, True, False, True])
+    expected_nan = (
+        not_finite[:, np.newaxis] | not_finite[np.newaxis, :] | np.eye(4, dtype=bool)
+    )
+    np.testing.assert_array_equal(
+        np.isnan(signed), np.broadcast_to(expected_nan, signed.shape)
+    )
+    np.testing.assert_array_equal(signed[:, 0, 2], 0.0)
+    np.testing.assert_array_equal(signed[:, 2, 0], 0.0)
+
+
 def test_partial_coherence_matches_inverse_spectral_matrix_definition():
     rng = np.random.default_rng(102)
     coefficients = rng.standard_normal((1, 200, 3, 4, 3)) + 1j * (
