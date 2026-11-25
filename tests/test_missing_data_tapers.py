@@ -9,6 +9,7 @@ ordinary DPSS estimate, bit for bit.
 """
 
 import inspect
+import tracemalloc
 import warnings
 
 import numpy as np
@@ -251,6 +252,41 @@ def test_a_window_without_artifacts_is_the_standard_estimate_bit_for_bit(
     np.testing.assert_array_equal(missing_data[clean], dropped[clean])
     plain = to_host(_plain(np.nan_to_num(time_series), taper_weighting=taper_weighting).fft())
     np.testing.assert_array_equal(missing_data[clean], plain[clean])
+
+
+@pytest.mark.cpu_only(reason="tracemalloc traces NumPy's host allocations only")
+def test_rescuing_every_window_takes_no_more_memory_than_none():
+    """The rescued windows are recomputed a chunk at a time: rescuing all of
+    them peaked at 1.5 times the transform without artifacts when they were
+    recomputed at once."""
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((10_000, 4, 2))
+    artifacts = np.zeros((10_000, 4), dtype=bool)
+    for start in range(100, 10_000 - 3, 250):  # a 3-sample gap in every window
+        artifacts[start : start + 3] = True
+    peaks, transforms = [], []
+    for mask, handling in ((artifacts, "missing_data_tapers"), (None, "drop")):
+        multitaper = quietly(
+            Multitaper,
+            time_series,
+            sampling_frequency=1000,
+            time_window_duration=1.0,
+            time_window_step=0.5,
+            time_halfbandwidth_product=3,
+            artifact_samples=mask,
+            artifact_handling=handling,
+        )
+        tracemalloc.start()
+        try:
+            multitaper.fft()
+            peaks.append(tracemalloc.get_traced_memory()[1])
+        finally:
+            tracemalloc.stop()
+        transforms.append(multitaper)
+    assert to_host(transforms[0].artifact_samples).any(axis=0).all()
+    assert to_host(transforms[0].valid_windows).all()  # every window rescued
+    rescued_peak, plain_peak = peaks
+    assert rescued_peak <= 1.05 * plain_peak
 
 
 def test_a_mask_without_artifacts_is_the_transform_without_one():

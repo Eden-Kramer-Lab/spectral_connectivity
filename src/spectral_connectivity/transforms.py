@@ -965,6 +965,9 @@ def _validated_artifact_samples(
 
 
 _ARTIFACT_HANDLINGS = ("drop", "missing_data_tapers")
+# Missing-data tapers recompute the trial windows they keep in this many
+# chunks of the trial windows at most (Multitaper._estimate_gapped_windows).
+_RESCUE_CHUNKS = 16
 
 
 def _validate_artifact_handling(
@@ -3188,23 +3191,38 @@ class Multitaper(_WindowedFourierTransform):
         line too. Only those windows' tapers are gathered, ``(n_rescued, 1,
         n_time_samples_per_window, n_tapers)``, rather than a set for every
         trial window: the DPSS coefficients of the others are already right.
+
+        The windows are recomputed in chunks of at most
+        ``1 / _RESCUE_CHUNKS`` of the trial windows, so the temporaries stay
+        a fixed fraction of ``coefficients`` however many windows are
+        rescued. A window's temporaries peak at about three times its share
+        of ``coefficients`` (its FFT before and after scaling, plus its
+        tapered product, tapers, and copies, each at most half its share as
+        ``n_time_samples_per_window <= n_fft_samples``), so a chunk's stay
+        under a quarter of ``coefficients``: less than computing
+        ``coefficients`` held (the FFT before and after scaling of every
+        window), so rescuing windows adds no memory to dropping them.
         """
         if not self._rescues_windows:
             return
         assert self._missing_data is not None
-        rescued = self._missing_data.windows
-        gapped = _detrend_valid_samples(
-            windows[rescued], self._missing_data.valid_of_rescued(), self.detrend_type
-        )
-        windows[rescued] = gapped
-        tapers = self._missing_data.tapers[self._missing_data.table_index[rescued]]
-        coefficients[rescued] = _multitaper_fft(
-            tapers[:, xp.newaxis],
-            gapped,
-            self.n_fft_samples,
-            self.sampling_frequency,
-            workers=self.fft_workers,
-        )
+        window_index, trial_index = self._missing_data.windows
+        valid = self._missing_data.valid_of_rescued()
+        table_index = self._missing_data.table_index[window_index, trial_index]
+        n_trial_windows = coefficients.shape[0] * coefficients.shape[1]
+        chunk_size = -(-n_trial_windows // _RESCUE_CHUNKS)
+        for start in range(0, window_index.shape[0], chunk_size):
+            chunk = slice(start, start + chunk_size)
+            rescued = (window_index[chunk], trial_index[chunk])
+            gapped = _detrend_valid_samples(windows[rescued], valid[chunk], self.detrend_type)
+            windows[rescued] = gapped
+            coefficients[rescued] = _multitaper_fft(
+                self._missing_data.tapers[table_index[chunk]][:, xp.newaxis],
+                gapped,
+                self.n_fft_samples,
+                self.sampling_frequency,
+                workers=self.fft_workers,
+            )
 
     def _artifact_samples_details(self) -> str:
         """With missing-data tapers, the trial windows that had artifacts and
