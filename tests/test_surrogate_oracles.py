@@ -284,8 +284,8 @@ def _lag_one_var(strength):
         ("trial_shuffle", "magnitude_squared_coherence", np.s_[:], 0.75),
         ("phase_rotation", "magnitude_squared_coherence", np.s_[:], 0.75),
         # Im(coherency) of a one-sample lag is proportional to sin(2 pi f / fs).
-        # Conjugating whole trials leaves 10 random flips, fewer than the
-        # per-taper flips of 2.x; measured 0.69 at c = 0.5.
+        # Conjugating whole trials draws 10 flips, not 30 as per taper would,
+        # which costs power; measured 0.69 at c = 0.5.
         ("conjugation", "imaginary_coherence", np.s_[8:25], 0.6),
     ],
 )
