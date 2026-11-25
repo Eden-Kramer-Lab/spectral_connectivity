@@ -2992,12 +2992,15 @@ class Connectivity:
               window; see Notes), the same for every taper and positive
               frequency of the unit (and conjugate at the negative
               frequencies, so a real signal stays real). Null: the signals
-              are independent; exact when each is stationary and Gaussian,
-              whose coefficients are circular. Needs at least 2 units: one
-              trial is refused unless its time windows are averaged. The
-              coefficients within ``half_bandwidth`` of 0 Hz and Nyquist are
-              not circular, so rotating them does not give valid surrogates;
-              those frequencies are not tested.
+              are independent. The test is exact for circular Gaussian
+              coefficients; the windowed coefficients of stationary Gaussian
+              signals are approximately circular away from 0 Hz and Nyquist,
+              where leakage across 0 Hz (or Nyquist) mixes each frequency with
+              its mirror image. So the frequencies within ``half_bandwidth``
+              of 0 Hz and Nyquist, where rotating does not give valid
+              surrogates, are not tested. Needs at least 2 units: one trial
+              is refused unless its non-overlapping time windows are
+              averaged.
             - ``"conjugation"``: replace each unit (every taper, signal and
               frequency of it together) by its complex conjugate with
               probability 1/2, which for a real signal amounts to reversing
@@ -3197,87 +3200,91 @@ class Connectivity:
         once, during development; the test suite checks each kind's size and
         the family-wise error rate in smaller designs, within stated limits.
 
-        - ``"trial_shuffle"``, three independent AR(1) signals at 200 Hz, 10
-          trials, 1 s windows with 5 tapers, 2100 datasets: 4.9-5.1% for
-          magnitude-squared and imaginary coherence and pairwise spectral
-          Granger, including 0 Hz and Nyquist.
-        - ``"phase_rotation"``, two independent AR(1) signals at 200 Hz, 5
-          trials, 2 s windows with 7 tapers (half bandwidth 2 Hz), 2000
-          datasets: 5.0% for magnitude-squared and imaginary coherence at
-          frequencies more than 2.5 half bandwidths from an edge and 4.7-5.4%
-          nearer, but past one half bandwidth. Within one half bandwidth of 0
-          Hz or Nyquist (computed apart, 1000 datasets) rotation rejected up
-          to 7.9% (coherence) and 7.4% (Granger) at single frequencies, which
-          is why those are not tested. Pairwise spectral Granger rejected
-          6.5% from one to 1.5 half bandwidths from an edge, 5.8-5.9% up to
-          2.5, and 5.1% farther away.
+        - ``"trial_shuffle"``, three independent AR(1) signals (coefficient
+          0.5) at 200 Hz, 10 trials, 1 s windows with NW=3 (5 tapers), 2100
+          datasets: 4.9-5.1% for magnitude-squared and imaginary coherence and
+          pairwise spectral Granger, including 0 Hz and Nyquist.
+        - ``"phase_rotation"``, two independent AR(1) signals (coefficient
+          0.5) at 200 Hz, 5 trials, 2 s windows with NW=4 (7 tapers, half
+          bandwidth 2 Hz), 2000 datasets: 5.0% for magnitude-squared and
+          imaginary coherence at frequencies more than 2.5 half bandwidths
+          from an edge and 4.7-5.4% nearer, but past one half bandwidth.
+          Within one half bandwidth of 0 Hz or Nyquist (computed apart, 1000
+          datasets) rotation rejected up to 7.9% (coherence) and 7.4%
+          (Granger) at single frequencies, which is why those are not tested.
+          Pairwise spectral Granger rejected 6.5% from one to 1.5 half
+          bandwidths from an edge, 5.8-5.9% up to 2.5, and 5.1% farther away.
         - ``"conjugation"``, instantaneous mixing of two independent AR(2)
-          sources at 200 Hz (cross-weights 0.7), 10 trials, 2 s windows with
-          7 tapers, 400 datasets: 4.9-5.2% for ``imaginary_coherence``,
-          5.0-5.1% for pairwise spectral Granger and 4.0-4.5% for a two-sided
-          ``phase_slope_index`` over 10-30 Hz, where the trial shuffle finds
-          Granger causality in 96% of datasets. With a 3-sample lag instead
-          (one source driving the other at half weight), conjugation rejects
-          the imaginary coherence at its 20 Hz peak, and the phase slope
-          index, in every dataset, and pairwise Granger in 93% (10-90 Hz).
-        - Spectra that are not flat across the half bandwidth, two
-          independent signals at 128 Hz, 1 s windows with 7 tapers (half
-          bandwidth 4 Hz), 300-400 datasets. Around a narrow 20 Hz peak
-          (AR(2), pole radius 0.99), at 17-23 Hz, with 10 trials: 4.6%
-          (rotation) and 5.2% (conjugation), against 41% and 27% when each
-          taper was randomized separately (57% and 28% with one trial). Just
-          past the half bandwidth of a steep spectrum (AR(1), coefficient
-          0.99), at 4-7 Hz, with 10 trials: 5.1% and 4.7%, against 18% and
-          14% per taper (19% and 10% with one trial). For one 10 s recording,
-          its ten 1 s windows averaged (``expectation_type="time_tapers"``):
-          4.3-4.8% for the steep spectrum and 5.3-5.4% for a broadband one
-          (AR(1), coefficient 0.5), but 13% (rotation) and 10% (conjugation)
-          around the narrow peak, whose memory (about 0.8 s) spans the windows.
-        - Overlapping windows, two independent AR(1) signals (coefficient
-          0.5) at 128 Hz, magnitude-squared coherence at every tested
-          frequency, 300 datasets. One 10 s recording in 1 s windows with NW=4
-          every 0.5 s (19 windows, ``expectation_type="time_tapers"``):
-          randomizing each window separately rejected 19.5% (rotation) and
-          15.0% (conjugation), against 4.5% and 5.0% for ten non-overlapping
-          windows of the same data. With 5 trials of 4 s in the same windows
+          sources at 200 Hz, peaked at 20 and 40 Hz with pole radii 0.9 and
+          0.8 (each signal one source plus 0.7 times the other), 10 trials, 2
+          s windows with NW=4 (7 tapers), 400 datasets: 4.9-5.2% for
+          ``imaginary_coherence``, 5.0-5.1% for pairwise spectral Granger and
+          4.0-4.5% for a two-sided ``phase_slope_index`` over 10-30 Hz, where
+          the trial shuffle finds Granger causality in 96% of datasets. With a
+          3-sample lag instead (unmixed, the second source plus half the first
+          delayed by 3 samples), conjugation rejects the imaginary coherence
+          at its 20 Hz peak, and the phase slope index, in every dataset, and
+          pairwise Granger in 93% (10-90 Hz).
+        - Spectra that are not flat across the half bandwidth, two independent
+          signals at 128 Hz, 1 s windows with NW=4 (7 tapers, half bandwidth 4
+          Hz), 300-400 datasets. Around a narrow 20 Hz peak (AR(2), pole
+          radius 0.99), at 17-23 Hz, with 10 trials: 4.6% (rotation) and 5.2%
+          (conjugation), against 41% and 27% when each taper was randomized
+          separately (57% and 28% with one trial). Just past the half
+          bandwidth of a steep spectrum (AR(1), coefficient 0.99), at 4-7 Hz,
+          with 10 trials: 5.1% and 4.7%, against 18% and 14% per taper (19%
+          and 10% with one trial). For one 10 s recording, its ten 1 s windows
+          averaged (``expectation_type="time_tapers"``): 4.3-4.8% for the
+          steep spectrum and 5.3-5.4% for a broadband one (AR(1), coefficient
+          0.5), but 13% (rotation) and 10% (conjugation) around the narrow
+          peak, whose memory (about 0.8 s) spans the windows.
+        - Overlapping windows, two independent AR(1) signals (coefficient 0.5)
+          at 128 Hz, magnitude-squared coherence at every tested frequency,
+          300 datasets. One 10 s recording in 1 s windows with NW=4 every 0.5
+          s (19 windows, ``expectation_type="time_tapers"``): randomizing each
+          window separately rejected 19.5% (rotation) and 15.0% (conjugation),
+          against 4.5% and 5.0% for ten non-overlapping windows of the same
+          data. With 5 trials of 4 s in the same windows
           (``expectation_type="time_trials_tapers"``, 7 windows each): 17.7%
-          and 13.3% per window, against 5.3% and 1.7% with one draw per
-          trial, the unit used for windows that overlap (5 trials allow only
-          16 distinct conjugations, so those p-values are coarse and
+          and 13.3% per window, against 5.3% and 1.7% with one draw per trial,
+          the unit used for windows that overlap (5 trials allow only 16
+          distinct conjugations, so those p-values are coarse and
           conservative).
         - Family-wise error under the global null, 2100 datasets of the
           trial-shuffle design with every tested frequency and pair one
-          family: some
-          element was rejected in 5.0-5.1% of datasets with
-          ``"trial_shuffle"``, 4.9-5.1% with ``"phase_rotation"`` and
-          4.8-5.3% with ``"conjugation"`` for magnitude-squared and imaginary
+          family: some element was rejected in 5.0-5.1% of datasets with
+          ``"trial_shuffle"``, 4.9-5.1% with ``"phase_rotation"`` and 4.8-5.3%
+          with ``"conjugation"`` for magnitude-squared and imaginary
           coherence, against every dataset with the uncorrected p-values.
           Pairwise spectral Granger gave 6.7% with ``"phase_rotation"`` (the
           excess near Nyquist above) and 5.8% with ``"conjugation"``. In the
           rotation design above (5 trials) the family-wise rate was 4.0%
           (magnitude-squared coherence), 5.4% (imaginary coherence) and 5.5%
           (Granger).
-        - Correlated observations, ``Welch`` segments overlapping by 75% (13
-          per trial): one phase per trial held 5.0-5.2% for independent
-          signals (5 trials, magnitude-squared coherence and pairwise
-          Granger), against 19.6% when each segment was rotated separately;
-          under the mixing above with 10 trials, conjugation of whole trials
-          held 4.9%, against 11.5-14.8% per segment.
-        - A shared stimulus-locked response: two independent AR(2) noise
-          signals at 200 Hz plus the same 10 Hz burst in each of 10 trials (2
-          s windows, 7 tapers, 600 datasets), rejection at 5-15 Hz. With the
-          burst at zero lag: 4.5-5.6% for the trial shuffle, 3.9-5.5% for
-          conjugation, and 71-72% (magnitude-squared coherence) and 51-52%
-          (pairwise Granger) for phase rotation (1.4-1.9% for the imaginary
-          coherence, which a zero-lag response does not change); rotation's
-          pairwise Granger also rejected 6.5-6.6% at 25-90 Hz, away from the
-          burst. With the burst 15 ms later in one signal: 4.2-6.0% for the
-          trial shuffle and 58-81% for the other two. After subtracting each
-          signal's mean across trials, phase rotation rejected 5.5-7.0% and
-          conjugation 5.0-6.3% at every frequency with 10 trials (6.9% and
-          6.0% for magnitude-squared coherence of independent signals with no
-          response, 400 datasets) and 5.3% and 5.2% with 40 trials, while the
-          trial shuffle kept 4.9-6.1%.
+        - Correlated observations, ``Welch`` segments of 0.5 s overlapping by
+          75% (13 per 2 s trial) of the AR(2) sources of the conjugation
+          design at 200 Hz, 1000 datasets: one phase per trial held 5.0-5.2%
+          for the independent sources (5 trials, magnitude-squared coherence
+          and pairwise Granger), against 19.6% when each segment was rotated
+          separately; under the mixing above with 10 trials, conjugation of
+          whole trials held 4.9%, against 11.5-14.8% per segment.
+        - A shared stimulus-locked response: the two AR(2) sources of the
+          conjugation design, unmixed, plus the same 10 Hz burst in each of 10
+          trials (a cosine of amplitude 3 under a Gaussian envelope of
+          standard deviation 50 ms, centered 0.8 s into each 2 s trial; NW=4,
+          600 datasets), rejection at 5-15 Hz. With the burst at zero lag:
+          4.5-5.6% for the trial shuffle, 3.9-5.5% for conjugation, and 71-72%
+          (magnitude-squared coherence) and 51-52% (pairwise Granger) for
+          phase rotation (1.4-1.9% for the imaginary coherence, which a
+          zero-lag response does not change); rotation's pairwise Granger also
+          rejected 6.5-6.6% at 25-90 Hz, away from the burst. With the burst
+          15 ms later in one signal: 4.2-6.0% for the trial shuffle and 58-81%
+          for the other two. After subtracting each signal's mean across
+          trials, phase rotation rejected 5.5-7.0% and conjugation 5.0-6.3% at
+          every frequency with 10 trials (6.9% and 6.0% at 5-95 Hz for
+          magnitude-squared coherence of independent AR(1) signals,
+          coefficient 0.5, with no response, 400 datasets) and 5.3% and 5.2%
+          with 40 trials, while the trial shuffle kept 4.9-6.1%.
 
         References
         ----------
