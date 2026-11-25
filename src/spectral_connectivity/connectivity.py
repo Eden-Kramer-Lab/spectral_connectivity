@@ -1475,8 +1475,9 @@ class Connectivity:
         if frequencies_stale or time_stale or weights_stale:
             warnings.warn(
                 "Reassigning fourier_coefficients changed the FFT/time geometry; "
-                "incompatible frequency/time coordinates, observation weights and "
-                "half_bandwidth were reset to defaults or cleared. Construct a new Connectivity "
+                "incompatible frequency/time coordinates, observation weights, "
+                "half_bandwidth and time_bins_are_disjoint were reset to defaults or "
+                "cleared. Construct a new Connectivity "
                 "if you need specific coordinates or weights for the new data.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
@@ -1491,6 +1492,8 @@ class Connectivity:
                 )
             if time_stale:
                 self.time = np.arange(n_time_windows)  # host coordinate, as in __init__
+                # Nothing says the new windows are disjoint; assume they may overlap.
+                self._time_bins_are_disjoint = False
             if weights_stale:
                 self._observation_weights = None
 
@@ -2513,8 +2516,10 @@ class Connectivity:
         (:attr:`Multitaper.time_bins_are_disjoint
         <spectral_connectivity.transforms.Multitaper.time_bins_are_disjoint>`:
         a step of at least the window length); otherwise it is ``False``
-        unless passed. :meth:`surrogate_test` randomizes each averaged time
-        window as a separate unit only when it is ``True``.
+        unless passed, and reassigning coefficients with another number of
+        windows resets it to ``False``. :meth:`surrogate_test` randomizes each
+        averaged time window as a separate unit only when it and
+        :attr:`time_bins_are_independent` are both ``True``.
         """
         return self._time_bins_are_disjoint
 
@@ -3586,11 +3591,11 @@ class Connectivity:
                 )
             return (1,)
         # Whole trials, and the time windows when the expectation averages
-        # windows that do not overlap; never the tapers of one trial (see Notes).
+        # windows that do not overlap and are independent; never the tapers
+        # of one trial (see Notes).
+        windows_are_units = self._time_bins_are_disjoint and self._time_bins_are_independent
         unit_axes = tuple(
-            axis
-            for axis in averaged
-            if axis == 1 or (axis == 0 and self._time_bins_are_disjoint)
+            axis for axis in averaged if axis == 1 or (axis == 0 and windows_are_units)
         )
         n_units = int(np.prod([shape[axis] for axis in unit_axes]))
         if n_units < 2:
@@ -3858,7 +3863,9 @@ class Connectivity:
         Rounding is the square root of the coefficients' machine epsilon
         times their largest finite magnitude anywhere, so a bin whose own
         coefficients are small (0 Hz after detrending) is judged on the
-        scale of the FFT that computed it.
+        scale of the FFT that computed it. Coefficients computed in a lower
+        precision and then upcast carry that precision's rounding, which can
+        exceed this tolerance; their edge bins are then tested.
 
         Parameters
         ----------

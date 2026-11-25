@@ -162,6 +162,38 @@ def test_coefficients_passed_directly_have_trial_units_unless_disjoint():
     assert disjoint._surrogate_unit_axes("conjugation", 4) == (0, 1)
 
 
+def test_disjoint_windows_that_are_not_independent_are_not_units():
+    """Disjoint windows correlated through the signals' memory (a transform
+    reporting time_bins_are_independent=False) share their trial's draw, and
+    one trial of them is refused."""
+    coefficients = _coefficients(np.random.default_rng(6), (4, 3, 2, 8, 2))
+    correlated = Connectivity(
+        coefficients,
+        expectation_type="time_trials_tapers",
+        time_bins_are_independent=False,
+        time_bins_are_disjoint=True,
+    )
+    assert correlated._surrogate_unit_axes("conjugation", 4) == (1,)
+    one_trial = Connectivity(
+        coefficients[:, :1],
+        expectation_type="time_tapers",
+        time_bins_are_independent=False,
+        time_bins_are_disjoint=True,
+    )
+    with pytest.raises(ValueError, match="randomizes whole independent units"):
+        one_trial._surrogate_unit_axes("conjugation", 4)
+
+
+def test_reassigning_coefficients_with_other_windows_clears_disjoint():
+    coefficients = _coefficients(np.random.default_rng(6), (4, 3, 2, 8, 2))
+    connectivity = Connectivity(
+        coefficients, expectation_type="time_trials_tapers", time_bins_are_disjoint=True
+    )
+    with pytest.warns(UserWarning, match="geometry"):
+        connectivity.fourier_coefficients = coefficients[:2]
+    assert connectivity.time_bins_are_disjoint is False
+
+
 # --------------------------------------------------------------------------
 # p-value arithmetic
 # --------------------------------------------------------------------------
@@ -728,7 +760,9 @@ def test_phase_rotation_uses_the_half_bandwidth_from_the_transform(lagged_connec
         frequencies=lagged_connectivity.all_frequencies,
         half_bandwidth=2.0,
     )
-    with pytest.warns(UserWarning, match="half_bandwidth were reset"):
+    with pytest.warns(
+        UserWarning, match="half_bandwidth and time_bins_are_disjoint were reset"
+    ):
         connectivity.fourier_coefficients = _coefficients(
             np.random.default_rng(0), (1, 4, 3, 8, 3)
         )

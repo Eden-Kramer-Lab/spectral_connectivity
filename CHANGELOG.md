@@ -85,8 +85,10 @@ The migration guide for code written against 2.x is
   `Multitaper.time_bins_are_disjoint` and
   `ShortTimeFourierTransform.time_bins_are_disjoint` are `True` when the step
   is at least the window length. `surrogate_test` randomizes averaged time
-  windows separately only when it is `True`; it is `False` for coefficients
-  passed directly unless stated, so their trials are the units.
+  windows separately only when it and `time_bins_are_independent` are both
+  `True`; it is `False` for coefficients passed directly unless stated (and
+  after reassigning coefficients with another number of windows), so their
+  trials are the units.
 - `Connectivity.jackknife(method, leave_out="trial")` leaves out whole trials
   (all their tapers) instead of single trial-taper observations, so the
   interval includes the variability between trials; the default interval is
