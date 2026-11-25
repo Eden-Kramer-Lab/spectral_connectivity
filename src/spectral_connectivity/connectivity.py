@@ -3439,7 +3439,9 @@ class Connectivity:
         **Range**: ``[-1, 1]``. ``Im(S_ij) / sqrt(S_ii * S_jj)``. Pairs
         involving a zero-power signal are 0, not NaN: :meth:`coherency` masks
         them with ``nan + 0j``, whose imaginary part is 0, so use
-        :meth:`power` to find such signals. The diagonal is NaN, a mask
+        :meth:`power` to find such signals. A pair is NaN where a signal's
+        power is NaN, as in a bin that keeps no observation (see
+        :attr:`n_valid_observations`). The diagonal is NaN, a mask
         matching :meth:`coherency`: the imaginary part of a signal's coherency
         with itself is 0, which :meth:`imaginary_coherence` returns there.
 
@@ -3462,6 +3464,12 @@ class Connectivity:
         True
         """
         imaginary = self._coherency().imag
+        # Coherency is nan + 0j both where a signal has zero power (0 here, as
+        # documented) and where its power is NaN, such as a bin that keeps no
+        # observation, which must stay NaN.
+        imaginary = xp.where(
+            xp.isnan(self._nonnegative_pairwise_power_scale()), xp.nan, imaginary
+        )
         diagonal = xp.arange(self.n_signals)
         imaginary[..., diagonal, diagonal] = xp.nan
         return imaginary
