@@ -108,13 +108,17 @@ def _to_two_sided(
 
 def _signal_scale(
     cross_spectral_matrix: NDArray[np.complexfloating],
-) -> NDArray[np.floating]:
+) -> tuple[NDArray[np.floating], NDArray[np.bool_]]:
     """Root-mean-square amplitude of each signal of each sub-spectrum.
 
     The square root of the signal's power averaged over the frequency axis
-    (-3), its zero-lag autocovariance on the grid. A signal with zero or
-    non-finite power gets a scale of 1, so that sub-spectrum is factored as it
-    would be without scaling.
+    (-3), its zero-lag autocovariance on the grid. A signal with non-finite
+    power gets a scale of 1 (its sub-spectrum is not finite). A signal with no
+    power gets ``eps`` times the smallest scale of the signals with power (or
+    ``eps`` if none has power), so the factor's row for it, that of an
+    independent white signal of unit power once unscaled (see
+    :func:`_minimum_phase_factor_and_flags`), reconstructs a power ``eps²``
+    times that of the weakest signal.
 
     Parameters
     ----------
@@ -124,14 +128,20 @@ def _signal_scale(
 
     Returns
     -------
-    NDArray[floating], shape (..., n_signals)
+    scale : NDArray[floating], shape (..., n_signals)
         Positive scale of each signal, in float64 or wider.
+    no_power : NDArray[bool], shape (..., n_signals)
+        Signals whose power is zero at every frequency.
     """
     power = xp.mean(
         xp.diagonal(cross_spectral_matrix, axis1=-2, axis2=-1).real, axis=-2
     ).astype(xp.result_type(cross_spectral_matrix.real.dtype, xp.float64), copy=False)
     has_power = xp.isfinite(power) & (power > 0)
-    return xp.sqrt(xp.where(has_power, power, 1))
+    scale = xp.sqrt(xp.where(has_power, power, 1))
+    no_power = power == 0
+    weakest = xp.min(xp.where(has_power, scale, xp.inf), axis=-1, keepdims=True)
+    weakest = xp.where(xp.isfinite(weakest), weakest, 1)
+    return xp.where(no_power, xp.finfo(scale.dtype).eps * weakest, scale), no_power
 
 
 def _reverse_cholesky(matrices: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -771,8 +781,12 @@ def minimum_phase_decomposition(
     the transposed Cholesky factor with ``Uᵀ U = R0``, which is not covariant.
     As preconditioning, the iteration factors ``D S D`` with ``D_ii`` one
     over the square root of the mean of ``S_ii`` over frequency, and returns
-    ``D⁻¹ G'`` for its factor ``G'``; a signal with zero or non-finite power
-    keeps a scale of 1.
+    ``D⁻¹ G'`` for its factor ``G'``. A signal with no power (a zero row and
+    column of ``S``) is factored as an independent white signal, so its
+    window needs no fallback start, and its row of the factor is ``eps``
+    times the weakest other signal's scale: it reconstructs a power
+    ``eps²`` times that signal's, where an exactly zero row would leave the
+    factor singular for the directed measures.
 
     A converged factor whose ``det G(e^{iω})`` winds around zero, counted
     where its phase turns by less than ``π / 2`` between bins, is not minimum
@@ -928,7 +942,8 @@ def _minimum_phase_factor_and_flags(
     # D^-1 G for its factor G. The covariant start makes that the factor of S
     # up to rounding; the scaling preconditions the iteration for signals
     # whose powers differ by orders of magnitude (see Notes).
-    signal_scale = _signal_scale(cross_spectral_matrix)
+    signal_scale, no_power = _signal_scale(cross_spectral_matrix)
+    identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # NumPy divides a complex Inf by the real scale as by a complex number,
     # which gives NaN and warns; such a sub-spectrum is non-finite either way
     # and is reported as unconverged below.
@@ -940,7 +955,18 @@ def _minimum_phase_factor_and_flags(
                 * signal_scale[..., xp.newaxis, xp.newaxis, :]
             )
         ).astype(working_dtype, copy=False)
-    identity_matrix = xp.eye(n_signals, dtype=working_dtype)
+    # A signal with no power has a zero row and column in S, which would make
+    # the zero-lag matrix singular: its window would start from the Cholesky
+    # fallback, or from NaN on CuPy, whose Cholesky does not raise. Factor it
+    # as an independent white signal of unit power instead; the factor is
+    # then that of the other signals with a 1 for it, and its scale (eps
+    # times the weakest signal's) makes that 1 a rounding-level power. A zero
+    # row and column would reproduce S exactly but leave the lag-0
+    # coefficient and noise covariance singular for the directed measures.
+    working_cross_spectral_matrix = (
+        working_cross_spectral_matrix
+        + no_power[..., xp.newaxis, xp.newaxis, :] * identity_matrix
+    )
     # S is fixed across iterations, so factor it once as S = L Lᴴ.
     cross_spectral_square_root = _hermitian_square_root(working_cross_spectral_matrix)
     # One convergence flag per independent sub-spectrum (all leading batch dims

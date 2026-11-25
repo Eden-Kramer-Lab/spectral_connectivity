@@ -956,36 +956,69 @@ def test_rescaling_the_signals_rescales_the_factor(real_signals):
     )
 
 
+def _cholesky_returning_nan(matrices):
+    """``_reverse_cholesky`` as CuPy computes it: a matrix that is not
+    positive definite gives NaN instead of raising."""
+    flipped = to_host(matrices)[..., ::-1, ::-1]
+    factor = np.full_like(flipped, np.nan)
+    for index in np.ndindex(flipped.shape[:-2]):
+        with contextlib.suppress(np.linalg.LinAlgError):
+            factor[index] = np.linalg.cholesky(flipped[index])
+    return to_device(factor[..., ::-1, ::-1])
+
+
 @_BOTH_FACTORIZATION_PATHS
-def test_a_zero_power_signal_keeps_a_unit_scale_and_its_window_converges(real_signals):
-    """A signal with no power has no scale to divide by, so it keeps a scale
-    of 1. Its window's zero-lag matrix is singular, so that window starts
-    from the deterministic fallback (with its warning) and, on both paths,
-    converges to a factor that reproduces the spectrum, with the dead
-    signal's row about 1e-8 of the others; the measures then handle the dead
-    signal (spectral Granger returns NaN for a target with no power)."""
+@pytest.mark.parametrize("cholesky", ["raises", "returns_nan"])
+def test_a_zero_power_signal_is_factored_as_a_rounding_level_white_signal(
+    real_signals, cholesky, monkeypatch
+):
+    """A signal with no power is factored as an independent white signal and
+    unscaled by ``eps`` times the weakest other signal's scale. Its row of
+    the factor is then ``eps`` of that scale, its column rounding, it
+    reconstructs a power ``eps²`` of the weakest signal's, the other signals
+    get the factor of their own spectrum whatever their power (here 1e-20),
+    and no Cholesky fallback is needed, also where the Cholesky returns NaN
+    instead of raising (CuPy).
+
+    Regression: the dead signal kept a scale of 1 while the others were
+    scaled to unit power, so its row, of the iteration's absolute residual
+    (about 1e-8), reconstructed a power of 3e-17 against 1e-20 for the live
+    signals; with a NaN-returning Cholesky its window started from NaN and
+    was returned as NaN."""
     signals = _lagged_signals(
-        32, np.random.default_rng(2), dtype=float if real_signals else complex, n_signals=2
+        32, np.random.default_rng(2), dtype=float if real_signals else complex, n_signals=3
     )
-    spectrum = _cross_spectrum_of(signals)
+    spectrum = 1e-20 * _cross_spectrum_of(signals)
     spectrum[0, :, 1, :] = 0
     spectrum[0, :, :, 1] = 0
     assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
-    np.testing.assert_array_equal(
-        to_host(mpd_module._signal_scale(to_device(spectrum)))[0, 1], 1.0
-    )
+    if cholesky == "returns_nan":
+        monkeypatch.setattr(mpd_module, "_reverse_cholesky", _cholesky_returning_nan)
+    live = [0, 2]
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+        live_factor = to_host(
+            minimum_phase_decomposition(to_device(spectrum[:1][..., live, :][..., live]))
+        )[0]
 
     assert np.isfinite(factor).all()
+    weakest_power = spectrum[0, :, live, live].real.mean(axis=-1).min()
+    eps = np.finfo(float).eps
+    assert np.abs(factor[0, :, 1, :]).max() <= 1.01 * eps * np.sqrt(weakest_power)
+    # The other signals' entries in its column are rounding of their own size.
+    row_size = np.abs(factor[0][..., live, :]).max(axis=(0, 2))
+    assert (np.abs(factor[0][..., live, 1]) < 1e-14 * row_size).all()
+    reconstructed = factor[0] @ factor[0].conj().swapaxes(-1, -2)
+    assert np.abs(reconstructed[:, 1, 1]).max() <= 1.1 * eps**2 * weakest_power
+    np.testing.assert_allclose(
+        factor[0][..., live, :][..., live],
+        live_factor,
+        rtol=0,
+        atol=1e-9 * np.abs(live_factor).max(),
+    )
     assert _reconstruction_error(spectrum, factor).max() < 1e-7
-    assert np.abs(factor[0, :, 1, :]).max() < 1e-6 * np.abs(factor[0]).max()
-    if not ON_GPU:  # CuPy's Cholesky does not raise, so it takes no fallback start.
-        assert [str(w.message).split(" for ")[0] for w in caught] == [
-            mpd_module.CHOLESKY_FALLBACK_WARNING_START
-        ]
 
 
 @pytest.mark.parametrize("n_fft", [64, 65])

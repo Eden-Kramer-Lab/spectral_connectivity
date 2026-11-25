@@ -1212,7 +1212,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   the convergence tolerance (at most 7e-7). Signals of comparable power move by
   much less than their estimation error: at most 7e-3 in the regression
   examples, under a sixth of their RMS error against the generating models,
-  which is unchanged to 0.1%.
+  which is unchanged to 0.1%. A signal with no power is factored as an
+  independent white signal at rounding-level power, so its window needs no
+  fallback start; on CuPy, whose Cholesky returns NaN rather than raising,
+  a window with a dead channel was NaN and now factors as on NumPy.
 - The inverses behind the directed measures (of the factor's lag-0
   coefficient, the transfer function, the reduced transfer function, and
   the noise covariance or its target block) load each diagonal entry by
