@@ -78,6 +78,12 @@ def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
             {"group_labels": ["a", "a", "b"]},
             "'a' -> 'b', 'b' -> 'a'",
         ),
+        # Python str elements, which have no .item().
+        (
+            "blockwise_spectral_granger_prediction",
+            {"group_labels": np.array(["a", "a", "b"], dtype=object)},
+            "'a' -> 'b', 'b' -> 'a'",
+        ),
     ],
 )
 def test_granger_measures_name_the_pairs_whose_factor_is_not_minimum_phase(

@@ -430,8 +430,11 @@ def _pair_listing(
     if names is None:
         listing = ", ".join(f"{source} -> {target}" for source, target in pairs)
         return len(pairs), listing, "signal", "0-based signal indices, "
+    # tolist() gives Python scalars for every dtype; the elements of an object
+    # array (Python str, say) have no .item().
+    labels = np.asarray(names).tolist()
     listing = ", ".join(
-        f"{names[source].item()!r} -> {names[target].item()!r}" for source, target in pairs
+        f"{labels[source]!r} -> {labels[target]!r}" for source, target in pairs
     )
     return len(pairs), listing, "group", ""
 
