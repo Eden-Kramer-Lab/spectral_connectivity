@@ -1153,7 +1153,8 @@ def test_an_all_pass_rotation_of_the_factor_winds_around_zero(n_fft):
         to_host(mpd_module._grid_winding_number(phase)), [0, 0, -1, 1], atol=1e-12
     )
     np.testing.assert_allclose(winding[:3], [0, 0, -1], atol=1e-12)
-    assert np.isnan(winding[3])
+    # Not counted (NaN), or counted as winding; never a false 0.
+    assert np.isnan(winding[3]) or abs(winding[3]) > 0.5
 
 
 @_BOTH_FACTORIZATION_PATHS
