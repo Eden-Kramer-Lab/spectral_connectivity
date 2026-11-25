@@ -220,7 +220,7 @@ def test_each_concentration_is_its_tapers_energy_fraction_in_the_band(n_time, nw
     ``[-W, W]``: the definition, integrated numerically. Within a group of
     nearly equal concentrations the tapers are rotated toward the DPSS, so
     each one's own fraction is only within the group's spread of the
-    reported eigenvalue (7e-7 at NW = 8), while the group's sum is exact."""
+    reported eigenvalue (e.g. 7e-7 at NW = 8), while the group's sum is exact."""
     rng = np.random.default_rng(n_time)
     n_tapers = int(np.floor(2 * nw)) - 1
     for _ in range(3):
