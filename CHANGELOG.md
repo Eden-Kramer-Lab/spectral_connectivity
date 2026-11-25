@@ -71,8 +71,10 @@ The migration guide for code written against 2.x is
   `"trial_shuffle"` (signals independent from trial to trial),
   `"phase_rotation"` (signals independent), or `"conjugation"` (real
   coherency, as for zero-lag mixing). Rotation and conjugation randomize
-  whole trials (and averaged time windows), never single tapers, so they need
-  2 or more of them and refuse a single trial.
+  whole trials (and averaged non-overlapping time windows), never single
+  tapers or overlapping windows, so they need 2 or more of them and refuse a
+  single independent unit (one trial with no averaged non-overlapping
+  windows).
 - `Connectivity` takes and exposes `half_bandwidth`, which
   `Connectivity.from_transform` reads from a transform's optional
   `half_bandwidth` attribute; `Multitaper.half_bandwidth` is

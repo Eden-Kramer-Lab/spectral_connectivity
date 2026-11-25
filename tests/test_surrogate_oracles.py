@@ -620,6 +620,7 @@ def steep_one_recording():
             frequencies=frequencies,
             expectation_type="time_tapers",
             half_bandwidth=multitaper.half_bandwidth,
+            time_bins_are_disjoint=multitaper.time_bins_are_disjoint,
         )
         for replicate in range(coefficients.shape[1])
     ]
@@ -641,6 +642,72 @@ def test_one_recording_is_tested_by_its_averaged_windows(steep_one_recording, ki
     p_values = _p_values(steep_one_recording, "magnitude_squared_coherence", kind, 80_000)
     _assert_size(p_values, f"{kind} 4-7 Hz", band=np.s_[4:8], levels=(0.05, 0.25))
     _assert_size(p_values, f"{kind} every tested frequency", levels=(0.05, 0.25))
+
+
+@pytest.fixture(scope="module")
+def overlapping_windows():
+    """400 replicates of 2 independent AR(1) signals, 10 trials of 4 s at 64
+    Hz, in 1 s windows every 0.5 s (7 per trial, overlapping by half) with
+    NW=2 (3 tapers), the windows averaged with the trials
+    (expectation_type="time_trials_tapers")."""
+    multitaper = Multitaper(
+        _ar1(np.random.default_rng(900), 256, 400 * 10, 2),
+        sampling_frequency=64,
+        time_halfbandwidth_product=2,
+        time_window_duration=1.0,
+        time_window_step=0.5,
+    )
+    assert multitaper.time_bins_are_independent
+    assert not multitaper.time_bins_are_disjoint
+    coefficients = to_host(multitaper.fft())  # (7, 4000, 3, 64, 2)
+    coefficients = coefficients.reshape(7, 400, 10, *coefficients.shape[2:])
+    return coefficients, to_host(multitaper.frequencies), multitaper.half_bandwidth
+
+
+@pytest.mark.parametrize("kind", ["phase_rotation", "conjugation"])
+def test_overlapping_windows_share_their_trial_draw(overlapping_windows, kind):
+    """Windows that overlap by half have correlated coefficients, so they are
+    not units: one recording in such windows is refused, and with trials every
+    window of a trial shares its draw and the size holds. Randomizing each
+    window separately (claiming time_bins_are_disjoint=True for these
+    windows) rejects far more often: 14.2% for rotation and 11.4% for
+    conjugation at alpha=0.05, against 4.8% and 5.3% with the trial's draw
+    shared, which is 7.5 and 4.5 limits away."""
+    one_recording = Connectivity.from_transform(
+        Multitaper(
+            _ar1(np.random.default_rng(901), 640, 1, 2),
+            sampling_frequency=64,
+            time_halfbandwidth_product=2,
+            time_window_duration=1.0,
+            time_window_step=0.5,
+        ),
+        expectation_type="time_tapers",
+    )
+    with pytest.raises(ValueError, match="windows that overlap are not independent units"):
+        one_recording.surrogate_test("magnitude_squared_coherence", kind=kind)
+    coefficients, frequencies, half_bandwidth = overlapping_windows
+
+    def p_values(disjoint):
+        connectivities = [
+            Connectivity(
+                coefficients[:, replicate],
+                frequencies=frequencies,
+                expectation_type="time_trials_tapers",
+                half_bandwidth=half_bandwidth,
+                time_bins_are_disjoint=disjoint,
+            )
+            for replicate in range(coefficients.shape[1])
+        ]
+        results = _results(connectivities, "magnitude_squared_coherence", kind, 90_000)
+        return np.stack([result.p_value[:, 0, 1] for result in results])
+
+    shared = p_values(disjoint=False)
+    _assert_size(shared, f"{kind}, overlapping windows", levels=(0.05, 0.25))
+    _, limit = replicate_mean_and_limit(_per_replicate_rate(shared, 0.05))
+    per_window, _ = replicate_mean_and_limit(
+        _per_replicate_rate(p_values(disjoint=True), 0.05)
+    )
+    assert per_window - _exact_size(0.05) > 4 * limit, (per_window, limit)
 
 
 # --------------------------------------------------------------------------

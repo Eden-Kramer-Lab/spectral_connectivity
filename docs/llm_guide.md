@@ -219,8 +219,8 @@ measure with its values on surrogate data. `kind` sets the null hypothesis:
 | Question | `kind` | Needs | A shared stimulus-locked response |
 | --- | --- | --- | --- |
 | Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
-| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged time windows), the half bandwidth | is rejected |
-| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged time windows) | is rejected if lagged |
+| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged non-overlapping time windows), the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged non-overlapping time windows) | is rejected if lagged |
 
 Report `fwer_p_value` (family-wise over every frequency and pair by default);
 `p_value` is uncorrected:

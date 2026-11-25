@@ -15,6 +15,7 @@ from spectral_connectivity import (
     Connectivity,
     DirectedOrientationWarning,
     Multitaper,
+    ShortTimeFourierTransform,
     SurrogateTestResult,
 )
 from spectral_connectivity.statistics import _SurrogateTally
@@ -119,17 +120,45 @@ def test_conjugation_flips_whole_trials():
     assert conjugated.any()
 
 
-def test_correlated_time_bins_share_the_draws_when_time_is_averaged():
-    """With expectation over time and trials, independent time bins are units
-    besides the trials; correlated ones are not."""
-    rng = np.random.default_rng(6)
-    coefficients = _coefficients(rng, (4, 3, 2, 8, 2))
-    independent = Connectivity(coefficients, expectation_type="time_trials_tapers")
-    correlated = Connectivity(
-        coefficients, expectation_type="time_trials_tapers", time_bins_are_independent=False
+@pytest.mark.parametrize("transform_class", [Multitaper, ShortTimeFourierTransform])
+@pytest.mark.parametrize(
+    ("n_time_samples_per_step", "disjoint"), [(32, True), (16, False), (31, False)]
+)
+def test_overlapping_time_windows_share_the_draws_when_time_is_averaged(
+    transform_class, n_time_samples_per_step, disjoint
+):
+    """With an expectation over time and trials, windows that do not overlap
+    are units besides the trials; windows that overlap, even by half (which
+    still counts as independent for counting observations), are not, so every
+    window of a trial shares its draw."""
+    transform = transform_class(
+        np.random.default_rng(6).standard_normal((256, 3, 2)),
+        sampling_frequency=64,
+        n_time_samples_per_window=32,
+        n_time_samples_per_step=n_time_samples_per_step,
     )
-    assert independent._surrogate_unit_axes("conjugation", 4) == (0, 1)
-    assert correlated._surrogate_unit_axes("conjugation", 4) == (1,)
+    assert transform.time_bins_are_independent
+    assert transform.time_bins_are_disjoint is disjoint
+    connectivity = Connectivity.from_transform(
+        transform, expectation_type="time_trials_tapers"
+    )
+    assert connectivity.time_bins_are_disjoint is disjoint
+    assert connectivity._surrogate_unit_axes("conjugation", 4) == (
+        (0, 1) if disjoint else (1,)
+    )
+
+
+def test_coefficients_passed_directly_have_trial_units_unless_disjoint():
+    """Coefficients passed directly may come from overlapping windows, so
+    their windows are units only when time_bins_are_disjoint says so."""
+    coefficients = _coefficients(np.random.default_rng(6), (4, 3, 2, 8, 2))
+    unknown = Connectivity(coefficients, expectation_type="time_trials_tapers")
+    disjoint = Connectivity(
+        coefficients, expectation_type="time_trials_tapers", time_bins_are_disjoint=True
+    )
+    assert unknown.time_bins_are_disjoint is False
+    assert unknown._surrogate_unit_axes("conjugation", 4) == (1,)
+    assert disjoint._surrogate_unit_axes("conjugation", 4) == (0, 1)
 
 
 # --------------------------------------------------------------------------
@@ -553,8 +582,10 @@ def test_trial_shuffle_refuses_weights_that_differ_between_trials():
 def test_randomizing_kinds_refuse_a_single_unit(kind):
     """One trial and no averaged time windows is one unit, refused whether or
     not its tapers are independent; the message gives the measured failure of
-    per-taper randomization and the remedies. Averaging independent windows of
-    the one trial makes each window a unit; correlated windows are not."""
+    per-taper randomization and the remedies. Averaging non-overlapping
+    windows of the one trial makes each window a unit; windows that may
+    overlap are not, and the message then says so instead of suggesting to
+    average them."""
     rng = np.random.default_rng(12)
     for independent in (True, False):
         connectivity = Connectivity(
@@ -566,18 +597,24 @@ def test_randomizing_kinds_refuse_a_single_unit(kind):
             connectivity.surrogate_test("imaginary_coherence", kind=kind)
         message = str(excinfo.value)
         assert "57% (phase rotation) and 28% (conjugation)" in message
-        assert "an expectation_type that includes 'time'" in message
+        assert "average non-overlapping time windows (an expectation_type that" in message
+        assert "overlap are not independent units" not in message
     windows = _coefficients(rng, (12, 1, 5, 16, 2))
-    averaged = Connectivity(windows, expectation_type="time_tapers", half_bandwidth=2.0)
-    assert averaged._surrogate_unit_axes(kind, 99) == (0,)
-    correlated = Connectivity(
+    averaged = Connectivity(
         windows,
         expectation_type="time_tapers",
         half_bandwidth=2.0,
-        time_bins_are_independent=False,
+        time_bins_are_disjoint=True,
     )
-    with pytest.raises(ValueError, match="time_bins_are_independent is False"):
-        correlated.surrogate_test("imaginary_coherence", kind=kind)
+    assert averaged._surrogate_unit_axes(kind, 99) == (0,)
+    overlapping = Connectivity(windows, expectation_type="time_tapers", half_bandwidth=2.0)
+    with pytest.raises(ValueError, match="this Connectivity has 1 ") as excinfo:
+        overlapping.surrogate_test("imaginary_coherence", kind=kind)
+    message = str(excinfo.value)
+    assert "windows that overlap are not independent units" in message
+    assert "use non-overlapping windows" in message
+    assert "time_bins_are_disjoint=True" in message
+    assert "an expectation_type that includes 'time'" not in message
 
 
 def test_phase_rotation_refuses_one_sided_coefficients():
@@ -675,7 +712,14 @@ def test_resampled_replicates_keep_the_subclass_and_settings(lagged_connectivity
             self.seen = []
 
         def labelled_coherence(self):
-            self.seen.append((self.label, self.half_bandwidth, self.time_bins_are_independent))
+            self.seen.append(
+                (
+                    self.label,
+                    self.half_bandwidth,
+                    self.time_bins_are_independent,
+                    self.time_bins_are_disjoint,
+                )
+            )
             return self.magnitude_squared_coherence()
 
     connectivity = Recording(
@@ -684,6 +728,7 @@ def test_resampled_replicates_keep_the_subclass_and_settings(lagged_connectivity
         frequencies=lagged_connectivity.all_frequencies,
         half_bandwidth=2.0,
         time_bins_are_independent=False,
+        time_bins_are_disjoint=True,
     )
     jackknifed = connectivity.jackknife(
         "labelled_coherence", leave_out="trial", transformation="fisher_squared"
@@ -697,7 +742,7 @@ def test_resampled_replicates_keep_the_subclass_and_settings(lagged_connectivity
     # The replicates' calls were recorded on the replicates, which share the
     # list with the original, and saw its attributes and settings.
     assert len(connectivity.seen) == 2 + 10 + 3
-    assert set(connectivity.seen) == {("recorded", 2.0, False)}
+    assert set(connectivity.seen) == {("recorded", 2.0, False, True)}
 
 
 @pytest.mark.parametrize(

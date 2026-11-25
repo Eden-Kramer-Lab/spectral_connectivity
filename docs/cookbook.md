@@ -364,8 +364,8 @@ sets the null, so choose it for the question:
 | Question | `kind` | Needs | A shared stimulus-locked response |
 | --- | --- | --- | --- |
 | Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
-| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged time windows), the half bandwidth | is rejected |
-| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged time windows) | is rejected if lagged |
+| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged non-overlapping time windows), the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged non-overlapping time windows) | is rejected if lagged |
 
 - `"trial_shuffle"` shuffles each signal's trials, keeping each trial whole.
   The expectation must average trials.
@@ -388,10 +388,15 @@ sets the null, so choose it for the question:
   2 or more: a trial's tapers are correlated wherever the spectrum is not flat
   across the half bandwidth (near a peak, or on a steep 1/f spectrum), and
   randomizing them separately would reject independent signals far too
-  often. With one recording, average its time windows instead
-  (`expectation_type="time_tapers"`), which makes each window a unit; that
-  holds only for windows longer than the signals' memory, which a narrow
-  spectral peak makes long.
+  often. With one recording, average non-overlapping time windows instead
+  (`expectation_type="time_tapers"`, with `time_window_step` at least
+  `time_window_duration`), which makes each window a unit; that holds only for
+  windows longer than the signals' memory, which a narrow spectral peak makes
+  long. Windows that overlap, even by half, have correlated coefficients, so
+  every window of a trial shares its draw, and one recording in overlapping
+  windows is refused. `Connectivity.from_transform` records whether the
+  windows overlap; for coefficients passed directly, pass
+  `time_bins_are_disjoint=True` if they do not.
 
 Here signal 1 is signal 0 delayed by 3 samples (6 ms) and signal 2 is
 independent:

@@ -3080,8 +3080,9 @@ class Connectivity:
             ``half_bandwidth`` is invalid, or ``kind="phase_rotation"`` has no
             half bandwidth; if the expectation does not average what ``kind``
             randomizes (trials for ``"trial_shuffle"``, units otherwise) or
-            there are fewer than 2 of them (one trial and no averaged time
-            windows, for ``"phase_rotation"`` and ``"conjugation"``); if
+            there are fewer than 2 of them (one trial and no averaged
+            non-overlapping time windows, for ``"phase_rotation"`` and
+            ``"conjugation"``); if
             ``"trial_shuffle"`` meets observation weights that differ between
             trials; if ``"phase_rotation"`` meets one-sided coefficients, or a
             measure that does not return one value per frequency, or a
@@ -3120,25 +3121,32 @@ class Connectivity:
 
         **Units.** ``"phase_rotation"`` and ``"conjugation"`` draw one phase
         or flip for each unit the expectation averages: each trial, and each
-        time window too when the expectation averages time and
-        ``time_bins_are_independent`` is ``True``. Every taper of a unit
-        shares its draw. A trial's tapers are uncorrelated only where the
-        spectrum is flat across ``half_bandwidth``; near a spectral peak or on
-        a steep spectrum they are correlated, and randomizing each taper
-        separately would destroy that correlation and make the null too narrow
-        (see Measured sizes). Randomizing whole units keeps it, which makes the
-        test exact for independent units of stationary Gaussian signals,
-        whatever their spectrum. With a single unit (one trial, no averaged
-        windows) whole-unit randomization cannot change the magnitude of a
+        time window too when the expectation averages time and the windows do
+        not overlap (:attr:`time_bins_are_disjoint`, which
+        :meth:`from_transform` reads from a ``Multitaper`` or
+        ``ShortTimeFourierTransform``, and which is ``False`` for coefficients
+        passed directly unless stated). Windows that overlap, even by half,
+        share samples and so have correlated coefficients; all the windows of
+        a trial then share its draw, and a single recording with overlapping
+        windows is one unit. Every taper of a unit shares its draw too. A
+        trial's tapers are uncorrelated only where the spectrum is flat across
+        ``half_bandwidth``; near a spectral peak or on a steep spectrum they
+        are correlated, and randomizing each taper separately would destroy
+        that correlation and make the null too narrow (see Measured sizes).
+        Randomizing whole units keeps it, so for independent units of
+        stationary Gaussian signals the test holds its size whatever their
+        spectrum (for ``"phase_rotation"``, away from 0 Hz and Nyquist). With
+        a single unit (one trial, no averaged non-overlapping windows)
+        whole-unit randomization cannot change the magnitude of a
         cross-spectrum (rotation) or does no more than conjugate the whole
-        spectrum (conjugation), so it is refused: average over time windows (an
-        ``expectation_type`` that includes ``"time"``), record more trials, or
-        use ``"trial_shuffle"`` where there are trials. Windows of one
-        recording are independent units only if they are longer than the
-        signals' memory: a narrow spectral peak has a long one (see Measured
-        sizes). The axes the expectation keeps (each time window by default)
-        share the draws, so the surrogates keep the dependence between them
-        that the family maximum depends on.
+        spectrum (conjugation), so it is refused: average non-overlapping time
+        windows (an ``expectation_type`` that includes ``"time"``), record
+        more trials, or use ``"trial_shuffle"`` where there are trials.
+        Windows of one recording are independent units only if they are
+        longer than the signals' memory: a narrow spectral peak has a long one
+        (see Measured sizes). The axes the expectation keeps (each time window
+        by default) share the draws, so the surrogates keep the dependence
+        between them that the family maximum depends on.
 
         **Shared stimulus-locked responses.** ``"trial_shuffle"`` keeps each
         signal's response in every surrogate, so a response common to the
@@ -3221,6 +3229,18 @@ class Connectivity:
           4.3-4.8% for the steep spectrum and 5.3-5.4% for a broadband one
           (AR(1), coefficient 0.5), but 13% (rotation) and 10% (conjugation)
           around the narrow peak, whose memory (about 0.8 s) spans the windows.
+        - Overlapping windows, two independent AR(1) signals (coefficient
+          0.5) at 128 Hz, magnitude-squared coherence at every tested
+          frequency, 300 datasets. One 10 s recording in 1 s windows with NW=4
+          every 0.5 s (19 windows, ``expectation_type="time_tapers"``):
+          randomizing each window separately rejected 19.5% (rotation) and
+          15.0% (conjugation), against 4.5% and 5.0% for ten non-overlapping
+          windows of the same data. With 5 trials of 4 s in the same windows
+          (``expectation_type="time_trials_tapers"``, 7 windows each): 17.7%
+          and 13.3% per window, against 5.3% and 1.7% with one draw per
+          trial, the unit used for windows that overlap (5 trials allow only
+          16 distinct conjugations, so those p-values are coarse and
+          conservative).
         - Family-wise error under the global null, 2100 datasets of the
           trial-shuffle design with every tested frequency and pair one
           family: some
@@ -3492,7 +3512,8 @@ class Connectivity:
 
         For ``trial_shuffle`` the trials (axis 1). For ``phase_rotation`` and
         ``conjugation`` the averaged trials, and the averaged time windows
-        unless ``time_bins_are_independent`` is False; never the tapers.
+        when they do not overlap (``time_bins_are_disjoint``); never the
+        tapers.
         Coefficients sharing a unit (every taper of a trial) get the same phase
         or flip.
 
@@ -3500,7 +3521,7 @@ class Connectivity:
         ------
         ValueError
             If there are fewer than 2 units (one trial and no averaged
-            independent time windows).
+            non-overlapping time windows).
         """
         shape = self._fourier_coefficients.shape
         averaged = self._expectation_axes
@@ -3512,19 +3533,21 @@ class Connectivity:
                     f"trials; this Connectivity has expectation_type="
                     f"{self.expectation_type!r}. Build it with "
                     "expectation_type='trials_tapers' (the default), or average "
-                    "independent time windows (e.g. expectation_type='time_tapers') "
-                    "and use kind='phase_rotation' or 'conjugation', which randomize "
-                    "each averaged window."
+                    "non-overlapping time windows (e.g. "
+                    "expectation_type='time_tapers') and use kind='phase_rotation' "
+                    "or 'conjugation', which randomize each averaged window."
                 )
                 raise ValueError(msg)
             n_trials = shape[1]
             if n_trials < 2:
                 msg = (
                     "surrogate_test(kind='trial_shuffle') needs at least 2 trials to "
-                    f"shuffle; got {n_trials}. With one trial, average independent "
-                    "time windows (e.g. expectation_type='time_tapers') and use "
+                    f"shuffle; got {n_trials}. With one trial, average "
+                    "non-overlapping time windows (e.g. expectation_type='time_tapers' "
+                    "with time_window_step >= time_window_duration) and use "
                     "kind='phase_rotation' (independence) or kind='conjugation' (no "
-                    "lagged interaction)."
+                    "lagged interaction); windows that overlap are not independent "
+                    "units."
                 )
                 raise ValueError(msg)
             weights = self._observation_weights
@@ -3552,46 +3575,23 @@ class Connectivity:
                 )
             return (1,)
         # Whole trials, and the time windows when the expectation averages
-        # independent ones; never the tapers of one trial (see Notes).
+        # windows that do not overlap; never the tapers of one trial (see Notes).
         unit_axes = tuple(
             axis
             for axis in averaged
-            if axis == 1 or (axis == 0 and self._time_bins_are_independent)
+            if axis == 1 or (axis == 0 and self._time_bins_are_disjoint)
         )
         n_units = int(np.prod([shape[axis] for axis in unit_axes]))
         if n_units < 2:
-            msg = (
-                f"surrogate_test(kind={kind!r}) randomizes whole independent units "
-                "(each trial, and each time window when the expectation averages "
-                f"independent windows), and this Connectivity has {n_units} "
-                f"({shape[1]} trial(s), {shape[0]} time window(s), expectation_type="
-                f"{self.expectation_type!r}"
-            )
-            if 0 in averaged and not self._time_bins_are_independent:
-                msg += ", time_bins_are_independent is False"
-            msg += (
-                "); it needs at least 2. Randomizing the tapers of one trial "
-                "separately is not offered: their coefficients are correlated "
-                "wherever the spectrum is not flat across the half bandwidth, and "
-                "for independent signals with one trial (1 s, 7 tapers, 99 "
-                "surrogates, nominal 5%) it rejected 57% (phase rotation) and 28% "
-                "(conjugation) of tests around a narrow spectral peak, and 19% and "
-                "10% just past the half bandwidth of a steep 1/f**2 spectrum. "
-                "Average over time windows (an expectation_type that includes "
-                "'time', e.g. 'time_tapers' for one recording, with windows that "
-                "do not overlap and are longer than the signals' memory, which a "
-                "narrow spectral peak makes long), record more trials, or, with 2 "
-                "or more trials, use an expectation that averages them "
-                "(kind='trial_shuffle' then works too)."
-            )
-            raise ValueError(msg)
+            raise ValueError(self._single_unit_message(kind, n_units))
         if kind == "conjugation" and n_units - 1 < math.log2(n_surrogates):
             # Flipping every unit conjugates the whole spectrum, which leaves
             # the measures symmetric under conjugation unchanged.
             n_distinct = 2 ** (n_units - 1)
             warnings.warn(
                 f"surrogate_test(kind='conjugation'): only {n_units} independent "
-                f"units (trials and averaged time windows), so conjugation can make "
+                f"units (trials and averaged non-overlapping time windows), so "
+                f"conjugation can make "
                 f"only 2**{n_units - 1} = {n_distinct} distinct surrogates (fewer "
                 f"than n_surrogates={n_surrogates}): p-values cannot go below about "
                 f"1/{n_distinct}. They remain valid. Use more trials, or average "
@@ -3600,6 +3600,67 @@ class Connectivity:
                 stacklevel=stacklevel_outside_package(),
             )
         return unit_axes
+
+    def _single_unit_message(self, kind: str, n_units: int) -> str:
+        """Why ``kind`` cannot randomize these coefficients, and what would let it.
+
+        The remedies follow what the expectation already averages: windows
+        that overlap are told to stop overlapping, not to be averaged.
+        """
+        n_windows, n_trials = self._fourier_coefficients.shape[:2]
+        averaged = self._expectation_axes
+        msg = (
+            f"surrogate_test(kind={kind!r}) randomizes whole independent units "
+            "(each trial, and each time window when the expectation averages "
+            f"windows that do not overlap), and this Connectivity has {n_units} "
+            f"({n_trials} trial(s), {n_windows} time window(s), expectation_type="
+            f"{self.expectation_type!r}); it needs at least 2."
+        )
+        windows_overlap = 0 in averaged and n_windows > 1
+        if windows_overlap:
+            msg += (
+                " Its time windows are averaged but may overlap "
+                "(time_bins_are_disjoint is False), and windows that overlap are "
+                "not independent units: their coefficients are correlated, and "
+                "randomizing each 50%-overlapping window separately rejected "
+                "independent signals in 19.5% (phase rotation) and 15.0% "
+                "(conjugation) of tests at nominal 5% (one 10 s recording, 1 s "
+                "windows, 99 surrogates)."
+            )
+        msg += (
+            " Randomizing the tapers of one trial separately is not offered: "
+            "their coefficients are correlated wherever the spectrum is not "
+            "flat across the half bandwidth, and for independent signals with "
+            "one trial (1 s, 7 tapers, 99 surrogates, nominal 5%) it rejected "
+            "57% (phase rotation) and 28% (conjugation) of tests around a "
+            "narrow spectral peak, and 19% and 10% just past the half "
+            "bandwidth of a steep 1/f**2 spectrum."
+        )
+        if windows_overlap:
+            windows_remedy = (
+                "use non-overlapping windows (a Multitaper or "
+                "ShortTimeFourierTransform with time_window_step >= "
+                "time_window_duration; for coefficients passed directly, "
+                "time_bins_are_disjoint=True says their windows do not overlap)"
+            )
+        elif 0 in averaged:
+            windows_remedy = (
+                "split the recording into more non-overlapping time windows, "
+                "each longer than the signals' memory"
+            )
+        else:
+            windows_remedy = (
+                "average non-overlapping time windows (an expectation_type that "
+                "includes 'time', e.g. 'time_tapers' for one recording, with "
+                "windows longer than the signals' memory, which a narrow spectral "
+                "peak makes long)"
+            )
+        trials_remedy = (
+            "use an expectation that averages the trials (kind='trial_shuffle' then works too)"
+            if n_trials > 1
+            else "record more trials (kind='trial_shuffle' then works too)"
+        )
+        return f"{msg} To get 2 or more units, {windows_remedy}, or {trials_remedy}."
 
     def _surrogate_coefficients(
         self,
