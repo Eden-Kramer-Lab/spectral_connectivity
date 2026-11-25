@@ -69,7 +69,7 @@ def _connectivities(series, n_trials, sampling_frequency, nw, **connectivity_kwa
     coefficients = to_host(multitaper.fft())
     n_replicates = coefficients.shape[1] // n_trials
     coefficients = coefficients.reshape(n_replicates, 1, n_trials, *coefficients.shape[2:])
-    frequencies = np.fft.fftfreq(coefficients.shape[4], 1 / sampling_frequency)
+    frequencies = to_host(multitaper.frequencies)
     connectivity_kwargs.setdefault("half_bandwidth", multitaper.half_bandwidth)
     return [
         Connectivity(replicate, frequencies=frequencies, **connectivity_kwargs)
@@ -613,7 +613,7 @@ def steep_one_recording():
         series, sampling_frequency=128, time_halfbandwidth_product=4, time_window_duration=1.0
     )
     coefficients = to_host(multitaper.fft())  # (10, 400, 7, 128, 2)
-    frequencies = np.fft.fftfreq(128, 1 / 128)
+    frequencies = to_host(multitaper.frequencies)
     return [
         Connectivity(
             coefficients[:, [replicate]],
