@@ -21,22 +21,20 @@ code path it checks.
 import dataclasses
 import inspect
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pytest
 import scipy.stats
-from scipy.signal.windows import dpss
 
 from spectral_connectivity import (
     Connectivity,
     Multitaper,
     list_measures,
 )
-from spectral_connectivity.simulate import simulate_lagged_broadband
 from spectral_connectivity.statistics import coherence_significance_pvalue
 from tests._artifact_helpers import quietly, without_noisy_diagonal
 from tests._backend_helpers import ON_GPU, to_host
+from tests._mne_helpers import MNE_TRANSFORMS, mne_epochs, mne_tapers
 from tests.reference._mne_measures import MEASURES as MNE_MEASURES
 
 SAMPLING_FREQUENCY = 200.0
@@ -541,30 +539,8 @@ def test_coherence_pvalues_follow_the_exact_null_at_each_kept_count(
     assert raw.mean() - alpha > 4 * limit
 
 
-_MNE_REFERENCE = Path(__file__).parent / "reference" / "mne_connectivity_reference.npz"
-_MNE_TRANSFORMS = {"identity": np.asarray, "sqrt": np.sqrt, "abs": np.abs}
 # Pairwise measures only; psi and cacoh take band or group arguments.
 _MNE_PAIRWISE = [name for name in MNE_MEASURES if name not in ("psi", "cacoh")]
-
-
-def _mne_tapers(n_time_samples, time_halfbandwidth_product):
-    """mne-connectivity's periodic, low-bias DPSS weighted by sqrt(eigenvalue)
-    (as in tests/test_cross_package.py)."""
-    tapers, eigenvalues = dpss(
-        n_time_samples,
-        time_halfbandwidth_product,
-        int(2 * time_halfbandwidth_product),
-        sym=False,
-        return_ratios=True,
-    )
-    keep = eigenvalues > 0.9
-    return (tapers[keep] * np.sqrt(eigenvalues[keep])[:, np.newaxis]).T
-
-
-@pytest.fixture(scope="module")
-def mne_reference():
-    with np.load(_MNE_REFERENCE) as reference:
-        return {key: reference[key] for key in reference.files}
 
 
 @pytest.fixture(scope="module")
@@ -574,13 +550,7 @@ def mne_epochs_with_corrupted_trials(mne_reference):
     sample; the second holds clean data in every trial, so the corrupted
     trials are dropped in the first window only."""
     n_time = int(mne_reference["n_time_samples"])
-    epochs = simulate_lagged_broadband(
-        mne_reference["lags"],
-        float(mne_reference["noise_level"]),
-        n_time,
-        n_trials=int(mne_reference["n_trials"]),
-        random_state=int(mne_reference["seed"]),
-    )  # (n_time, n_trials, n_signals)
+    epochs = mne_epochs(mne_reference)  # (n_time, n_trials, n_signals)
     rng = np.random.default_rng(40)
     n_recorded = epochs.shape[1]
     corrupted = [0, 7, 8, 20, n_recorded + 4]  # positions in the combined trials
@@ -612,7 +582,7 @@ def test_masking_corrupted_trials_gives_mne_connectivitys_outputs(
         time_series,
         sampling_frequency=float(mne_reference["sampling_frequency"]),
         time_halfbandwidth_product=time_halfbandwidth_product,
-        tapers=_mne_tapers(n_time, time_halfbandwidth_product),
+        tapers=mne_tapers(n_time, time_halfbandwidth_product),
         n_time_samples_per_window=n_time,
         artifact_samples=artifacts,
     )
@@ -625,7 +595,7 @@ def test_masking_corrupted_trials_gives_mne_connectivitys_outputs(
     seeds, targets = mne_reference["seeds"], mne_reference["targets"]
     ours = quietly(getattr(connectivity, method))[0][frequency_index][:, seeds, targets].T
     np.testing.assert_allclose(
-        _MNE_TRANSFORMS[transform_name](ours), mne_reference[measure], rtol=0, atol=atol
+        MNE_TRANSFORMS[transform_name](ours), mne_reference[measure], rtol=0, atol=atol
     )
 
 
