@@ -576,27 +576,37 @@ def test_phase_rotation_null_matches_an_independent_rotation(three_trials):
 # --------------------------------------------------------------------------
 
 
+_PEAKS = (12, 24, 36, 48)
+# Within 3 Hz of each peak, where the spectrum changes most across +/- W.
+_PEAK_BANDS = np.concatenate([np.arange(peak - 3, peak + 4) for peak in _PEAKS])
+
+
 @pytest.fixture(scope="module")
 def narrowband_independent():
-    """300 replicates of 2 independent AR(2) signals with a sharp 20 Hz peak
-    (pole radius 0.99, about 0.4 Hz wide against 2W = 8 Hz), 10 trials, 1 s
-    at 128 Hz, NW=4 (7 tapers). Near the peak a trial's 7 eigencoefficients
-    are strongly correlated."""
+    """300 replicates of 2 independent signals, each the sum of 4 independent
+    AR(2) series with sharp peaks at 12, 24, 36 and 48 Hz (pole radius 0.99,
+    about 0.4 Hz wide against 2W = 8 Hz), 10 trials, 1 s at 128 Hz, NW=4 (7
+    tapers). Near each peak a trial's 7 eigencoefficients are strongly
+    correlated. Each peak gives an almost independent test, whereas the
+    frequencies around one peak share its coefficients: with one peak the
+    replicate limit at alpha=0.05 was about 0.06, so a size of 10% would
+    have passed, and with four it is about 0.03."""
     rng = np.random.default_rng(500)
-    return _connectivities(_ar2(rng, 128, 300 * 10, 2, 20, 0.99, 128), 10, 128, 4)
+    series = sum(_ar2(rng, 128, 300 * 10, 2, peak, 0.99, 128) for peak in _PEAKS)
+    return _connectivities(series, 10, 128, 4)
 
 
 def _check_narrowband_size(connectivities, kind):
     p_values = _p_values(connectivities, "magnitude_squared_coherence", kind, 70_000)
-    _assert_size(p_values, kind, band=np.s_[17:24], levels=(0.05, 0.25))
+    _assert_size(p_values, kind, band=_PEAK_BANDS, levels=(0.05, 0.25))
 
 
 @pytest.mark.parametrize("kind", ["trial_shuffle", "phase_rotation", "conjugation"])
 def test_size_for_independent_narrowband_signals(narrowband_independent, kind):
     """Independent signals are in every kind's null. Each kind moves whole
     trials, so the correlation between a trial's tapers is kept in every
-    surrogate (randomizing each taper separately rejected 41% with rotation
-    and 27% with conjugation here, 99 surrogates)."""
+    surrogate (randomizing each taper separately rejected 36% with rotation
+    and 24% with conjugation here, 150 replicates, 19 surrogates)."""
     _check_narrowband_size(narrowband_independent, kind)
 
 
