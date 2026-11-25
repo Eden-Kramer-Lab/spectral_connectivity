@@ -52,6 +52,16 @@ def _expected_n_kept(eigenvalues, n_tapers):
     return n_kept if n_kept >= 2 else 0
 
 
+def _dense_tapers(valid, time_halfbandwidth_product, n_tapers):
+    """The dense tapers the low-bias rule keeps, zero at the gaps, ``(n_time,
+    n_kept)``."""
+    eigenvalues, eigenvectors = dense_slepians(valid, time_halfbandwidth_product)
+    n_kept = _expected_n_kept(eigenvalues, n_tapers)
+    tapers = np.zeros((valid.size, n_kept))
+    tapers[valid] = eigenvectors[:, :n_kept]
+    return tapers
+
+
 def _groups(eigenvalues):
     """Slices of decreasing ``eigenvalues`` closer than ``GROUP_GAP`` in a chain."""
     starts = np.flatnonzero(np.concatenate([[True], -np.diff(eigenvalues) > GROUP_GAP]))
@@ -72,8 +82,10 @@ def _assert_same_spans(tapers, eigenvalues, eigenvectors, atol):
         # Each taper lies in the group's eigenspace ...
         np.testing.assert_allclose(span @ (span.T @ members), members, atol=atol)
         if group.stop <= k:
-            # ... and the group's tapers span all of it.
-            np.testing.assert_allclose(members @ members.T, span @ span.T, atol=atol)
+            # ... and the group's tapers span all of it: their coordinates in
+            # its orthonormal basis are orthonormal too.
+            overlap = span.T @ members
+            np.testing.assert_allclose(overlap @ overlap.T, np.eye(len(overlap)), atol=atol)
 
 
 def _gaps(n_time, rng, max_gaps=3, max_fraction=0.125):
@@ -192,13 +204,14 @@ def test_each_trial_window_uses_its_own_patterns_tapers(gapped_recording):
     assert (n_kept == 0).sum() >= 3  # some patterns are dropped
 
 
-def _band_energy_fraction(taper, half_bandwidth, n_nodes=512):
-    """``int_{-W}^{W} |V(f)|^2 df / sum v^2`` by Gauss-Legendre quadrature of
-    the taper's discrete-time Fourier transform ``V``."""
+def _band_energy_fractions(tapers, half_bandwidth, n_nodes=512):
+    """``int_{-W}^{W} |V(f)|^2 df / sum v^2`` of each taper, ``tapers``
+    ``(n_time, k)``, by Gauss-Legendre quadrature of its discrete-time
+    Fourier transform ``V``."""
     nodes, weights = leggauss(n_nodes)
     frequencies = half_bandwidth * nodes
-    transform = np.exp(-2j * np.pi * frequencies[:, None] * np.arange(taper.size)) @ taper
-    return half_bandwidth * np.sum(weights * np.abs(transform) ** 2) / np.sum(taper**2)
+    transform = np.exp(-2j * np.pi * frequencies[:, None] * np.arange(len(tapers))) @ tapers
+    return half_bandwidth * (weights @ np.abs(transform) ** 2) / np.sum(tapers**2, axis=0)
 
 
 @pytest.mark.parametrize(("n_time", "nw"), [(64, 3), (300, 4), (1000, 8)])
@@ -215,7 +228,7 @@ def test_each_concentration_is_its_tapers_energy_fraction_in_the_band(n_time, nw
         tapers, concentrations = _missing_data_slepian_tapers(
             valid, nw, n_tapers, dpss(n_time, nw, n_tapers).T
         )
-        integrated = np.array([_band_energy_fraction(t, nw / n_time) for t in tapers.T])
+        integrated = _band_energy_fractions(tapers, nw / n_time)
         eigenvalues, _ = dense_slepians(valid, nw)
         for group in _groups(eigenvalues):
             if group.start >= n_tapers:
@@ -261,14 +274,9 @@ def _detrending_matrix(valid, detrend_type):
     """``M`` ``(n_valid, n_valid)``: the valid samples' residuals from their
     least-squares constant or line are ``M @ x[valid]``."""
     times = np.flatnonzero(valid).astype(float)
-    columns = {
-        None: [],
-        "constant": [np.ones_like(times)],
-        "linear": [np.ones_like(times), times],
-    }
-    basis = np.array(columns[detrend_type]).reshape(-1, times.size).T
-    if basis.shape[1] == 0:
+    if detrend_type is None:
         return np.eye(times.size)
+    basis = np.vander(times, {"constant": 1, "linear": 2}[detrend_type])
     return np.eye(times.size) - basis @ np.linalg.solve(basis.T @ basis, basis.T)
 
 
@@ -302,10 +310,7 @@ def test_the_expected_spectrum_with_valid_samples_is_the_brute_force_one(detrend
     n_time, nw = 64, 3
     valid = np.ones(n_time, dtype=bool)
     valid[[10, 11, 12, 40, 41, 42, 43]] = False
-    eigenvalues, eigenvectors = dense_slepians(valid, nw)
-    n_kept = _expected_n_kept(eigenvalues, 5)
-    tapers = np.zeros((n_time, n_kept))
-    tapers[valid] = eigenvectors[:, :n_kept]
+    tapers = _dense_tapers(valid, nw, 5)
     expected = _expected_tapered_cross_spectrum(
         VAR_COEFFICIENTS, VAR_NOISE, tapers, n_time, detrend_type, valid=valid
     )
@@ -484,11 +489,9 @@ def test_the_cross_spectrum_averages_to_its_exact_expectation():
     frequencies = np.arange(3, 29)  # away from 0 Hz, which detrending removes
     deviations = np.zeros((n_replicates, 4))
     for trial in range(n_trials):
-        eigenvalues, eigenvectors = dense_slepians(valid[trial], nw)
-        kept = _expected_n_kept(eigenvalues, 5)
+        tapers = _dense_tapers(valid[trial], nw, 5)
+        kept = tapers.shape[1]
         assert (n_kept[:, trial] == kept).all()
-        tapers = np.zeros((n_time, kept))
-        tapers[valid[trial]] = eigenvectors[:, :kept]
         expected = _brute_force_expected_cross_spectrum(
             valid[trial], tapers, n_time, "constant"
         )[frequencies]
@@ -498,18 +501,16 @@ def test_the_cross_spectrum_averages_to_its_exact_expectation():
         deviation = (estimate - expected) / np.array(
             [[expected[:, 0, 0].real, scale], [scale, expected[:, 1, 1].real]]
         ).transpose(2, 0, 1)
-        deviations += (
-            np.stack(
-                [
-                    deviation[:, :, 0, 0].real.mean(axis=1),
-                    deviation[:, :, 1, 1].real.mean(axis=1),
-                    deviation[:, :, 0, 1].real.mean(axis=1),
-                    deviation[:, :, 0, 1].imag.mean(axis=1),
-                ],
-                axis=1,
-            )
-            / n_trials
-        )
+        components = np.stack(
+            [
+                deviation[..., 0, 0].real,
+                deviation[..., 1, 1].real,
+                deviation[..., 0, 1].real,
+                deviation[..., 0, 1].imag,
+            ],
+            axis=-1,
+        )  # (n_replicates, n_frequencies, 4)
+        deviations += components.mean(axis=1) / n_trials
     mean = deviations.mean(axis=0)
     limit = 5 * deviations.std(axis=0, ddof=1) / np.sqrt(n_replicates)
     assert (np.abs(mean) < limit).all(), (mean, limit)
