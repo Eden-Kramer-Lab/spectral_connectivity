@@ -26,37 +26,23 @@ tapers are compared by the projector onto each group's span and estimates
 by sums over tapers that do not depend on it.
 """
 
-import warnings
-
 import numpy as np
 import pytest
 from numpy.polynomial.legendre import leggauss
-from scipy.linalg import eigh
 from scipy.signal.windows import dpss
 
 from spectral_connectivity import Connectivity, Multitaper
 from spectral_connectivity.transforms import _missing_data_slepian_tapers
+from tests._artifact_helpers import quietly
 from tests._backend_helpers import to_host
 from tests._expected_spectrum import _expected_tapered_cross_spectrum
+from tests._missing_data_helpers import dense_slepians, valid_outside_gaps
 from tests._var_oracle import _analytic_var
 
 SAMPLING_FREQUENCY = 200.0
 THRESHOLD = 0.9  # the low-bias rule: a taper is kept above this concentration
 # Concentrations closer than this are one group, whose span alone is compared.
 GROUP_GAP = 1e-6
-
-
-def _dense_slepians(valid, time_halfbandwidth_product):
-    """Every eigenpair, in decreasing order, of ``sin(2 pi W (t - s)) / (pi (t -
-    s))`` (``2 W`` at ``t = s``) on the valid sample times ``t, s``."""
-    half_bandwidth = time_halfbandwidth_product / valid.size
-    times = np.flatnonzero(valid).astype(float)
-    lag = times[:, None] - times[None, :]
-    with np.errstate(invalid="ignore", divide="ignore"):
-        kernel = np.sin(2 * np.pi * half_bandwidth * lag) / (np.pi * lag)
-    kernel[lag == 0] = 2 * half_bandwidth
-    eigenvalues, eigenvectors = eigh(kernel)
-    return eigenvalues[::-1], eigenvectors[:, ::-1]
 
 
 def _expected_n_kept(eigenvalues, n_tapers):
@@ -116,7 +102,7 @@ def test_the_tapers_are_the_dense_eigenvectors_of_the_restricted_sinc_kernel(n_t
     for _ in range(6):
         valid = _gaps(n_time, rng)
         tapers, concentrations = _missing_data_slepian_tapers(valid, nw, n_tapers, orientation)
-        eigenvalues, eigenvectors = _dense_slepians(valid, nw)
+        eigenvalues, eigenvectors = dense_slepians(valid, nw)
         np.testing.assert_allclose(concentrations, eigenvalues[:n_tapers], atol=1e-12)
         assert (tapers[~valid] == 0).all()
         _assert_same_spans(tapers[valid], eigenvalues, eigenvectors, atol=1e-8)
@@ -154,17 +140,16 @@ def gapped_recording():
 
 
 def _transform(time_series, artifacts, n_time, nw=3, **kwargs):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        return Multitaper(
-            time_series,
-            SAMPLING_FREQUENCY,
-            n_time_samples_per_window=n_time,
-            time_halfbandwidth_product=nw,
-            artifact_samples=artifacts,
-            artifact_handling="missing_data_tapers",
-            **kwargs,
-        )
+    return quietly(
+        Multitaper,
+        time_series,
+        SAMPLING_FREQUENCY,
+        n_time_samples_per_window=n_time,
+        time_halfbandwidth_product=nw,
+        artifact_samples=artifacts,
+        artifact_handling="missing_data_tapers",
+        **kwargs,
+    )
 
 
 def _windows(array, n_time):
@@ -195,7 +180,7 @@ def test_each_trial_window_uses_its_own_patterns_tapers(gapped_recording):
             assert n_kept[window, trial] == n_tapers
             np.testing.assert_allclose(tapers, reference, atol=1e-12)
             continue
-        eigenvalues, eigenvectors = _dense_slepians(valid, 3)
+        eigenvalues, eigenvectors = dense_slepians(valid, 3)
         expected = _expected_n_kept(eigenvalues, n_tapers)
         assert n_kept[window, trial] == expected, (window, trial)
         if expected:
@@ -231,7 +216,7 @@ def test_each_concentration_is_its_tapers_energy_fraction_in_the_band(n_time, nw
             valid, nw, n_tapers, dpss(n_time, nw, n_tapers).T
         )
         integrated = np.array([_band_energy_fraction(t, nw / n_time) for t in tapers.T])
-        eigenvalues, _ = _dense_slepians(valid, nw)
+        eigenvalues, _ = dense_slepians(valid, nw)
         for group in _groups(eigenvalues):
             if group.start >= n_tapers:
                 break
@@ -317,7 +302,7 @@ def test_the_expected_spectrum_with_valid_samples_is_the_brute_force_one(detrend
     n_time, nw = 64, 3
     valid = np.ones(n_time, dtype=bool)
     valid[[10, 11, 12, 40, 41, 42, 43]] = False
-    eigenvalues, eigenvectors = _dense_slepians(valid, nw)
+    eigenvalues, eigenvectors = dense_slepians(valid, nw)
     n_kept = _expected_n_kept(eigenvalues, 5)
     tapers = np.zeros((n_time, n_kept))
     tapers[valid] = eigenvectors[:, :n_kept]
@@ -343,7 +328,7 @@ def _independent_estimate(window, valid, nw, n_tapers, n_fft, detrend_type, weig
     d_k^2 |J_k|^2 / sum_k d_k^2``, ``s2`` the residuals' variance.
     """
     times = np.flatnonzero(valid)
-    eigenvalues, eigenvectors = _dense_slepians(valid, nw)
+    eigenvalues, eigenvectors = dense_slepians(valid, nw)
     n_kept = _expected_n_kept(eigenvalues, n_tapers)
     if n_kept == 0:
         return None
@@ -436,7 +421,7 @@ def test_the_power_averages_the_kept_tapers_of_the_kept_trial_windows(gapped_rec
         total, count = 0, 0
         for trial in range(windows.shape[1]):
             valid = ~patterns[window, trial]
-            eigenvalues, _ = _dense_slepians(valid, 3)
+            eigenvalues, _ = dense_slepians(valid, 3)
             n_kept = _expected_n_kept(eigenvalues, multitaper.n_tapers)
             estimate = _independent_estimate(
                 np.nan_to_num(windows[window, trial]),
@@ -491,10 +476,7 @@ def test_the_cross_spectrum_averages_to_its_exact_expectation():
         .swapaxes(1, 2)
         .reshape(n_replicates * n_time, n_trials, 2)
     )
-    valid = np.ones((n_trials, n_time), dtype=bool)
-    for trial, gaps in MC_GAPS.items():
-        for start, length in gaps:
-            valid[trial, start : start + length] = False
+    valid = np.array([valid_outside_gaps(MC_GAPS.get(t, []), n_time) for t in range(n_trials)])
     artifacts = np.tile(~valid.T, (n_replicates, 1))
     multitaper = _transform(time_series, artifacts, n_time, nw=nw)
     coefficients = to_host(multitaper.fft()) * np.sqrt(SAMPLING_FREQUENCY)
@@ -502,7 +484,7 @@ def test_the_cross_spectrum_averages_to_its_exact_expectation():
     frequencies = np.arange(3, 29)  # away from 0 Hz, which detrending removes
     deviations = np.zeros((n_replicates, 4))
     for trial in range(n_trials):
-        eigenvalues, eigenvectors = _dense_slepians(valid[trial], nw)
+        eigenvalues, eigenvectors = dense_slepians(valid[trial], nw)
         kept = _expected_n_kept(eigenvalues, 5)
         assert (n_kept[:, trial] == kept).all()
         tapers = np.zeros((n_time, kept))

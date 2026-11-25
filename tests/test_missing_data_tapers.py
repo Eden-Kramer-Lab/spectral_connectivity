@@ -32,31 +32,11 @@ from spectral_connectivity.transforms import (
 from tests._artifact_helpers import COUNTING_MEASURES, quietly
 from tests._backend_helpers import to_device, to_host
 from tests._expected_spectrum import _DETREND_BASIS, _expected_tapered_cross_spectrum
+from tests._missing_data_helpers import dense_slepians, valid_outside_gaps
 
 SAMPLING_FREQUENCY = 200.0
 WINDOW = 64  # samples
 NW = 3  # five DPSS tapers, the last of concentration 0.947
-
-
-def _brute_force(valid, time_halfbandwidth_product):
-    """Every eigenpair of the sinc kernel on the valid sample times, in
-    decreasing order, from the kernel written out entry by entry."""
-    half_bandwidth = time_halfbandwidth_product / valid.size
-    times = np.flatnonzero(valid).astype(float)
-    lag = times[:, None] - times[None, :]
-    with np.errstate(invalid="ignore", divide="ignore"):
-        kernel = np.sin(2 * np.pi * half_bandwidth * lag) / (np.pi * lag)
-    kernel[lag == 0] = 2 * half_bandwidth
-    eigenvalues, eigenvectors = np.linalg.eigh(kernel)
-    return eigenvalues[::-1], eigenvectors[:, ::-1]
-
-
-def _valid(gaps, n_time=WINDOW):
-    """``True`` but in the ``(start, length)`` gaps."""
-    valid = np.ones(n_time, dtype=bool)
-    for start, length in gaps:
-        valid[start : start + length] = False
-    return valid
 
 
 # The warning that windows with artifacts were dropped all the same, which the
@@ -164,18 +144,18 @@ def test_each_taper_is_oriented_to_agree_with_its_dpss(gaps):
     """Distinct concentrations fix each taper up to sign (the oracle tests
     compare their spans with the brute-force eigenvectors); the sign is the
     one that agrees with the DPSS of the same order."""
-    valid = _valid(gaps)
+    valid = valid_outside_gaps(gaps, WINDOW)
     orientation = dpss(WINDOW, NW, 5).T
     tapers, _ = _missing_data_slepian_tapers(valid, NW, 5, orientation)
-    assert np.diff(_brute_force(valid, NW)[0][:6]).max() < -1e-5  # distinct
+    assert np.diff(dense_slepians(valid, NW)[0][:6]).max() < -1e-5  # distinct
     assert (np.sum(tapers * orientation, axis=0) > 0).all()
 
 
 def test_the_dense_fallback_of_a_short_window_is_the_brute_force_solution():
     """20 valid samples or fewer are solved densely, as ARPACK cannot."""
-    valid = _valid([(5, 4)], n_time=24)
+    valid = valid_outside_gaps([(5, 4)], 24)
     tapers, concentrations = _missing_data_slepian_tapers(valid, 2, 3, dpss(24, 2, 3).T)
-    eigenvalues, eigenvectors = _brute_force(valid, 2)
+    eigenvalues, eigenvectors = dense_slepians(valid, 2)
     np.testing.assert_allclose(concentrations, eigenvalues[:3], atol=1e-12)
     alignment = np.abs(np.sum(tapers[valid] * eigenvectors[:, :3], axis=0))
     np.testing.assert_allclose(alignment, 1, atol=1e-10)
@@ -190,8 +170,8 @@ def test_tapers_of_equal_concentration_do_not_depend_on_the_solver(monkeypatch):
 
     n_time, nw, n_tapers = 256, 8, 15
     reference = dpss(n_time, nw, n_tapers).T
-    valid = _valid([(40, 10), (150, 3)], n_time=n_time)
-    eigenvalues, _ = _brute_force(valid, nw)
+    valid = valid_outside_gaps([(40, 10), (150, 3)], n_time)
+    eigenvalues, _ = dense_slepians(valid, nw)
     assert (-np.diff(eigenvalues[:6])).min() < 1e-9  # the first two, 1.3e-10 apart
     sparse_tapers, sparse_concentrations = _missing_data_slepian_tapers(
         valid, nw, n_tapers, reference
@@ -222,7 +202,7 @@ def test_a_repeated_concentration_lanczos_misses_is_recovered(monkeypatch):
     n_time, nw, k = 256, 8, 15
     half_bandwidth = nw / n_time
     sinc = 2 * half_bandwidth * np.sinc(2 * half_bandwidth * np.arange(n_time))
-    indices = np.flatnonzero(_valid([(40, 10)], n_time=n_time))
+    indices = np.flatnonzero(valid_outside_gaps([(40, 10)], n_time))
     solve = transforms.scipy_eigsh
     calls = []
 
@@ -237,7 +217,7 @@ def test_a_repeated_concentration_lanczos_misses_is_recovered(monkeypatch):
     monkeypatch.setattr(transforms, "scipy_eigsh", missing_one)
     values, vectors = transforms._leading_eigenpairs(sinc, indices, k)
     assert calls[1:3] == [1, 1]  # found the missed one, then confirmed none is left
-    expected, _ = _brute_force(_valid([(40, 10)], n_time=n_time), nw)
+    expected, _ = dense_slepians(valid_outside_gaps([(40, 10)], n_time), nw)
     np.testing.assert_allclose(np.sort(values)[::-1], expected[:k], atol=1e-12)
     np.testing.assert_allclose(vectors.T @ vectors, np.eye(k), atol=1e-12)
 
@@ -336,7 +316,7 @@ def test_detrending_uses_the_valid_samples(detrend_type):
         scipy_detrend(windows, type=detrend_type),
         atol=1e-12,
     )
-    valid = _valid([(5, 6), (40, 10)])
+    valid = valid_outside_gaps([(5, 6), (40, 10)], WINDOW)
     detrended = to_host(
         _detrend_valid_samples(to_device(windows), to_device(valid), detrend_type)
     )
@@ -354,7 +334,7 @@ def test_a_short_gap_keeps_all_but_the_least_concentrated_taper():
     """A single missing sample in 64 already takes the fifth taper below 0.9
     (from 0.947); the other four stay well concentrated."""
     _, concentrations = _missing_data_slepian_tapers(
-        _valid([(32, 1)]), NW, 5, dpss(WINDOW, NW, 5).T
+        valid_outside_gaps([(32, 1)], WINDOW), NW, 5, dpss(WINDOW, NW, 5).T
     )
     assert (concentrations[:4] > 0.95).all()
     assert 0.85 < concentrations[4] < 0.9
@@ -374,7 +354,7 @@ def test_blanking_faster_than_the_bandwidth_caps_the_concentration(
     n_time = 128
     valid = np.resize(valid_pattern, n_time)
     assert 1 / len(valid_pattern) > 2 * 2 / n_time  # faster than 2W at NW = 2
-    eigenvalues, _ = _brute_force(valid, 2)
+    eigenvalues, _ = dense_slepians(valid, 2)
     assert eigenvalues[0] <= kept_fraction + 1e-12
     assert eigenvalues[0] > kept_fraction - 1e-3  # and the cap is reached
     artifacts = np.zeros((n_time, 2), dtype=bool)
@@ -404,7 +384,7 @@ def test_a_window_keeping_one_concentrated_taper_is_dropped():
     """50 of 128 samples missing at NW = 2 leaves exactly one taper above 0.9."""
     artifacts = np.zeros((128, 2), dtype=bool)
     artifacts[:50, 1] = True
-    eigenvalues, _ = _brute_force(~artifacts[:, 1], 2)
+    eigenvalues, _ = dense_slepians(~artifacts[:, 1], 2)
     assert eigenvalues[0] > 0.9 > eigenvalues[1]
     multitaper = _one_window(artifacts, seed=6)
     np.testing.assert_array_equal(to_host(multitaper.n_kept_tapers), [[3, 0]])
@@ -589,12 +569,12 @@ def test_lanczos_that_does_not_converge_falls_back_to_the_dense_solve(monkeypatc
         msg = "no convergence"
         raise ArpackNoConvergence(msg, np.empty(0), np.empty((0, 0)))
 
-    valid = _valid([(20, 4)])
+    valid = valid_outside_gaps([(20, 4)], WINDOW)
     reference = dpss(WINDOW, NW, 5).T
     converged = _missing_data_slepian_tapers(valid, NW, 5, reference)
     monkeypatch.setattr(transforms, "scipy_eigsh", no_convergence)
     tapers, concentrations = _missing_data_slepian_tapers(valid, NW, 5, reference)
-    eigenvalues, _ = _brute_force(valid, NW)
+    eigenvalues, _ = dense_slepians(valid, NW)
     np.testing.assert_allclose(concentrations, eigenvalues[:5], atol=1e-12)
     np.testing.assert_allclose(tapers, converged[0], atol=1e-10)
 
@@ -645,7 +625,7 @@ MC_FREQUENCIES = [6, 9, 12, 15, 18, 21, 24, 27]
 def mc_artifacts():
     window = np.zeros((WINDOW, MC_TRIALS), dtype=bool)
     for trial, gaps in GAPS.items():
-        window[:, trial] = ~_valid(gaps)
+        window[:, trial] = ~valid_outside_gaps(gaps, WINDOW)
     return np.tile(window, (N_REPLICATES, 1))
 
 
@@ -795,7 +775,7 @@ def test_ar_power_averages_to_its_tapers_expectation_near_the_gapless_one(mc_art
     gapless = _expected_tapered_cross_spectrum(ar, np.eye(1), reference, WINDOW, "constant")
     expected = MC_TAPER_COUNTS[0] * gapless
     for trial, gaps in GAPS.items():
-        valid = _valid(gaps)
+        valid = valid_outside_gaps(gaps, WINDOW)
         tapers, _ = _missing_data_slepian_tapers(valid, NW, 5, reference)
         n_kept = MC_TAPER_COUNTS[trial]
         expected = expected + n_kept * _expected_tapered_cross_spectrum(
