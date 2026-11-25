@@ -1069,6 +1069,32 @@ def test_an_all_pass_rotation_of_the_factor_winds_around_zero(n_fft):
     np.testing.assert_allclose(winding, [0, 0, 1], atol=1e-12)
 
 
+def test_winding_number_of_a_determinant_too_small_to_multiply_is_counted():
+    """The phase increments are taken from the unit phase of the determinant,
+    so a factor whose determinant is about 8e-189 (64 signals correlated at
+    0.999999) still counts the winding of a one-sample delay on one signal,
+    where the product of neighbouring determinants underflows to zero."""
+    n_fft, n_signals, correlation = 64, 64, 0.999999
+    covariance = np.full((n_signals, n_signals), correlation) + (1 - correlation) * np.eye(
+        n_signals
+    )
+    delay = np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
+    factor = np.broadcast_to(np.linalg.cholesky(covariance), (n_fft, n_signals, n_signals))
+    factor = (
+        factor
+        * np.where(np.arange(n_signals) == n_signals - 1, delay[:, np.newaxis], 1)[
+            :, np.newaxis, :
+        ]
+    )
+    with np.errstate(all="ignore"):  # NumPy's det and slogdet warn here
+        assert abs(np.linalg.det(factor[0])) < 1e-180
+        winding = to_host(
+            mpd_module._determinant_winding_number(to_device(factor[np.newaxis]))
+        )
+
+    assert winding[0] == pytest.approx(-1)
+
+
 def test_winding_number_is_not_counted_where_the_phase_jumps_between_bins():
     """A determinant whose phase turns by pi / 2 or more between bins cannot
     be counted reliably (an aliased count of 2 came with turns of 1.9-3.1), so

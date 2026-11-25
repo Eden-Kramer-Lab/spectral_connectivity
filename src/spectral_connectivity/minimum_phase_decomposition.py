@@ -12,7 +12,11 @@ from typing import NamedTuple
 import numpy as np
 from numpy.typing import NDArray
 
-from spectral_connectivity._array_utils import _batched_eigh, _conjugate_transpose
+from spectral_connectivity._array_utils import (
+    _batched_eigh,
+    _conjugate_transpose,
+    _divide_where,
+)
 from spectral_connectivity._backend import fft, ifft, irfft, rfft, xp
 from spectral_connectivity.utils import stacklevel_outside_package
 
@@ -408,6 +412,41 @@ def _check_convergence(
     return error / scale < tolerance
 
 
+def _determinant_phase(factor: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
+    """``det G / |det G|`` of each matrix: 0 where ``det G`` is 0, NaN where not finite.
+
+    Parameters
+    ----------
+    factor : NDArray[complexfloating], shape (..., n_signals, n_signals)
+
+    Returns
+    -------
+    NDArray[complexfloating], shape (...)
+    """
+    if factor.shape[-1] == 2:
+        # Closed form: LAPACK's per-matrix overhead dominates for 2x2 (the
+        # pairwise and subset Granger factors), as in _solve_2x2. A factor
+        # of signals scaled to unit power has entries of order one, so this
+        # determinant neither underflows nor overflows.
+        determinant = (
+            factor[..., 0, 0] * factor[..., 1, 1] - factor[..., 0, 1] * factor[..., 1, 0]
+        )
+        magnitude = xp.abs(determinant)
+        # A NaN factor (an unconverged sub-spectrum) stays NaN without the
+        # warning NumPy gives for NaN / NaN.
+        with np.errstate(invalid="ignore"):
+            phase: NDArray[np.complexfloating] = _divide_where(
+                determinant, magnitude, magnitude != 0, 0.0
+            )
+        return phase
+    # NumPy 1.24's complex slogdet (like its det) warns on well-conditioned
+    # input, and on a singular or NaN factor, whose winding is NaN or not
+    # counted anyway; later releases do not.
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        phase, _ = xp.linalg.slogdet(factor)
+    return phase
+
+
 def _determinant_winding_number(
     factor: NDArray[np.complexfloating],
     n_fft_samples: int | None = None,
@@ -445,28 +484,16 @@ def _determinant_winding_number(
         The winding number, or NaN for a non-finite factor or one whose phase
         changes too fast between bins to count.
     """
-    if factor.shape[-1] == 2:
-        # Closed form: LAPACK's per-matrix overhead dominates for 2x2 (the
-        # pairwise and subset Granger factors), as in _solve_2x2.
-        determinant = (
-            factor[..., 0, 0] * factor[..., 1, 1] - factor[..., 0, 1] * factor[..., 1, 0]
-        )
-    else:
-        # NumPy 1.24's complex det warns of a division by zero on
-        # well-conditioned input (and on a singular or NaN factor, whose
-        # winding is NaN or not counted anyway); later releases do not.
-        with np.errstate(divide="ignore", invalid="ignore"):
-            determinant = xp.linalg.det(factor)
+    phase = _determinant_phase(factor)
     if n_fft_samples is not None:
-        n_nonnegative = determinant.shape[-1]
-        determinant = xp.concatenate(
-            (
-                determinant,
-                xp.conj(determinant[..., n_fft_samples - n_nonnegative : 0 : -1]),
-            ),
-            axis=-1,
+        n_nonnegative = phase.shape[-1]
+        phase = xp.concatenate(
+            (phase, xp.conj(phase[..., n_fft_samples - n_nonnegative : 0 : -1])), axis=-1
         )
-    increments = xp.angle(xp.roll(determinant, -1, axis=-1) * xp.conj(determinant))
+    # From the unit phases: the product of neighbouring determinants
+    # underflows for a near-singular factor (|det G| about 1e-189 for 64
+    # signals correlated at 0.999999).
+    increments = xp.angle(xp.roll(phase, -1, axis=-1) * xp.conj(phase))
     resolved = xp.max(xp.abs(increments), axis=-1) < WINDING_MAX_PHASE_INCREMENT
     winding: NDArray[np.floating] = xp.where(
         resolved, xp.sum(increments, axis=-1) / (2 * np.pi), xp.nan
