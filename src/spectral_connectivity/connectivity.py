@@ -3263,10 +3263,11 @@ class Connectivity:
         regularization : float, default=1e-12
             Non-negative relative diagonal loading applied independently to
             each time-frequency cross-spectral matrix before inversion: each
-            signal's power ``S_ii`` is increased by ``regularization * S_ii``
-            (a signal with zero power by ``regularization * rms(abs(S))``), so
-            the result does not depend on the signals' scales. Increase this
-            value for statistically rank-deficient or ill-conditioned spectra.
+            signal's power ``S_ii`` is increased by ``regularization * S_ii``,
+            so the result does not depend on the signals' scales; the matrix
+            inverted is the coherency matrix, loaded by ``regularization``.
+            Increase this value for statistically rank-deficient or
+            ill-conditioned spectra.
         shrinkage : {None, "auto"} or float, default=None
             Shrink each time-frequency cross-spectral matrix toward its
             diagonal before inversion, ``(1 - lambda) * S + lambda * diag(S)``:
@@ -3484,8 +3485,21 @@ class Connectivity:
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
+        # Invert the coherency matrix D^-1/2 S D^-1/2 (D = diag(S)) loaded by
+        # regularization * I: the inverse of S + regularization * D up to the
+        # diagonal scaling the normalization below removes, but with the
+        # signals' scales out of the solve. In their units, a rank-deficient
+        # S made the loaded solve so ill-conditioned (about 1e12) that its
+        # rounding moved the estimate by 1e-3 when the signals were rescaled.
+        power = xp.real(xp.diagonal(shrunk, axis1=-2, axis2=-1))
+        inverse_root_power = 1 / xp.sqrt(xp.where(power > 0, power, 1))
+        coherency_matrix = (
+            shrunk
+            * inverse_root_power[..., :, xp.newaxis]
+            * inverse_root_power[..., xp.newaxis, :]
+        )
         identity = xp.eye(n_signals, dtype=shrunk.dtype)
-        safe_spectrum = xp.where(zero_power, identity, shrunk)
+        safe_spectrum = xp.where(zero_power, identity, coherency_matrix)
         precision = _regularized_inverse(
             safe_spectrum, regularization=regularization, per_signal=True
         )

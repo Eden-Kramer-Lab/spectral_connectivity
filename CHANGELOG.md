@@ -1197,12 +1197,16 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `regularization` times itself before inverting, instead of every signal by
   `regularization` times the matrix's RMS entry, which perturbed a signal far
   weaker than the others by far more than `regularization` of its own size.
-  It is now invariant under rescaling the signals; before, signal amplitudes
+  It inverts the coherency matrix, so it is invariant under rescaling the
+  signals to rounding; before, signal amplitudes
   from 1e-6 to 1e6 moved the default result by up to 0.98 from that of the
   same data at one scale (simulated dense 8-signal VARs with 10 to 100
   observations). For signals of comparable power the default result changed
   by about 1e-11 or less; with fewer observations than signals, where it
-  warns, the loading sets the estimate and it changed by up to 0.45.
+  warns, the loading sets the estimate and it changed by up to 0.45. There,
+  without shrinkage, the estimate is sensitive to rounding (perturbing the
+  data by one unit in the last place moved it by up to 4e-4), and rescaling
+  moves it by about as much.
 - Wilson initialization and solves isolate rank-deficient sub-spectra instead of
   poisoning a whole batch. A unit whose Cholesky start fails starts from the
   Cholesky factor of `n_signals * I`, which is deterministic; healthy units
