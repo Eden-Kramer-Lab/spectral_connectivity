@@ -319,19 +319,26 @@ def test_phase_rotation_leaves_the_edge_frequencies_untested(lagged_connectivity
     assert np.isnan(result.fwer_p_value[:, edge][..., off_diagonal]).all()
 
 
+@pytest.mark.parametrize("is_one_sided", [False, True])
 @pytest.mark.parametrize("n_fft", [16, 15])
-def test_conjugation_leaves_0_hz_and_nyquist_untested(n_fft):
+def test_conjugation_leaves_0_hz_and_nyquist_untested(n_fft, is_one_sided):
     """The coefficients at 0 Hz and (for an even FFT length) Nyquist are real,
     so conjugation leaves them unchanged: those frequencies are NaN and in no
     family's maximum (with one family per frequency, theirs is -inf); every
-    other frequency is tested. A band-summed measure is tested whole."""
+    other frequency, the last of an odd FFT length among them, is tested. A
+    band-summed measure is tested whole. One-sided input does not record the
+    FFT length, so there the real coefficients themselves mark Nyquist."""
     rng = np.random.default_rng(30)
-    multitaper = Multitaper(
-        rng.standard_normal((n_fft, 12, 2)),
-        sampling_frequency=n_fft,
-        time_halfbandwidth_product=1,
-    )
-    connectivity = Connectivity.from_transform(multitaper)
+    time_series = rng.standard_normal((n_fft, 12, 2))
+    if is_one_sided:
+        # (n_fft, trial, signal) -> (time window, trial, taper, frequency, signal)
+        coefficients = np.fft.rfft(time_series, axis=0).transpose(1, 0, 2)[None, :, None]
+        connectivity = Connectivity(coefficients, is_one_sided=True)
+    else:
+        multitaper = Multitaper(
+            time_series, sampling_frequency=n_fft, time_halfbandwidth_product=1
+        )
+        connectivity = Connectivity.from_transform(multitaper)
     result = connectivity.surrogate_test(
         "magnitude_squared_coherence",
         kind="conjugation",

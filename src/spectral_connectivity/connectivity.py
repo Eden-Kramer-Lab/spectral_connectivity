@@ -2978,7 +2978,8 @@ class Connectivity:
               stationary and Gaussian, whose distribution such mixing leaves
               unchanged by time reversal. Needs at least 2 units. The
               coefficients at 0 Hz and Nyquist are real, so conjugation leaves
-              them unchanged and those two frequencies are not tested. Pair it
+              them unchanged and those two frequencies are not tested, nor
+              any other of :attr:`real_valued_frequencies`. Pair it
               with a measure of lagged interaction: ``imaginary_coherence``,
               the phase-lag indices, ``phase_slope_index``, or pairwise
               spectral Granger (for Granger causality beyond what mixing
@@ -3038,9 +3039,10 @@ class Connectivity:
             n_signals)``), and the surrogate maxima of each family. The
             diagonal, non-finite estimates, the frequencies within
             ``half_bandwidth`` of 0 Hz and Nyquist (for ``"phase_rotation"``)
-            and 0 Hz and Nyquist themselves (for ``"conjugation"``) are not
-            tested: their p-values are NaN, and they are in no family's
-            maximum. For directed measures ``[..., i, j]`` is ``i -> j``.
+            and 0 Hz, Nyquist and :attr:`real_valued_frequencies` (for
+            ``"conjugation"``) are not tested: their p-values are NaN, and
+            they are in no family's maximum. For directed measures
+            ``[..., i, j]`` is ``i -> j``.
 
         Raises
         ------
@@ -3643,11 +3645,13 @@ class Connectivity:
         of 0 Hz or Nyquist are not valid surrogates (the coefficients there
         are not circular), so the frequencies there are not tested, and a
         measure that sums over a band (``phase_slope_index``) is tested only
-        if its band avoids them. ``"conjugation"``: the coefficients at 0 Hz
-        and (for an even two-sided FFT) Nyquist are real, so conjugation
-        leaves them unchanged and those two frequencies are not tested; a
-        band-summed measure, or one whose frequency axis cannot be located, is
-        tested whole. ``"trial_shuffle"`` tests every frequency.
+        if its band avoids them. ``"conjugation"`` leaves unchanged, and so
+        does not test, 0 Hz, Nyquist of an even two-sided FFT, and every
+        frequency of :attr:`real_valued_frequencies` (each coefficient's
+        imaginary part exactly 0, as at Nyquist of one-sided input of an even
+        FFT length); a band-summed measure, or one whose frequency axis cannot
+        be located, is tested whole. ``"trial_shuffle"`` tests every
+        frequency.
 
         Raises
         ------
@@ -3682,7 +3686,9 @@ class Connectivity:
         if kind == "conjugation":
             if not per_frequency:
                 return everywhere
-            untouched = grid == 0
+            # Exactly real coefficients also mark Nyquist of one-sided input,
+            # which does not record whether its FFT length was even.
+            untouched = (grid == 0) | self._real_valued_frequency_mask
             if not self._is_one_sided and n_fft_samples % 2 == 0:
                 untouched[-1] = True
             conjugated: NDArray[np.bool_] = ~untouched.reshape(-1, *trailing)
