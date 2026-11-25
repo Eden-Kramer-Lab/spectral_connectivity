@@ -551,7 +551,8 @@ def _determinant_winding_number(
     factor with zeros outside the unit circle that the count misses, or an
     anticausal one) passes it, and so does one whose determinant turns by
     ``WINDING_MAX_PHASE_INCREMENT`` or more between bins, as near a zero close
-    to the unit circle on a coarse grid.
+    to the unit circle on a coarse grid, or one whose winding the grid
+    aliases to 0, which is not recounted.
 
     Parameters
     ----------
@@ -917,8 +918,11 @@ def minimum_phase_decomposition(
     small ones, a nonzero count is recounted on grids 2 to 16 times finer,
     interpolating the factor as a causal filter on lags ``0`` to
     ``n_fft_samples - 1`` (the iteration's factor is a product of causal
-    updates, wrapped round the grid), and stands only if two of them agree. The check is best effort. It cannot judge a determinant
-    whose phase turns by ``π / 2`` or more between bins, and on a grid too
+    updates, wrapped round the grid), and stands only if two of them agree.
+    The check is best effort. It cannot judge a determinant whose phase
+    turns by ``π / 2`` or more between bins. A count of 0 is not recounted,
+    so a real winding that the grid aliases to 0 is missed: a factor of 8
+    signals that winds -4 times counted 0 on 8 bins. And on a grid too
     coarse for the spectrum the iteration can converge to a wrong factor
     whose determinant does not wind: four coincident resonators at radius
     0.995 factor 0.8 off with no warning on 4096 bins, and correctly on
