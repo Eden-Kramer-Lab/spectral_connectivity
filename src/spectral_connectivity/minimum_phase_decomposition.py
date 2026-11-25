@@ -133,9 +133,13 @@ def _signal_scale(
     no_power : NDArray[bool], shape (..., n_signals)
         Signals whose power is zero at every frequency.
     """
+    # Accumulate in the wider dtype: a float32 mean of powers near 1e37
+    # overflows to Inf.
     power = xp.mean(
-        xp.diagonal(cross_spectral_matrix, axis1=-2, axis2=-1).real, axis=-2
-    ).astype(xp.result_type(cross_spectral_matrix.real.dtype, xp.float64), copy=False)
+        xp.diagonal(cross_spectral_matrix, axis1=-2, axis2=-1).real,
+        axis=-2,
+        dtype=xp.result_type(cross_spectral_matrix.real.dtype, xp.float64),
+    )
     has_power = xp.isfinite(power) & (power > 0)
     scale = xp.sqrt(xp.where(has_power, power, 1))
     no_power = power == 0

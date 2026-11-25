@@ -1021,6 +1021,29 @@ def test_a_zero_power_signal_is_factored_as_a_rounding_level_white_signal(
     assert _reconstruction_error(spectrum, factor).max() < 1e-7
 
 
+def test_a_single_precision_signal_near_its_largest_value_is_scaled_by_its_power():
+    """The mean power of a complex64 spectrum is accumulated in float64, so a
+    signal whose power sums past float32's largest value (here 1.6e37 at each
+    of 64 bins) gets the square root of its power as its scale, not the
+    fallback of 1 after an overflow (with a NumPy RuntimeWarning), and its
+    factor is that of the same spectrum in complex128."""
+    spectrum = _cross_spectrum_of(_lagged_signals(64, np.random.default_rng(0), n_windows=1))
+    scale = np.array([5e17, 1.0, 1e-3])
+    rescaled = scale[:, np.newaxis] * spectrum * scale[np.newaxis, :]
+    single = rescaled.astype(np.complex64)
+    power = np.diagonal(single, axis1=-2, axis2=-1).real.mean(axis=-2, dtype=float)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        signal_scale, _ = mpd_module._signal_scale(to_device(single))
+        factor = to_host(minimum_phase_decomposition(to_device(single)))
+    double_factor = to_host(minimum_phase_decomposition(to_device(single.astype(complex))))
+
+    np.testing.assert_allclose(to_host(signal_scale), np.sqrt(power), rtol=1e-12)
+    row_size = np.abs(double_factor).max(axis=(-3, -1), keepdims=True)
+    np.testing.assert_allclose(factor / row_size, double_factor / row_size, rtol=0, atol=1e-12)
+
+
 @pytest.mark.parametrize("n_fft", [64, 65])
 def test_an_all_pass_rotation_of_the_factor_winds_around_zero(n_fft):
     """``G U`` reproduces ``G Gᴴ`` for any unitary ``U(f)``. The all-pass
