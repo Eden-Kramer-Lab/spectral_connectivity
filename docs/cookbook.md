@@ -332,7 +332,11 @@ channel, with the time series' own `(n_time_samples, n_trials, n_signals)`
 shape: an artifact in one channel then leaves the sample out of every channel,
 since every cross-spectrum needs both channels at the same samples. For a 2-D
 `(n_time_samples, n_channels)` time series give the wrapper a
-`(n_time_samples,)` or `(n_time_samples, n_channels)` mask.
+`(n_time_samples,)` or `(n_time_samples, n_channels)` mask. For an
+`xarray.DataArray` time series, a `DataArray` mask is aligned by dimension
+name: it needs the time dimension, and is shared by every trial or channel
+when it lacks that dimension. An unlabeled mask is read in the time, trial,
+channel order.
 
 The measures that count observations (listed under
 `Connectivity.n_valid_observations`) count each bin's kept observations.

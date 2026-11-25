@@ -1796,33 +1796,24 @@ def _artifact_samples_in_core_layout(
 ) -> Any:
     """``artifact_samples`` in Multitaper's ``(n_time_samples, n_trials[, n_signals])``.
 
-    A DataArray mask of a DataArray time series is transposed by its
-    dimension names to ``dimension_order``, the order the time series was
-    transposed to (its time, trial and signal dimensions; the mask may lack
-    the trial and signal ones). The mask of a 2-D ``(n_time_samples,
-    n_signals)`` time series has that layout, ``(n_time_samples,)`` or
-    ``(n_time_samples, n_signals)``, and gains the trial axis the time series
-    does; ``shape`` is the time series' in ``(n_time_samples[, n_trials],
-    n_signals)`` order. Any other value is passed on, for Multitaper to check.
+    ``shape`` is the time series' in ``(n_time_samples[, n_trials],
+    n_signals)`` order, and ``dimension_order`` the names of those axes for a
+    DataArray time series (``None`` otherwise). A DataArray mask of a
+    DataArray time series is aligned by dimension name: it must have the time
+    dimension, may lack the trial and signal ones (it is then shared by every
+    trial or signal), and is transposed to ``dimension_order``. An unlabeled
+    mask is read by position in that order, and its shape is checked against
+    it here, in the user's dimension names. The mask of a 2-D
+    ``(n_time_samples, n_signals)`` time series, ``(n_time_samples,)`` or
+    ``(n_time_samples, n_signals)``, gains the trial axis the time series
+    does. Any other value is passed on, for Multitaper to check.
     """
     if artifact_samples is None or isinstance(artifact_samples, str):
         return artifact_samples
     if isinstance(artifact_samples, xr.DataArray) and dimension_order is not None:
-        extra = [
-            dimension
-            for dimension in artifact_samples.dims
-            if dimension not in dimension_order
-        ]
-        if extra:
-            msg = (
-                f"artifact_samples has dimension(s) {extra!r} that time_series, with "
-                f"dimensions {time_series_dims!r}, does not; name its axes as the "
-                "time series names its time, trial and signal axes."
-            )
-            raise ValueError(msg)
-        artifact_samples = artifact_samples.transpose(
-            *[dimension for dimension in dimension_order if dimension in artifact_samples.dims]
-        ).data
+        artifact_samples = _labeled_artifact_samples_in_core_layout(
+            artifact_samples, shape, dimension_order, time_series_dims
+        )
     if len(shape) == 2:
         mask = np.asarray(artifact_samples)
         n_time, n_signals = shape
@@ -1840,6 +1831,49 @@ def _artifact_samples_in_core_layout(
             raise ValueError(msg)
         return mask[:, np.newaxis] if mask.ndim == 1 else mask[:, np.newaxis, :]
     return artifact_samples
+
+
+def _labeled_artifact_samples_in_core_layout(
+    artifact_samples: xr.DataArray,
+    shape: tuple[int, ...],
+    dimension_order: tuple[Hashable, ...],
+    time_series_dims: tuple[Hashable, ...] | None,
+) -> Any:
+    """The values of a DataArray mask in ``dimension_order``, the layout
+    Multitaper reads by position.
+
+    A dimension the mask lacks before the last one it has (the trial
+    dimension of a ``(time, signal)`` mask) is broadcast, so the mask is
+    shared by every trial; trailing ones are left for Multitaper, which
+    shares a ``(n_time_samples,)`` or ``(n_time_samples, n_trials)`` mask.
+    """
+    named = f"time_series, with dimensions {time_series_dims!r},"
+    extra = [
+        dimension for dimension in artifact_samples.dims if dimension not in dimension_order
+    ]
+    if extra:
+        msg = (
+            f"artifact_samples has dimension(s) {extra!r} that {named} does not; "
+            "name its axes as the time series names its time, trial and signal axes."
+        )
+        raise ValueError(msg)
+    if dimension_order[0] not in artifact_samples.dims:
+        msg = (
+            f"artifact_samples has dimensions {artifact_samples.dims!r} but not the time "
+            f"dimension {dimension_order[0]!r} of {named} so it does not say which "
+            "samples are artifacts. Give it the time dimension (it may lack the trial "
+            "and signal ones, and is then shared by every trial or signal)."
+        )
+        raise ValueError(msg)
+    last = max(dimension_order.index(dimension) for dimension in artifact_samples.dims)
+    missing = {
+        dimension: shape[axis]
+        for axis, dimension in enumerate(dimension_order[: last + 1])
+        if dimension not in artifact_samples.dims
+    }
+    if missing:
+        artifact_samples = artifact_samples.expand_dims(missing)
+    return artifact_samples.transpose(*dimension_order[: last + 1]).data
 
 
 # Every Multitaper setting, in its signature's order; the ones that

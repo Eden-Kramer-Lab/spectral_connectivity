@@ -421,6 +421,65 @@ def test_delay_significance_agrees_window_by_window(recording):
         )
 
 
+@pytest.mark.parametrize(
+    ("dims", "index"),
+    [
+        (("time",), (60,)),
+        (("time", "trial"), (60, 1)),
+        (("trial", "time"), (1, 60)),
+        (("channel", "time"), (2, 60)),
+    ],
+)
+def test_the_wrapper_shares_a_labeled_mask_over_the_dims_it_lacks(dims, index):
+    """A DataArray mask of a (time, trial, channel) series that lacks the
+    trial or channel dimension is shared by every trial or channel, whatever
+    order its dimensions are in. (The oracles test (time, channel) where the
+    trial and channel counts are equal.)"""
+    xr = pytest.importorskip("xarray")
+    time_series = np.random.default_rng(13).standard_normal((200, 4, 3))
+    labeled = xr.DataArray(time_series, dims=("time", "trial", "channel"))
+    mask = np.zeros([{"time": 200, "trial": 4, "channel": 3}[dim] for dim in dims], bool)
+    mask[index] = True
+    # The same artifacts as a (time, trial) mask: trial 1, or every trial.
+    expected = np.zeros((200, 4), bool)
+    expected[60, 1 if "trial" in dims else slice(None)] = True
+    transform_kwargs = {"n_time_samples_per_window": WINDOW}
+
+    def power(artifact_samples):
+        return quietly(
+            multitaper_connectivity,
+            labeled,
+            SAMPLING_FREQUENCY,
+            method="power",
+            transform_kwargs={**transform_kwargs, "artifact_samples": artifact_samples},
+        ).values
+
+    np.testing.assert_array_equal(power(xr.DataArray(mask, dims=dims)), power(expected))
+
+
+@pytest.mark.parametrize(
+    ("dims", "match"),
+    [
+        (("time", "epoch"), r"has dimension\(s\) \['epoch'\] that time_series"),
+        (("channel",), r"not the time dimension 'time'"),
+    ],
+)
+def test_the_wrapper_refuses_a_labeled_mask_without_the_series_dims(dims, match):
+    xr = pytest.importorskip("xarray")
+    labeled = xr.DataArray(
+        np.random.default_rng(14).standard_normal((200, 4, 3)),
+        dims=("time", "trial", "channel"),
+    )
+    mask = xr.DataArray(np.zeros((200, 3) if len(dims) == 2 else 3, bool), dims=dims)
+    with pytest.raises(ValueError, match=match):
+        multitaper_connectivity(
+            labeled,
+            SAMPLING_FREQUENCY,
+            method="power",
+            transform_kwargs={"artifact_samples": mask},
+        )
+
+
 def test_the_wrapper_transposes_a_labeled_mask_like_its_labeled_input(recording):
     xr = pytest.importorskip("xarray")
     time_series, artifacts = recording
