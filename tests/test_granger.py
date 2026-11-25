@@ -78,6 +78,12 @@ def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
             {"group_labels": ["a", "a", "b"]},
             "'a' -> 'b', 'b' -> 'a'",
         ),
+        # Python str elements, which have no .item().
+        (
+            "blockwise_spectral_granger_prediction",
+            {"group_labels": np.array(["a", "a", "b"], dtype=object)},
+            "'a' -> 'b', 'b' -> 'a'",
+        ),
     ],
 )
 def test_granger_measures_name_the_pairs_whose_factor_is_not_minimum_phase(
@@ -110,3 +116,41 @@ def test_granger_measures_name_the_pairs_whose_factor_is_not_minimum_phase(
     assert len(messages) == 1, messages
     assert messages[0].startswith(f"{measure}: ")
     assert expected_pairs in messages[0]
+
+
+_RESCALED_GRANGER_MEASURES = {
+    "blockwise_three_signal_target": lambda connectivity: (
+        connectivity.blockwise_spectral_granger_prediction([0, 0, 0, 1])[0]
+    ),
+    "subset_pairwise": lambda connectivity: (
+        connectivity.subset_pairwise_spectral_granger_prediction([(0, 1), (1, 2), (2, 3)])
+    ),
+    "conditional": lambda connectivity: connectivity.conditional_spectral_granger_prediction(),
+}
+
+
+@pytest.mark.parametrize("measure", list(_RESCALED_GRANGER_MEASURES))
+def test_granger_of_correlated_signals_is_unchanged_by_rescaling_them(measure):
+    """Four white signals correlated at 0.6, rescaled by 1e-4 and 1e4: the
+    blockwise measure with a three-signal target block, subset pairwise and
+    conditional Granger are unchanged, NaN nowhere new and without a
+    warning.
+
+    Regression: the blockwise measure tested whether the target spectra were
+    positive definite from eigenvalues in the signals' units, where rounding
+    erased the smallest one, and returned NaN with a warning at 8 of its 34
+    values."""
+    rng = np.random.default_rng(0)
+    mixing = np.linalg.cholesky(np.full((4, 4), 0.6) + 0.4 * np.eye(4))
+    coefficients = np.fft.fft(rng.standard_normal((1, 400, 1, 32, 4)) @ mixing.T, axis=-2)
+    scales = np.array([1.0, 1e-4, 1e4, 1.0])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        compute = _RESCALED_GRANGER_MEASURES[measure]
+        as_drawn = to_host(compute(Connectivity(to_device(coefficients))))
+        rescaled = to_host(compute(Connectivity(to_device(coefficients * scales))))
+
+    assert np.isfinite(as_drawn).any()
+    np.testing.assert_allclose(rescaled, as_drawn, rtol=0, atol=1e-9, equal_nan=True)

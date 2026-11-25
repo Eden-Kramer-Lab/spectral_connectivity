@@ -2851,21 +2851,6 @@ _GRANGER_MEASURES = {
 }
 
 
-# On CuPy the batched Cholesky of a rank-deficient zero-lag matrix returns NaN
-# instead of raising, so no deterministic fallback start is used and the whole
-# pair with a dead channel is NaN, not only the influences on the dead channel
-# (see ``minimum_phase_decomposition._get_initial_conditions``).
-_GPU_DEAD_CHANNEL_NAMED_PAIRS = {
-    "pairwise_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
-    "time_reversed_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
-    "subset_pairwise_spectral_granger_prediction": "0 -> 2, 2 -> 0",
-    "blockwise_spectral_granger_prediction": "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'",
-    "time_reversed_blockwise_spectral_granger_prediction": (
-        "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'"
-    ),
-}
-
-
 @pytest.mark.parametrize(
     ("measure", "defect", "named_pairs"),
     [
@@ -2912,8 +2897,6 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     for a dead channel) without naming the pair, and the advice mentioned a
     regularization parameter no Granger method has.
     """
-    if ON_GPU and defect == "dead":
-        named_pairs = _GPU_DEAD_CHANNEL_NAMED_PAIRS[measure]
     connectivity = _granger_connectivity(defect)
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
