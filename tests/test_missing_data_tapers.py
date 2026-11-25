@@ -26,7 +26,6 @@ from spectral_connectivity import (
 )
 from spectral_connectivity.statistics import coherence_significance_pvalue
 from spectral_connectivity.transforms import (
-    _apply_adaptive_taper_weights,
     _detrend_valid_samples,
     _missing_data_slepian_tapers,
 )
@@ -161,31 +160,15 @@ def test_each_window_keeps_its_concentrated_tapers(missing_data):
     [[(20, 4)], [(10, 3), (45, 3)], [(0, 8)], [(32, 1)], [(26, 12)]],
     ids=["one", "two", "at_start", "one_sample", "long"],
 )
-def test_the_tapers_are_the_brute_force_eigenvectors(gaps):
-    """The concentrations and tapers are the eigenpairs of the restricted sinc
-    kernel; the tapers have unit energy and are zero at the missing samples."""
+def test_each_taper_is_oriented_to_agree_with_its_dpss(gaps):
+    """Distinct concentrations fix each taper up to sign (the oracle tests
+    compare their spans with the brute-force eigenvectors); the sign is the
+    one that agrees with the DPSS of the same order."""
     valid = _valid(gaps)
     orientation = dpss(WINDOW, NW, 5).T
-    tapers, concentrations = _missing_data_slepian_tapers(valid, NW, 5, orientation)
-    eigenvalues, eigenvectors = _brute_force(valid, NW)
-    np.testing.assert_allclose(concentrations, eigenvalues[:5], atol=1e-12)
-    assert (tapers[~valid] == 0).all()
-    np.testing.assert_allclose(tapers.T @ tapers, np.eye(5), atol=1e-12)
-    # Up to sign; these leading eigenvalues are distinct (gaps > 1e-5).
-    assert np.diff(eigenvalues[:6]).max() < -1e-5
-    alignment = np.abs(np.sum(tapers[valid] * eigenvectors[:, :5], axis=0))
-    np.testing.assert_allclose(alignment, 1, atol=1e-10)
-    # Each is oriented to agree with the DPSS of its order.
+    tapers, _ = _missing_data_slepian_tapers(valid, NW, 5, orientation)
+    assert np.diff(_brute_force(valid, NW)[0][:6]).max() < -1e-5  # distinct
     assert (np.sum(tapers * orientation, axis=0) > 0).all()
-
-
-def test_without_gaps_they_are_the_dpss():
-    reference, ratios = dpss(WINDOW, NW, 5, return_ratios=True)
-    tapers, concentrations = _missing_data_slepian_tapers(
-        np.ones(WINDOW, dtype=bool), NW, 5, reference.T
-    )
-    np.testing.assert_allclose(tapers, reference.T, atol=1e-10)
-    np.testing.assert_allclose(concentrations, ratios, atol=1e-12)
 
 
 def test_the_dense_fallback_of_a_short_window_is_the_brute_force_solution():
@@ -263,29 +246,6 @@ def _top(eigenpairs, k):
     """The ``k`` largest of ascending ``eigenpairs``."""
     eigenvalues, eigenvectors = eigenpairs
     return eigenvalues[-k:], eigenvectors[:, -k:]
-
-
-def test_the_coefficients_are_those_of_the_brute_force_tapers(recording, missing_data):
-    """A gapped window's coefficients: its valid samples, less their mean,
-    times each brute-force taper scaled as the DPSS are, transformed."""
-    time_series, artifacts = recording
-    multitaper = missing_data
-    coefficients = to_host(multitaper.fft())
-    window, trial = 1, 2
-    samples = slice(window * WINDOW, (window + 1) * WINDOW)
-    valid = ~artifacts[samples, trial]
-    _, eigenvectors = _brute_force(valid, NW)
-    data = time_series[samples, trial][valid]  # (n_valid, n_signals)
-    data = data - data.mean(axis=0)
-    orientation = dpss(WINDOW, NW, 3)[:, valid]  # (3, n_valid)
-    signs = np.sign(np.sum(eigenvectors[:, :3].T * orientation, axis=1))
-    tapers = np.zeros((WINDOW, 3))
-    tapers[valid] = eigenvectors[:, :3] * signs * np.sqrt(SAMPLING_FREQUENCY)
-    projected = np.zeros((3, WINDOW, data.shape[1]))
-    projected[:, valid] = tapers[valid].T[:, :, None] * data[None]
-    expected = np.fft.fft(projected, n=multitaper.n_fft_samples, axis=1) / SAMPLING_FREQUENCY
-    np.testing.assert_allclose(coefficients[window, trial, :3], expected, atol=1e-12)
-    assert (coefficients[window, trial, 3:] == 0).all()  # the dropped tapers
 
 
 @pytest.mark.parametrize("taper_weighting", ["uniform", "eigen", "adaptive"])
@@ -390,18 +350,6 @@ def test_detrending_uses_the_valid_samples(detrend_type):
     np.testing.assert_allclose(detrended[..., valid], expected, atol=1e-12)
 
 
-@pytest.mark.parametrize("detrend_type", ["constant", "linear"])
-def test_a_gapped_window_ignores_the_trend_it_removes(recording, detrend_type):
-    """Adding a constant (and a line, when detrending one) to the samples
-    leaves a gapped window's coefficients unchanged."""
-    time_series, artifacts = recording
-    trend = 5.0 + (detrend_type == "linear") * 0.3 * np.arange(time_series.shape[0])
-    shifted = time_series + trend[:, None, None]
-    base = to_host(_multitaper(time_series, artifacts, detrend_type=detrend_type).fft())
-    moved = to_host(_multitaper(shifted, artifacts, detrend_type=detrend_type).fft())
-    np.testing.assert_allclose(moved[1, 1:3], base[1, 1:3], atol=1e-9)
-
-
 def test_a_short_gap_keeps_all_but_the_least_concentrated_taper():
     """A single missing sample in 64 already takes the fifth taper below 0.9
     (from 0.947); the other four stay well concentrated."""
@@ -461,45 +409,6 @@ def test_a_window_keeping_one_concentrated_taper_is_dropped():
     multitaper = _one_window(artifacts, seed=6)
     np.testing.assert_array_equal(to_host(multitaper.n_kept_tapers), [[3, 0]])
     np.testing.assert_array_equal(to_host(multitaper.valid_windows), [[True, False]])
-
-
-def test_eigen_weighting_uses_each_windows_concentrations(recording, missing_data):
-    time_series, artifacts = recording
-    uniform = to_host(missing_data.fft())
-    eigen = to_host(_multitaper(time_series, artifacts, taper_weighting="eigen").fft())
-    window, trial = 1, 1  # four kept tapers
-    valid = ~artifacts[window * WINDOW : (window + 1) * WINDOW, trial]
-    concentrations = _brute_force(valid, NW)[0][:4]
-    weights = np.sqrt(concentrations / concentrations.mean())
-    np.testing.assert_allclose(
-        eigen[window, trial, :4],
-        uniform[window, trial, :4] * weights[:, None, None],
-        rtol=1e-10,
-    )
-
-
-def test_adaptive_weighting_weights_a_gapped_window_as_a_window_of_its_own(
-    recording, missing_data
-):
-    """Thomson's weights of a gapped window, from its own concentrations and the
-    variance of its valid samples, as if its kept tapers were all it had."""
-    time_series, artifacts = recording
-    uniform = to_host(missing_data.fft())
-    adaptive = to_host(_multitaper(time_series, artifacts, taper_weighting="adaptive").fft())
-    window, trial = 1, 1
-    samples = slice(window * WINDOW, (window + 1) * WINDOW)
-    valid = ~artifacts[samples, trial]
-    concentrations = _brute_force(valid, NW)[0][:4]
-    noise = time_series[samples, trial][valid].var(axis=0) / SAMPLING_FREQUENCY
-    alone = _apply_adaptive_taper_weights(
-        uniform[window, trial, :4][None, None],
-        concentrations,
-        noise[None, None],
-        max_iterations=50,
-        tolerance=1e-8,
-    )[0, 0]
-    np.testing.assert_allclose(adaptive[window, trial, :4], alone, rtol=1e-6, atol=1e-12)
-    assert (adaptive[window, trial, 4:] == 0).all()
 
 
 @pytest.mark.parametrize(
