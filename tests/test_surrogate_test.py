@@ -380,6 +380,40 @@ def test_phase_rotation_leaves_the_edge_frequencies_untested(lagged_connectivity
     assert np.isnan(result.fwer_p_value[:, edge][..., off_diagonal]).all()
 
 
+@pytest.mark.parametrize("n_fft", [16, 15])
+def test_conjugation_leaves_0_hz_and_nyquist_untested(n_fft):
+    """The coefficients at 0 Hz and (for an even FFT length) Nyquist are real,
+    so conjugation leaves them unchanged: those frequencies are NaN and in no
+    family's maximum (with one family per frequency, theirs is -inf); every
+    other frequency is tested. A band-summed measure is tested whole."""
+    rng = np.random.default_rng(30)
+    multitaper = Multitaper(
+        rng.standard_normal((n_fft, 12, 2)),
+        sampling_frequency=n_fft,
+        time_halfbandwidth_product=1,
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    result = connectivity.surrogate_test(
+        "magnitude_squared_coherence",
+        kind="conjugation",
+        n_surrogates=9,
+        random_state=0,
+        fwer_axis=(2, 3),
+    )
+    untested = np.zeros(len(connectivity.frequencies), dtype=bool)
+    untested[0] = True
+    untested[-1] = n_fft % 2 == 0
+    for p_value in (result.p_value, result.fwer_p_value):
+        assert np.isnan(p_value[0, untested, 0, 1]).all()
+        assert np.isfinite(p_value[0, ~untested, 0, 1]).all()
+    assert np.all(result.null_maxima[:, 0, untested] == -np.inf)
+    assert np.isfinite(result.null_maxima[:, 0, ~untested]).all()
+    psi = connectivity.surrogate_test(
+        "phase_slope_index", kind="conjugation", n_surrogates=9, random_state=0
+    )
+    assert np.isfinite(psi.p_value[0, 0, 1])
+
+
 def test_phase_slope_index_band_must_avoid_the_edges(lagged_connectivity):
     """A band clear of the edges is tested whole; one reaching into them is refused."""
     result = lagged_connectivity.surrogate_test(

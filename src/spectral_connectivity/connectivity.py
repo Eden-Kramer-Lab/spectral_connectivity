@@ -2971,7 +2971,9 @@ class Connectivity:
               reversing that observation in time. Null: the coherency is real
               at every frequency, as for instantaneous (zero-lag) mixing such
               as volume conduction of independent sources; exact for circular
-              Gaussian coefficients. Pair it with a measure of lagged
+              Gaussian coefficients. The coefficients at 0 Hz and Nyquist are
+              real, so conjugation leaves them unchanged and those two
+              frequencies are not tested. Pair it with a measure of lagged
               interaction: ``imaginary_coherence``, the phase-lag indices,
               ``phase_slope_index``, or pairwise spectral Granger (for
               Granger causality beyond what mixing produces). With
@@ -3029,9 +3031,11 @@ class Connectivity:
             ``fwer_p_value``, each with the measure's own shape (for a
             pairwise measure ``(n_time, n_nonnegative_frequencies, n_signals,
             n_signals)``), and the surrogate maxima of each family. The
-            diagonal, non-finite estimates and (for ``"phase_rotation"``) the
-            frequencies near 0 Hz and Nyquist are not tested: their p-values
-            are NaN. For directed measures ``[..., i, j]`` is ``i -> j``.
+            diagonal, non-finite estimates, the frequencies within
+            ``half_bandwidth`` of 0 Hz and Nyquist (for ``"phase_rotation"``)
+            and 0 Hz and Nyquist themselves (for ``"conjugation"``) are not
+            tested: their p-values are NaN, and they are in no family's
+            maximum. For directed measures ``[..., i, j]`` is ``i -> j``.
 
         Raises
         ------
@@ -3125,8 +3129,9 @@ class Connectivity:
         family, the transfer-function measures) still use them, which
         spreads a small excess past ``half_bandwidth`` (see Measured sizes);
         exclude those frequencies from a claim if that matters.
-        ``phase_slope_index`` sums over its ``frequency_range``, so that band
-        must avoid the untested frequencies.
+        ``phase_slope_index`` sums over its ``frequency_range``, so for
+        ``"phase_rotation"`` that band must avoid the untested frequencies;
+        for ``"conjugation"`` it is tested whole.
 
         **Measured sizes.** Monte Carlo rejection rates at nominal 5% with 99
         surrogates per dataset, AR signals sampled at 200 Hz, multitaper
@@ -3165,9 +3170,7 @@ class Connectivity:
           uncorrected p-values. A second design (5 trials, 2 s windows,
           7 tapers) gave 4.0-4.7% with ``"trial_shuffle"`` and 1.7-4.8% with
           ``"phase_rotation"``: the maximum statistic keeps the family-wise
-          rate at or below nominal, not exactly at it. Conjugation rejected
-          pairwise Granger at 0 Hz in 6.5% of these datasets (5.8% under the
-          mixing above).
+          rate at or below nominal, not exactly at it.
         - Correlated observations, Welch segments overlapping by 75% (13 per
           trial): randomizing each segment rejected independent signals in
           19.6% of datasets (5 trials, magnitude-squared coherence and
@@ -3320,11 +3323,13 @@ class Connectivity:
                 ),
             )
         )
-        tested = np.isfinite(estimate) & ~np.eye(self.n_signals, dtype=bool)
-        if rotation_half_bandwidth is not None:
-            tested &= self._rotation_valid_frequencies(
-                method, estimate, rotation_half_bandwidth, method_kwargs
+        tested = (
+            np.isfinite(estimate)
+            & ~np.eye(self.n_signals, dtype=bool)
+            & self._valid_surrogate_frequencies(
+                kind, method, estimate, rotation_half_bandwidth, method_kwargs
             )
+        )
         tally = _SurrogateTally(
             _surrogate_statistic(estimate, alternative), tested, family_axes, n_surrogates
         )
@@ -3585,50 +3590,68 @@ class Connectivity:
         rotated: BackendArray = coefficients * factor
         return rotated
 
-    def _rotation_valid_frequencies(
+    def _valid_surrogate_frequencies(
         self,
+        kind: str,
         method: str,
         estimate: NDArray[np.floating],
-        half_bandwidth: float,
+        half_bandwidth: float | None,
         method_kwargs: dict[str, Any],
     ) -> NDArray[np.bool_]:
-        """Where ``kind="phase_rotation"`` gives valid surrogates, broadcastable to ``estimate``.
+        """Where ``kind``'s surrogates are valid, broadcastable to ``estimate``.
 
-        Rotated coefficients within ``half_bandwidth`` of 0 Hz or Nyquist are
-        not valid surrogates (the coefficients there are not circular), so
-        the frequencies there are not tested. A measure that sums over a band
-        (``phase_slope_index``) is tested only if its band avoids them.
+        ``"phase_rotation"``: rotated coefficients within ``half_bandwidth``
+        of 0 Hz or Nyquist are not valid surrogates (the coefficients there
+        are not circular), so the frequencies there are not tested, and a
+        measure that sums over a band (``phase_slope_index``) is tested only
+        if its band avoids them. ``"conjugation"``: the coefficients at 0 Hz
+        and (for an even two-sided FFT) Nyquist are real, so conjugation
+        leaves them unchanged and those two frequencies are not tested; a
+        band-summed measure, or one whose frequency axis cannot be located, is
+        tested whole. ``"trial_shuffle"`` tests every frequency.
 
         Raises
         ------
         ValueError
-            If no frequency is valid, or the band of a band-summed measure
-            includes an invalid one.
+            For ``"phase_rotation"``: if no frequency is valid, the band of a
+            band-summed measure includes an invalid one, or the measure does
+            not return one value per frequency.
         """
+        everywhere = np.ones((), dtype=bool)
+        if kind == "trial_shuffle":
+            return everywhere
         frequencies = self.frequencies
-        n_fft_samples = len(self._frequencies)
-        # Nyquist is the last non-negative bin for an even FFT length and half a
-        # bin above it for an odd one.
-        nyquist = float(frequencies[-1])
-        if n_fft_samples % 2 and n_fft_samples > 1:
-            nyquist += float(frequencies[1] - frequencies[0]) / 2
-        # The bounds are inclusive, by the package's rule for a bin lying on a
-        # bound (that of frequency_range), so a band starting at
-        # half_bandwidth is accepted below whenever its bins are.
-        lower, upper = half_bandwidth, nyquist - half_bandwidth
-        on_lower, on_upper = _bins_on_bounds(frequencies, (lower, upper))
         grid = frequencies.astype(np.float64)
-        valid = ((grid > lower) | on_lower) & ((grid < upper) | on_upper)
-        if not valid.any():
-            msg = (
-                f"surrogate_test(kind='phase_rotation') tests no frequency: every "
-                f"frequency lies within half_bandwidth={half_bandwidth!r} of 0 or of "
-                f"Nyquist ({nyquist!r}). Check half_bandwidth is in the units of "
-                "frequencies (half the transform's frequency resolution)."
-            )
-            raise ValueError(msg)
+        n_fft_samples = len(self._frequencies)
+        if kind == "conjugation":
+            valid = grid != 0
+            if not self._is_one_sided and n_fft_samples % 2 == 0:
+                valid[-1] = False
+        else:
+            assert half_bandwidth is not None
+            # Nyquist is the last non-negative bin for an even FFT length and
+            # half a bin above it for an odd one.
+            nyquist = float(frequencies[-1])
+            if n_fft_samples % 2 and n_fft_samples > 1:
+                nyquist += float(frequencies[1] - frequencies[0]) / 2
+            # The bounds are inclusive, by the package's rule for a bin lying on
+            # a bound (that of frequency_range), so a band starting at
+            # half_bandwidth is accepted below whenever its bins are.
+            lower, upper = half_bandwidth, nyquist - half_bandwidth
+            on_lower, on_upper = _bins_on_bounds(frequencies, (lower, upper))
+            valid = ((grid > lower) | on_lower) & ((grid < upper) | on_upper)
+            if not valid.any():
+                msg = (
+                    f"surrogate_test(kind='phase_rotation') tests no frequency: every "
+                    f"frequency lies within half_bandwidth={half_bandwidth!r} of 0 or "
+                    f"of Nyquist ({nyquist!r}). Check half_bandwidth is in the units "
+                    "of frequencies (half the transform's frequency resolution)."
+                )
+                raise ValueError(msg)
         dims = self._result_dims(method, estimate.ndim)
         if dims is not None and "frequency" not in dims:
+            if kind == "conjugation":
+                return everywhere
             # A measure without a frequency axis sums over its frequency_range.
             band = _select_measure_frequencies(
                 frequencies,
@@ -3641,10 +3664,10 @@ class Connectivity:
                     f"a band within half_bandwidth={half_bandwidth!r} of 0 Hz or "
                     f"Nyquist ({nyquist!r}), where rotated coefficients are not valid "
                     "surrogates. Pass frequency_range=(low, high) with "
-                    f"low >= {half_bandwidth!r} and high <= {nyquist - half_bandwidth!r}."
+                    f"low >= {lower!r} and high <= {upper!r}."
                 )
                 raise ValueError(msg)
-            return np.ones((), dtype=bool)
+            return everywhere
         # The frequency axis follows the kept observation axes; an unregistered
         # measure is taken to have it there if its length is right.
         frequency_axis = (
@@ -3653,6 +3676,8 @@ class Connectivity:
         if estimate.ndim < frequency_axis + 3 or estimate.shape[frequency_axis] != len(
             frequencies
         ):
+            if kind == "conjugation":
+                return everywhere
             msg = (
                 "surrogate_test(kind='phase_rotation') leaves untested the frequencies "
                 "within half_bandwidth of 0 Hz and Nyquist, so the measure must "

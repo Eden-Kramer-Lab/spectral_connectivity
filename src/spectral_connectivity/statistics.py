@@ -102,9 +102,11 @@ class SurrogateTestResult:
     ``p_value`` and ``fwer_p_value`` have the shape of the measure, e.g.
     ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)`` for a
     pairwise connectivity measure. An element is tested unless it is on the
-    diagonal (a signal with itself), its estimate is not finite, or (for
-    ``kind="phase_rotation"``) its frequency is within ``half_bandwidth`` of
-    0 Hz or Nyquist; both p-values are NaN where it is not.
+    diagonal (a signal with itself), its estimate is not finite, or its
+    frequency is within ``half_bandwidth`` of 0 Hz or Nyquist (for
+    ``kind="phase_rotation"``) or is 0 Hz or Nyquist (for
+    ``kind="conjugation"``); both p-values are NaN where it is not, and it is
+    in no family's maximum.
 
     Attributes
     ----------
