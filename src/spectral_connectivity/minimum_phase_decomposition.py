@@ -124,11 +124,12 @@ def _signal_scale(
     The square root of the signal's power averaged over the frequency axis
     (-3), its zero-lag autocovariance on the grid. A signal with non-finite
     power gets a scale of 1 (its sub-spectrum is not finite). A signal with no
-    power gets ``eps`` times the smallest scale of the signals with power (or
-    ``eps`` if none has power), so the factor's row for it, that of an
-    independent white signal of unit power once unscaled (see
-    :func:`_minimum_phase_factor_and_flags`), reconstructs a power ``eps²``
-    times that of the weakest signal.
+    power in a sub-spectrum where some signal has power is factored as white:
+    it gets ``eps`` times the smallest scale of the signals with power, so the
+    factor's row for it, that of an independent white signal of unit power
+    once unscaled (see :func:`_minimum_phase_factor_and_flags`), reconstructs
+    a power ``eps²`` times that of the weakest signal. A sub-spectrum where no
+    signal has power is not factored (it is singular, and returned as NaN).
 
     Parameters
     ----------
@@ -140,8 +141,9 @@ def _signal_scale(
     -------
     scale : NDArray[floating], shape (..., n_signals)
         Positive scale of each signal, in float64 or wider.
-    no_power : NDArray[bool], shape (..., n_signals)
-        Signals whose power is zero at every frequency.
+    white : NDArray[bool], shape (..., n_signals)
+        Signals whose power is zero at every frequency, in sub-spectra where
+        some signal has power.
     """
     # Accumulate in the wider dtype: a float32 mean of powers near 1e37
     # overflows to Inf.
@@ -152,10 +154,9 @@ def _signal_scale(
     )
     has_power = xp.isfinite(power) & (power > 0)
     scale = xp.sqrt(xp.where(has_power, power, 1))
-    no_power = power == 0
+    white = (power == 0) & xp.any(has_power, axis=-1, keepdims=True)
     weakest = xp.min(xp.where(has_power, scale, xp.inf), axis=-1, keepdims=True)
-    weakest = xp.where(xp.isfinite(weakest), weakest, 1)
-    return xp.where(no_power, xp.finfo(scale.dtype).eps * weakest, scale), no_power
+    return xp.where(white, xp.finfo(scale.dtype).eps * weakest, scale), white
 
 
 def _reverse_cholesky(matrices: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -904,7 +905,9 @@ def minimum_phase_decomposition(
     window needs no fallback start, and its row of the factor is ``eps``
     times the weakest other signal's scale: it reconstructs a power
     ``eps²`` times that signal's, where an exactly zero row would leave the
-    factor singular for the directed measures.
+    factor singular for the directed measures. A window where no signal has
+    power has nothing to factor; it is returned as NaN with the
+    non-convergence warning.
 
     A converged factor whose ``det G(e^{iω})`` winds around zero is not
     minimum phase and gives a ``UserWarning``; its factor is returned as
@@ -1067,7 +1070,7 @@ def _minimum_phase_factor_and_flags(
     # D^-1 G for its factor G. The covariant start makes that the factor of S
     # up to rounding; the scaling preconditions the iteration for signals
     # whose powers differ by orders of magnitude (see Notes).
-    signal_scale, no_power = _signal_scale(cross_spectral_matrix)
+    signal_scale, white = _signal_scale(cross_spectral_matrix)
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # NumPy divides a complex Inf by the real scale as by a complex number,
     # which gives NaN and warns; such a sub-spectrum is non-finite either way
@@ -1086,9 +1089,10 @@ def _minimum_phase_factor_and_flags(
     # as an independent white signal of unit power instead; the factor is
     # then that of the other signals with a 1 for it, and its scale makes
     # that 1 a rounding-level power (see Notes of minimum_phase_decomposition).
+    # A window where no signal has power has nothing to factor: it stays
+    # singular and is returned as NaN.
     working_cross_spectral_matrix = (
-        working_cross_spectral_matrix
-        + no_power[..., xp.newaxis, xp.newaxis, :] * identity_matrix
+        working_cross_spectral_matrix + white[..., xp.newaxis, xp.newaxis, :] * identity_matrix
     )
     # S is fixed across iterations, so factor it once as S = L Lᴴ.
     cross_spectral_square_root = _hermitian_square_root(working_cross_spectral_matrix)

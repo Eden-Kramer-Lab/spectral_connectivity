@@ -1021,6 +1021,36 @@ def test_a_zero_power_signal_is_factored_as_a_rounding_level_white_signal(
     assert _reconstruction_error(spectrum, factor).max() < 1e-7
 
 
+@_BOTH_FACTORIZATION_PATHS
+@pytest.mark.parametrize("cholesky", ["raises", "returns_nan"])
+def test_a_window_where_no_signal_has_power_is_nan(real_signals, cholesky, monkeypatch):
+    """A window whose spectrum is zero has nothing to factor: it is NaN with
+    the non-convergence warning, also where the Cholesky returns NaN instead
+    of raising (CuPy), and the other window is factored as on its own.
+
+    Regression: every signal of that window was factored as a white signal,
+    so its factor was a rounding-level identity without a warning."""
+    signals = _lagged_signals(
+        32, np.random.default_rng(2), dtype=float if real_signals else complex, n_signals=3
+    )
+    spectrum = _cross_spectrum_of(signals)
+    spectrum[1] = 0
+    assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
+    if cholesky == "returns_nan":
+        monkeypatch.setattr(mpd_module, "_reverse_cholesky", _cholesky_returning_nan)
+    live_factor = to_host(minimum_phase_decomposition(to_device(spectrum[:1])))
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+
+    assert any("did not converge for 1 of 2" in str(w.message) for w in record)
+    assert np.isnan(factor[1]).all()
+    np.testing.assert_allclose(
+        factor[:1], live_factor, rtol=0, atol=1e-12 * np.abs(live_factor).max()
+    )
+
+
 def test_a_single_precision_signal_near_its_largest_value_is_scaled_by_its_power():
     """The mean power of a complex64 spectrum is accumulated in float64, so a
     signal whose power sums past float32's largest value (here 1.6e37 at each
