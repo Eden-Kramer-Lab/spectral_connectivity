@@ -375,7 +375,7 @@ sets the null, so choose it for the question:
   (`frequency_resolution / 2`), and `half_bandwidth=` overrides it. A common
   stimulus-locked response is rejected too; to ask about interaction beyond
   it, use `"trial_shuffle"`. Subtracting each signal's mean across trials
-  first leaves p-values too small unless there are many trials (6.2-7.7% of
+  first leaves p-values too small unless there are many trials (5.5-7.0% of
   tests rejected at nominal 5% with 10 trials, about 5% with 40).
 - `"conjugation"` conjugates (time-reverses) random trials. 0 Hz and Nyquist,
   which it leaves unchanged, are not tested. Instantaneous mixing of
