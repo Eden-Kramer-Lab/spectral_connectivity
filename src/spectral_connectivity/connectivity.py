@@ -3319,9 +3319,10 @@ class Connectivity:
         ``r_ij = S_ij / sqrt(S_ii S_jj)``. ``"auto"`` takes the intensity that
         minimizes the expected squared error of the shrunk coherencies,
         ``sum_{i != j} E|(1 - lambda) r_ij - rho_ij|^2`` for true coherencies
-        ``rho``, with ``E r = rho`` to first order: the shrinkage of
-        Ledoit & Wolf [1]_ toward the diagonal on the correlation scale
-        ("target D" of Schäfer & Strimmer [2]_), for complex data,
+        ``rho``, with ``E r = rho`` to first order. That is the analytic
+        intensity of Ledoit & Wolf [1]_ [2]_ for the target of Schäfer &
+        Strimmer [3]_ that keeps the powers and shrinks the correlations
+        toward 0 (their "target D", Eq. 10), for complex data,
 
             lambda = sum_{i != j} var(r_ij) / sum_{i != j} |r_ij|^2,
 
@@ -3337,7 +3338,9 @@ class Connectivity:
         where the variance is ``(1 - |rho|^2) (1 - |rho|^2 / 2) / n``: it
         overstates the intensity where coherence is high. ``lambda``
         decreases as ``1/n``, so with many observations the result approaches
-        the unshrunk one. ``"auto"`` took about twice as long as no
+        the unshrunk one. Partial coherence is then read from the shrunk
+        matrix, as Schäfer & Strimmer read partial correlations (their
+        Sections 2.4 and 3). ``"auto"`` took about twice as long as no
         shrinkage and 1.3-1.8 times its peak memory (16 to 64 signals, 100 to
         1400 observations, 251 to 1001 frequencies, one or 100 time windows);
         :meth:`partial_coherence_shrinkage` then reuses the intensity.
@@ -3387,13 +3390,18 @@ class Connectivity:
 
         References
         ----------
-        .. [1] Ledoit O, Wolf M (2004) A well-conditioned estimator for
+        .. [1] Ledoit O, Wolf M (2003) Improved estimation of the covariance
+               matrix of stock returns with an application to portfolio
+               selection. Journal of Empirical Finance 10(5):603-621.
+               https://doi.org/10.1016/S0927-5398(03)00007-0
+        .. [2] Ledoit O, Wolf M (2004) A well-conditioned estimator for
                large-dimensional covariance matrices. Journal of Multivariate
                Analysis 88(2):365-411.
-        .. [2] Schäfer J, Strimmer K (2005) A shrinkage approach to large-scale
+               https://doi.org/10.1016/S0047-259X(03)00096-4
+        .. [3] Schäfer J, Strimmer K (2005) A shrinkage approach to large-scale
                covariance matrix estimation and implications for functional
                genomics. Statistical Applications in Genetics and Molecular
-               Biology 4(1):32.
+               Biology 4(1):Article 32. https://doi.org/10.2202/1544-6115.1175
 
         Examples
         --------

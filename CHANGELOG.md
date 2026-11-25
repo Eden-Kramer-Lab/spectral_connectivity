@@ -56,8 +56,9 @@ The migration guide for code written against 2.x is
   whether a direction reverses under time reversal (Winkler et al., 2016).
 - `partial_coherence(shrinkage=...)` shrinks each cross-spectral matrix
   toward its diagonal before inverting it, multiplying every coherency by
-  `1 - lambda`: a fixed `lambda` in [0, 1], or `"auto"`, the Ledoit-Wolf /
-  Schäfer-Strimmer intensity estimated for each time window and frequency.
+  `1 - lambda`: a fixed `lambda` in [0, 1], or `"auto"`, the analytic
+  intensity of Ledoit and Wolf for Schäfer and Strimmer's correlation-scale
+  diagonal target, estimated for each time window and frequency.
   `Connectivity.partial_coherence_shrinkage()` returns those intensities, for
   reporting. The default, `None`, does not shrink; the wrappers take it in
   `connectivity_kwargs`. Use `"auto"` with at most about 2.5 trials x tapers
