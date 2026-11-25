@@ -1084,7 +1084,7 @@ def test_a_winding_aliased_by_a_coarse_grid_is_not_reported(real_signals):
     filter_response = 1 - coefficient * np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
     power = np.abs(filter_response) ** 2
     if real_signals:  # exactly symmetric, not only to rounding
-        power[n_fft // 2 + 1 :] = power[1 : n_fft // 2][::-1]
+        power = _mirrored(power)
     diagonal = (slice(None), np.arange(n_signals), np.arange(n_signals))
     spectrum = np.zeros((n_fft, n_signals, n_signals), dtype=complex)
     spectrum[diagonal] = power[:, np.newaxis]
@@ -1110,13 +1110,8 @@ def test_winding_number_of_a_determinant_too_small_to_multiply_is_counted():
         n_signals
     )
     delay = np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
-    factor = np.broadcast_to(np.linalg.cholesky(covariance), (n_fft, n_signals, n_signals))
-    factor = (
-        factor
-        * np.where(np.arange(n_signals) == n_signals - 1, delay[:, np.newaxis], 1)[
-            :, np.newaxis, :
-        ]
-    )
+    factor = np.tile(np.linalg.cholesky(covariance), (n_fft, 1, 1)).astype(complex)
+    factor[..., -1] *= delay[:, np.newaxis]
     with np.errstate(all="ignore"):  # NumPy's det and slogdet warn here
         assert abs(np.linalg.det(factor[0])) < 1e-180
         winding = to_host(

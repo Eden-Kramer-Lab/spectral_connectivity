@@ -151,9 +151,14 @@ def test_factor_of_an_exact_var_spectrum_is_its_minimum_phase_factor(model, scal
         assert _relative_row_error(factor, expected).max() < 1e-6
 
 
-def _multitaper_estimate(n_signals, scales, complex_valued, seed, n_windows=6, n_time=16):
-    """Fourier coefficients and the cross-spectrum of ``n_windows`` windows of a
-    dense VAR, zero padded to ``16 n_time`` bins.
+# Each estimate is of windows of 16 samples, so its autocovariance vanishes
+# beyond lag 15.
+_N_TIME = 16
+
+
+def _multitaper_estimate(n_signals, scales, complex_valued, seed):
+    """Fourier coefficients and the cross-spectrum of 6 windows of
+    ``_N_TIME`` samples of a dense VAR, zero padded to ``16 _N_TIME`` bins.
 
     Five trials of three tapers make 15 observations per window, so every
     estimate has full rank with margin. Complex data are the sum of two
@@ -161,22 +166,20 @@ def _multitaper_estimate(n_signals, scales, complex_valued, seed, n_windows=6, n
     """
     coefficients, noise_covariance = _dense_stable_var(n_signals, 2, 0.9, seed)
 
-    def simulate(random_state):
-        return simulate_MVAR(
+    def transform(random_state):
+        signals = simulate_MVAR(
             coefficients,
             noise_covariance=noise_covariance,
-            n_time_samples=n_time * n_windows,
+            n_time_samples=6 * _N_TIME,
             n_trials=5,
             random_state=random_state,
         )
-
-    def transform(random_state):
         return Multitaper(
-            simulate(random_state) * np.asarray(scales),
+            signals * np.asarray(scales),
             sampling_frequency=1.0,
             time_halfbandwidth_product=2,
-            time_window_duration=n_time,
-            n_fft_samples=16 * n_time,
+            time_window_duration=_N_TIME,
+            n_fft_samples=16 * _N_TIME,
             detrend_type=None,
         ).fft()
 
@@ -212,7 +215,9 @@ def _estimate_with_riccati_factors(n_signals, scales, complex_valued):
     fourier_coefficients, spectrum = _multitaper_estimate(
         n_signals, scales, complex_valued, seed=n_signals
     )
-    riccati = np.stack([_riccati_minimum_phase_factor(each, max_lag=15) for each in spectrum])
+    riccati = np.stack(
+        [_riccati_minimum_phase_factor(each, max_lag=_N_TIME - 1) for each in spectrum]
+    )
     return fourier_coefficients, spectrum, riccati
 
 
@@ -238,12 +243,19 @@ def test_factor_of_a_multitaper_estimate_is_its_riccati_factor(
         assert error < _ESTIMATE_FACTOR_ALLOWANCE, (window, error)
 
 
+def _var_of_factor(factor):
+    """Transfer function ``G G₀⁻¹`` and noise covariance ``G₀ G₀ᴴ`` of a
+    two-sided factor ``(..., n_fft, n_signals, n_signals)``, ``G₀`` its lag-0
+    coefficient."""
+    zero_lag = np.fft.ifft(factor, axis=-3)[..., 0, :, :]
+    transfer_function = factor @ np.linalg.inv(zero_lag)[..., np.newaxis, :, :]
+    return transfer_function, zero_lag @ zero_lag.conj().swapaxes(-1, -2)
+
+
 def _directed_measures_of_factor(factor):
     """DTF, PDC, gPDC and dDTF read from a two-sided factor in closed form,
     ``[window][measure]`` in the native ``[target, source]`` layout."""
-    zero_lag = np.fft.ifft(factor, axis=-3)[..., 0, :, :]
-    transfer_function = factor @ np.linalg.inv(zero_lag)[..., np.newaxis, :, :]
-    noise_covariance = zero_lag @ zero_lag.conj().swapaxes(-1, -2)
+    transfer_function, noise_covariance = _var_of_factor(factor)
     return [
         _analytic_directed_measures(np.linalg.inv(each), each, covariance)
         for each, covariance in zip(transfer_function, noise_covariance, strict=True)
@@ -297,10 +309,9 @@ def _pairwise_granger_of_riccati_factors(spectrum):
     ):
         pair = [first, second]
         sub_spectrum = spectrum[window][:, pair][:, :, pair]
-        factor = _riccati_minimum_phase_factor(sub_spectrum, max_lag=15)
-        zero_lag = np.fft.ifft(factor, axis=0)[0]
-        transfer_function = (factor @ np.linalg.inv(zero_lag))[:n_nonnegative]
-        noise = zero_lag @ zero_lag.conj().T
+        factor = _riccati_minimum_phase_factor(sub_spectrum, max_lag=_N_TIME - 1)
+        transfer_function, noise = _var_of_factor(factor)
+        transfer_function = transfer_function[:n_nonnegative]
         power = sub_spectrum[:n_nonnegative, [0, 1], [0, 1]].real
         for target, source in ((0, 1), (1, 0)):
             intrinsic = (
