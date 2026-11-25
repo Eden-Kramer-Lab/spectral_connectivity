@@ -2300,12 +2300,10 @@ class Multitaper(_WindowedFourierTransform):
           ``taper_weighting`` uses each window's own concentrations. Needs
           generated DPSS tapers, ``is_low_bias=True`` and at least 2 tapers.
           Construction finds the tapers of each distinct artifact pattern,
-          about 2 ms per pattern for a 1000-sample window (with
-          multithreaded OpenBLAS, as in older NumPy and SciPy wheels, it can be
-          hundreds of times slower unless threadpoolctl is installed, which
-          limits the solve to one thread, or ``OPENBLAS_NUM_THREADS=1`` is
-          set). When to use it, its leakage and its
-          gap limit:
+          about 2 ms per pattern for a 1000-sample window (much slower with
+          multithreaded OpenBLAS, unless threadpoolctl is installed or
+          ``OPENBLAS_NUM_THREADS=1`` is set). When to use it, its leakage, its
+          gap limit and that slowdown:
           https://spectral-connectivity.readthedocs.io/en/latest/cookbook.html#leave-out-artifacts-and-missing-samples
 
     Attributes
@@ -5066,19 +5064,15 @@ def _one_blas_thread() -> contextlib.AbstractContextManager[Any]:
     """Limit BLAS to one thread, if threadpoolctl is installed.
 
     The per-pattern eigensolves are small and sequential, and multithreaded
-    OpenBLAS can run them hundreds of times slower (600 ms against 3 ms per
-    1000-sample pattern with the NumPy 1.24 and SciPy 1.11 wheels on 18
-    threads). threadpoolctl is optional: without it this does nothing, and
-    ``OPENBLAS_NUM_THREADS=1`` does the same.
+    OpenBLAS can run them hundreds of times slower (measured in the cookbook's
+    missing-data note). threadpoolctl is optional: without it this does
+    nothing, and ``OPENBLAS_NUM_THREADS=1`` does the same.
     """
     try:
         from threadpoolctl import threadpool_limits  # type: ignore[import-not-found]
     except ImportError:
         return contextlib.nullcontext()
-    limits: contextlib.AbstractContextManager[Any] = threadpool_limits(
-        limits=1, user_api="blas"
-    )
-    return limits
+    return threadpool_limits(limits=1, user_api="blas")  # type: ignore[no-any-return]
 
 
 def _missing_data_taper_sets(

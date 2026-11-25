@@ -430,14 +430,14 @@ the gap patterns tested (a 4-, a 12-, and two 3-sample gaps), away from 0 Hz
 and Nyquist, it differs by about 5% for a spectrum spanning about 120 (an
 AR(2) with poles of radius 0.77) and by up to 37% for one spanning 2400
 (poles of radius 0.95 at 0.1 cycles per sample, two 3-sample gaps), each
-span taken over the window's 64 FFT frequencies. Other gap
-positions gave 1-13% (a single 4- to 12-sample gap at 165 positions, under 6%
-for 68% of them) and 7-70% (two 3-sample gaps at 325, median 34%), and the
-difference grows toward Nyquist. Several short gaps can leak far more than
-one long one: for 500-sample windows (NW = 4) of an AR(1) with coefficient
-0.99 (spanning about 40000), two 5-sample gaps changed the expected spectrum
-by up to 55% and one 20-sample gap by 2.4%, a bandwidth or more above 0 Hz. In exchange the valid samples are used: with three of four
-trials gapped in every window, the variance of white-noise power is a third of
+span taken over the window's 64 FFT frequencies. Other gap positions gave
+1-13% (a single 4- to 12-sample gap at 165 positions, under 6% for 68% of
+them) and 7-70% (two 3-sample gaps at 325, median 34%), and the difference
+grows toward Nyquist. Several short gaps can leak far more than one long one:
+for 500-sample windows (NW = 4) of an AR(1) with coefficient 0.99 (spanning
+about 40000), two 5-sample gaps changed the expected spectrum by up to 55%
+and one 20-sample gap by 2.4%, a bandwidth or more above 0 Hz. In exchange
+the valid samples are used: with three of four trials gapped in every window, the variance of white-noise power is a third of
 that of `"drop"`. Building the transform finds the tapers of each distinct
 pattern of artifacts in a trial window, about 2 ms per pattern for 1000
 samples and 65 ms for 60000. With multithreaded OpenBLAS, as in the NumPy
