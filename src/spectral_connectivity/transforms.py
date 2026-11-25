@@ -1259,8 +1259,8 @@ class _WindowedFourierTransform:
       coefficients of each taper;
     - optionally, to estimate trial windows that contain artifact samples
       rather than drop them, :meth:`_kept_trial_windows` (which may set
-      ``_n_kept_tapers``), :meth:`_detrend_gapped_windows`,
-      :meth:`_estimate_gapped_windows`, :meth:`_window_drop_rule`,
+      ``_n_kept_tapers``), :meth:`_estimate_gapped_windows`,
+      :meth:`_window_drop_rule`,
       :meth:`_dropped_window_notes`, and :meth:`_artifact_samples_details`.
     """
 
@@ -1789,7 +1789,7 @@ Frequency Analysis
             # Zeroing the artifacts in the windows' copy keeps the coefficients
             # of the windows containing them finite: those of a dropped window
             # are unused, and the others are detrended again over their valid
-            # samples (:meth:`_detrend_gapped_windows`). The other windows are
+            # samples (:meth:`_estimate_gapped_windows`). The other windows are
             # unchanged.
             xp.copyto(time_series, 0, where=self._artifact_windows()[:, :, xp.newaxis, :])
         # NaN or Inf input was reported at construction; detrending and
@@ -1802,8 +1802,6 @@ Frequency Analysis
         ):
             if self.detrend_type is not None:
                 time_series = detrend(time_series, type=self.detrend_type)
-            self._detrend_gapped_windows(time_series)
-
             coefficients = _multitaper_fft(
                 self._tapers_for_fft(),
                 time_series,
@@ -1814,26 +1812,19 @@ Frequency Analysis
             self._estimate_gapped_windows(coefficients, time_series)
             return self._weight_taper_coefficients(coefficients.swapaxes(2, -1), time_series)
 
-    def _detrend_gapped_windows(self, windows: NDArray[np.floating]) -> None:
-        """Detrend again, in place, the kept trial windows that contain
-        artifact samples; none by default (they are all dropped).
-
-        ``windows`` are the detrended zero-filled windows, ``(n_time_windows,
-        n_trials, n_signals, n_time_samples_per_window)``.
-        """
-
     def _estimate_gapped_windows(
         self,
         coefficients: NDArray[np.complexfloating],
         windows: NDArray[np.floating],
     ) -> None:
-        """Replace, in place, the coefficients of the kept trial windows that
-        contain artifact samples with those of their own tapers; none by
-        default (they are all dropped).
+        """Detrend again, in place, the kept trial windows that contain
+        artifact samples, and replace their coefficients with those of their
+        own tapers; none by default (they are all dropped).
 
         ``coefficients`` are every window's with :meth:`_tapers_for_fft`,
         ``(n_time_windows, n_trials, n_signals, n_fft_samples, n_tapers)``, and
-        ``windows`` the detrended windows they were computed from.
+        ``windows`` the detrended zero-filled windows they were computed from,
+        ``(n_time_windows, n_trials, n_signals, n_time_samples_per_window)``.
         """
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
@@ -3183,29 +3174,18 @@ class Multitaper(_WindowedFourierTransform):
             "window with an artifact."
         )
 
-    def _detrend_gapped_windows(self, windows: NDArray[np.floating]) -> None:
-        """Detrend each kept window with artifacts over its valid samples.
-
-        That equals detrending the samples before zero-filling, as the fit of
-        the zero-filled window is a constant or line too.
-        """
-        if not self._rescues_windows:
-            return
-        assert self._missing_data is not None
-        rescued = self._missing_data.windows
-        windows[rescued] = _detrend_valid_samples(
-            windows[rescued], self._missing_data.valid_of_rescued(), self.detrend_type
-        )
-
     def _estimate_gapped_windows(
         self,
         coefficients: NDArray[np.complexfloating],
         windows: NDArray[np.floating],
     ) -> None:
-        """Recompute the kept windows with artifacts with their own
+        """Detrend each kept window with artifacts over its valid samples, in
+        place (adaptive weighting reads them), and recompute it with its own
         missing-data tapers.
 
-        Only those windows' tapers are gathered, ``(n_rescued, 1,
+        Detrending over the valid samples equals detrending them before
+        zero-filling, as the fit of the zero-filled window is a constant or
+        line too. Only those windows' tapers are gathered, ``(n_rescued, 1,
         n_time_samples_per_window, n_tapers)``, rather than a set for every
         trial window: the DPSS coefficients of the others are already right.
         """
@@ -3213,10 +3193,14 @@ class Multitaper(_WindowedFourierTransform):
             return
         assert self._missing_data is not None
         rescued = self._missing_data.windows
+        gapped = _detrend_valid_samples(
+            windows[rescued], self._missing_data.valid_of_rescued(), self.detrend_type
+        )
+        windows[rescued] = gapped
         tapers = self._missing_data.tapers[self._missing_data.table_index[rescued]]
         coefficients[rescued] = _multitaper_fft(
             tapers[:, xp.newaxis],
-            windows[rescued],
+            gapped,
             self.n_fft_samples,
             self.sampling_frequency,
             workers=self.fft_workers,
