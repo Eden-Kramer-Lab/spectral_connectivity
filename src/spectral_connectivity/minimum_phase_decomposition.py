@@ -1084,10 +1084,8 @@ def _minimum_phase_factor_and_flags(
     # the zero-lag matrix singular: its window would start from the Cholesky
     # fallback, or from NaN on CuPy, whose Cholesky does not raise. Factor it
     # as an independent white signal of unit power instead; the factor is
-    # then that of the other signals with a 1 for it, and its scale (eps
-    # times the weakest signal's) makes that 1 a rounding-level power. A zero
-    # row and column would reproduce S exactly but leave the lag-0
-    # coefficient and noise covariance singular for the directed measures.
+    # then that of the other signals with a 1 for it, and its scale makes
+    # that 1 a rounding-level power (see Notes of minimum_phase_decomposition).
     working_cross_spectral_matrix = (
         working_cross_spectral_matrix
         + no_power[..., xp.newaxis, xp.newaxis, :] * identity_matrix
