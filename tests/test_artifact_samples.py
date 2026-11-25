@@ -276,7 +276,10 @@ def test_artifact_samples_is_immutable_and_reported(recording):
     with pytest.raises(AttributeError, match="immutable"):
         multitaper.artifact_samples = None
     returned = multitaper.artifact_samples
-    if not ON_GPU:  # CuPy arrays have no writeable flag; the copy alone isolates them
+    if ON_GPU:  # CuPy arrays have no writeable flag; the copy alone isolates them
+        returned[...] = True
+        assert not to_host(multitaper.artifact_samples).all()
+    else:
         assert not returned.flags.writeable
     assert "artifact_samples=<mask> (16 of 20 trial windows kept)" in repr(multitaper)
     assert "Artifact samples:              <mask> (16 of 20 trial windows kept)" in (

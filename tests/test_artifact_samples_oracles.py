@@ -36,8 +36,8 @@ from spectral_connectivity import (
 )
 from spectral_connectivity.simulate import simulate_lagged_broadband
 from spectral_connectivity.statistics import coherence_significance_pvalue
-from tests._artifact_helpers import quietly
-from tests._backend_helpers import to_host
+from tests._artifact_helpers import quietly, without_noisy_diagonal
+from tests._backend_helpers import ON_GPU, to_host
 from tests.reference._mne_measures import MEASURES as MNE_MEASURES
 
 SAMPLING_FREQUENCY = 200.0
@@ -66,6 +66,8 @@ LOOSE = frozenset(
         "canonical_coherency",
     }
 )
+# global_coherence's components come from svds by default, iterative on CuPy.
+GPU_ITERATIVE = frozenset({"global_coherence"})
 # delay and group_delay correct their p-values jointly over the windows of a
 # call, so they agree with one window's kept trials only window by window
 # (tested in test_artifact_samples.py).
@@ -179,10 +181,17 @@ def test_every_measure_equals_that_of_each_windows_kept_trials(
                 # Trials stay an output axis; the dropped trial windows are
                 # tested in test_a_bin_keeping_no_observation_is_nan.
                 value = value[trials]
+            value, reference = without_noisy_diagonal(measure, value, reference[0])
+            part_rtol = rtol
+            if ON_GPU and measure in GPU_ITERATIVE and value.dtype.kind == "c":
+                # CuPy's svds takes no start vector: its vectors agree to the
+                # solver's accuracy (1.6e-6 measured) and only up to phase.
+                value, reference = np.abs(value), np.abs(reference)
+                part_rtol = 1e-5
             np.testing.assert_allclose(
                 value,
-                reference[0],
-                rtol=rtol,
+                reference,
+                rtol=part_rtol,
                 atol=1e-12,
                 err_msg=f"{measure}, window {window}",
             )

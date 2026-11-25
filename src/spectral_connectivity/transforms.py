@@ -1992,7 +1992,9 @@ Frequency Analysis
             ``(n_time_samples,)`` mask broadcast over trials, a per-signal mask
             reduced over signals (an artifact in any signal leaves the sample
             out of all), and ``"nonfinite"`` resolved to the NaN or infinite
-            samples; ``None`` when not given. A detached read-only copy.
+            samples; ``None`` when not given. A detached copy, read-only on
+            the NumPy backend (a CuPy array on the GPU, which has no
+            read-only flag).
         """
         if self._artifact_samples is None:
             return None
@@ -2011,7 +2013,8 @@ Frequency Analysis
         Returns
         -------
         NDArray[bool], shape (n_time_windows, n_trials)
-            A detached read-only copy, all ``True`` without ``artifact_samples``.
+            A detached copy, all ``True`` without ``artifact_samples``;
+            read-only on the NumPy backend (CuPy arrays have no read-only flag).
         """
         if self._valid_windows is None:
             return mark_readonly_if_supported(
