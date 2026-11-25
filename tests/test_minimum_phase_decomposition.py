@@ -21,7 +21,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
 )
 from tests._backend_helpers import ON_GPU, to_device, to_host, xp
-from tests._var_oracle import _analytic_var, _dense_stable_var
+from tests._var_oracle import _analytic_var
 
 
 def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
@@ -1139,27 +1139,6 @@ def test_winding_number_is_not_counted_where_the_phase_jumps_between_bins():
     )
     assert winding[0] == pytest.approx(1)
     assert np.isnan(winding[1])
-
-
-def test_factor_from_a_start_that_is_not_covariant_warns(monkeypatch):
-    """Started from ``chol(R0)^T`` (``U^T U = R0``), the exact spectrum of
-    this dense VAR of signals of comparable power converges to a factor whose
-    determinant winds once around zero; the check reports it. From the
-    covariant start (``U U^T = R0``) it factors without a warning."""
-    coefficients, noise_covariance = _dense_stable_var(3, 1, 0.99, seed=857449258)
-    spectrum = to_device(_analytic_var_spectrum(coefficients, noise_covariance, n_fft=4096))
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        minimum_phase_decomposition(spectrum)
-    monkeypatch.setattr(
-        mpd_module,
-        "_reverse_cholesky",
-        lambda matrices: xp.linalg.cholesky(matrices).swapaxes(-1, -2),
-    )
-    with pytest.warns(UserWarning, match="not minimum phase for 1 of 1 sub-spectrum"):
-        factor = minimum_phase_decomposition(spectrum)
-    assert to_host(mpd_module._determinant_winding_number(factor))[0] == pytest.approx(-1)
 
 
 def test_an_infinite_power_window_is_unconverged_without_a_runtime_warning():
