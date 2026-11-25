@@ -13,7 +13,7 @@ import pytest
 
 from spectral_connectivity import Connectivity
 from spectral_connectivity.connectivity import _find_significant_frequencies
-from tests._artifact_helpers import COUNTING_MEASURES, quietly
+from tests._artifact_helpers import COUNTING_MEASURES, quietly, without_noisy_diagonal
 
 # Measures of every kind: plain averages, the normalized and phase-lag
 # families, those that count observations, and those that factor or invert the
@@ -69,9 +69,10 @@ def test_dropped_trials_match_their_removal(dropped_trials, measure):
     rtol = 1e-7 if measure in FACTORIZED else 1e-11
     for window in range(coefficients.shape[0]):
         kept = Connectivity(coefficients[[window]][:, valid[window]])
-        np.testing.assert_allclose(
-            masked[window], quietly(getattr(kept, measure))[0], rtol=rtol, atol=1e-13
+        value, reference = without_noisy_diagonal(
+            measure, masked[window], quietly(getattr(kept, measure))[0]
         )
+        np.testing.assert_allclose(value, reference, rtol=rtol, atol=1e-13)
 
 
 def test_group_measures_match_their_removal(dropped_trials):
