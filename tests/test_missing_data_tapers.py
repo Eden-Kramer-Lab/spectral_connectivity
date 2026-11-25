@@ -31,7 +31,7 @@ from spectral_connectivity.transforms import (
     _missing_data_slepian_tapers,
 )
 from tests._artifact_helpers import COUNTING_MEASURES, quietly
-from tests._backend_helpers import to_host
+from tests._backend_helpers import to_device, to_host
 from tests._expected_spectrum import _DETREND_BASIS, _expected_tapered_cross_spectrum
 
 SAMPLING_FREQUENCY = 200.0
@@ -370,12 +370,16 @@ def test_detrending_uses_the_valid_samples(detrend_type):
     windows = rng.standard_normal((3, 2, WINDOW))
     everywhere = np.ones(WINDOW, dtype=bool)
     np.testing.assert_allclose(
-        _detrend_valid_samples(windows, everywhere, detrend_type),
+        to_host(
+            _detrend_valid_samples(to_device(windows), to_device(everywhere), detrend_type)
+        ),
         scipy_detrend(windows, type=detrend_type),
         atol=1e-12,
     )
     valid = _valid([(5, 6), (40, 10)])
-    detrended = _detrend_valid_samples(windows, valid, detrend_type)
+    detrended = to_host(
+        _detrend_valid_samples(to_device(windows), to_device(valid), detrend_type)
+    )
     assert (detrended[..., ~valid] == 0).all()
     # The least-squares fit to the valid samples alone.
     basis = _DETREND_BASIS[detrend_type](WINDOW)
