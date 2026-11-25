@@ -176,8 +176,9 @@ Prefer the wrapper's labeled results so you never index these by hand.
   window touching an artifact is dropped whole, so use windows that fit
   between artifacts. The outputs mark what is kept: `Multitaper.valid_windows`,
   and `Connectivity.n_valid_observations`, the per-bin counts to give the
-  statistics functions instead of `n_observations`. See the
-  [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
+  statistics functions instead of `n_observations`; a bin keeping too few
+  (fewer than 2 for coherence, none for power) is NaN in their results. See
+  the [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
 
   ```python
   >>> with_gap = time_series.copy()

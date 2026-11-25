@@ -67,8 +67,14 @@ The migration guide for code written against 2.x is
 - `coherence_significance_pvalue` takes one count per estimate, an array
   that broadcasts against the coherency (such as
   `n_valid_observations[..., np.newaxis, np.newaxis]`); it used to reject an
-  array. An estimate whose count is 0 or 1 (a bin that keeps no observation,
-  or one) has no test and its p-value is NaN; one count below 2 still raises.
+  array. Every statistics function that takes a count of observations
+  (`coherence_significance_pvalue`, `coherence_fisher_z_transform`,
+  `coherence_bias`, `power_confidence_intervals`, `power_fisher_z_transform`,
+  `power_bias`, `power_variance`) reads an array of counts the same way: an
+  entry below the fewest observations the statistic needs (2 for the
+  coherence statistics, 1 for the power statistics), a bin that keeps too
+  few, gives NaN there, where the others raised; the power statistics accept
+  the NaN power of such a bin. A single count below that still raises.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working
@@ -884,11 +890,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   counts it takes, and `Connectivity.n_observations`: `coherence_bias`,
   `power_bias`, `power_variance`, `coherence_significance_pvalue`,
   `power_confidence_intervals`, and both counts of
-  `coherence_fisher_z_transform` and `power_fisher_z_transform`. A count the
-  formula cannot use raises a `ValueError`, as `coherence_significance_pvalue`
-  already did: `coherence_bias` needs at least 2 (it returned -0.5 for 0 and
-  divided by zero for 1), and the power helpers at least 1 (0 hit the
-  digamma and trigamma poles). A non-finite or fractional count raises too,
+  `coherence_fisher_z_transform` and `power_fisher_z_transform`. A single
+  count the formula cannot use raises a `ValueError`, as
+  `coherence_significance_pvalue` already did: `coherence_bias` needs at
+  least 2 (it returned -0.5 for 0 and divided by zero for 1), and the power
+  helpers at least 1 (0 hit the digamma and trigamma poles); in an array of
+  counts such an entry gives NaN (see Added). A non-finite or fractional count
+  raises too,
   naming the offending values of an array of counts. A boolean, a string, or
   None raises a `TypeError`: `power_bias(True)` and
   `power_confidence_intervals(True)` read `True` as 1 observation,
