@@ -21,7 +21,7 @@ from spectral_connectivity import (
 from spectral_connectivity.connectivity import _find_significant_frequencies
 from spectral_connectivity.statistics import coherence_significance_pvalue
 from tests._artifact_helpers import COUNTING_MEASURES, quietly
-from tests._backend_helpers import to_host
+from tests._backend_helpers import ON_GPU, to_host
 
 SAMPLING_FREQUENCY = 200.0
 WINDOW = 50  # samples
@@ -332,7 +332,8 @@ def test_artifact_samples_is_immutable_and_reported(recording):
     with pytest.raises(AttributeError, match="immutable"):
         multitaper.artifact_samples = None
     returned = multitaper.artifact_samples
-    assert not returned.flags.writeable
+    if not ON_GPU:  # CuPy arrays have no writeable flag; the copy alone isolates them
+        assert not returned.flags.writeable
     assert "artifact_samples=<mask> (16 of 20 trial windows kept)" in repr(multitaper)
     assert "Artifact samples:              <mask> (16 of 20 trial windows kept)" in (
         multitaper.summarize_parameters()
