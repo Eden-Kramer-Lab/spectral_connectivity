@@ -1242,9 +1242,12 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   Cholesky returns NaN rather than raising, a window with a dead channel was
   NaN and now factors as on NumPy. On NumPy, the other signals' values in
   such a window changed: conditional Granger, DTF, DC, PDC and gPDC differed
-  from those of the same signals without the dead channel by up to 2.6e-2
-  (dDTF by 3.5e-4), and now match them to 3e-15. A window where no signal
-  has power is still NaN with a warning.
+  from those of the same signals without the dead channel by up to 3.7e-2
+  (dDTF by 5.1e-4), and now match them to 3e-15. A window where no signal
+  has power is still NaN with a warning, which now reports it as singular:
+  it started from a finite factor that never converged, so one such window
+  held every other window to `max_iterations` (about 20 times the time, for
+  one of 50 windows) and the warning blamed the iteration budget.
 - The inverses behind the directed measures (of the factor's lag-0
   coefficient, the transfer function, the reduced transfer function, and
   the noise covariance or its target block) load each diagonal entry by

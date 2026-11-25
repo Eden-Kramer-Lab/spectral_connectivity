@@ -421,6 +421,50 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_sign
     np.testing.assert_array_equal(silent, factor)
 
 
+@_BOTH_FACTORIZATION_PATHS
+def test_a_window_with_no_power_does_not_hold_the_batch_to_max_iterations(
+    real_signals, caplog
+):
+    """A window where every signal is zero is returned as NaN and reported as
+    singular, and the other windows stop when they converge: the batch takes
+    the iterations they take on their own.
+
+    Regression: the window's finite all-zero start never converged, so the
+    whole batch ran to ``max_iterations``, and the warning blamed the
+    iteration budget ("within 500 iterations") rather than the window."""
+    import logging
+
+    rng = np.random.default_rng(0)
+    live = _cross_spectrum_of(
+        _lagged_signals(16, rng, dtype=float if real_signals else complex, n_windows=2)
+    )
+    spectrum = np.concatenate([live[:1], np.zeros_like(live[:1]), live[1:]])
+    assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
+
+    def factor_and_iterations(cross_spectral_matrix):
+        caplog.clear()
+        with caplog.at_level(
+            logging.DEBUG, logger="spectral_connectivity.minimum_phase_decomposition"
+        ):
+            factor = minimum_phase_decomposition(to_device(cross_spectral_matrix))
+        n_iterations = sum(message.startswith("iteration: ") for message in caplog.messages)
+        return to_host(factor), n_iterations
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        live_factor, live_iterations = factor_and_iterations(live)
+    with (
+        _ignoring_cholesky_start_warning(),
+        pytest.warns(UserWarning, match=r"for 1 of 3 .*\(a sub-spectrum became singular"),
+    ):
+        factor, iterations = factor_and_iterations(spectrum)
+
+    assert live_iterations < 500
+    assert iterations == live_iterations
+    assert np.isnan(factor[1]).all()
+    np.testing.assert_allclose(factor[[0, 2]], live_factor, rtol=1e-12)
+
+
 def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
     """The per-iteration debug log (guarded to avoid a device sync) still works.
 
@@ -1065,7 +1109,7 @@ def test_a_single_precision_signal_near_its_largest_value_is_scaled_by_its_power
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        signal_scale, _ = mpd_module._signal_scale(to_device(single))
+        signal_scale, _, _ = mpd_module._signal_scale(to_device(single))
         factor = to_host(minimum_phase_decomposition(to_device(single)))
     double_factor = to_host(minimum_phase_decomposition(to_device(single.astype(complex))))
 
@@ -1109,7 +1153,8 @@ def test_an_all_pass_rotation_of_the_factor_winds_around_zero(n_fft):
         to_host(mpd_module._grid_winding_number(phase)), [0, 0, -1, 1], atol=1e-12
     )
     np.testing.assert_allclose(winding[:3], [0, 0, -1], atol=1e-12)
-    assert np.isnan(winding[3])
+    # Not counted (NaN), or counted as winding; never a false 0.
+    assert np.isnan(winding[3]) or abs(winding[3]) > 0.5
 
 
 @_BOTH_FACTORIZATION_PATHS
@@ -1152,9 +1197,8 @@ def test_the_recount_keeps_the_winding_of_a_causal_factor_with_a_slow_tail():
     zero ``z₀`` outside the unit circle (``|z₀| = 1.12``): a causal factor
     that is not minimum phase, winding once round zero clockwise. Its pole
     at radius 0.91 leaves a tail of a tenth of its largest lag coefficient at
-    lag 16. The recount reads
-    the lags as causal, 0 to ``n - 1``, as the Wilson iteration builds them,
-    and keeps the count of -1.
+    lag 16. The recount reads the lags as causal, 0 to ``n - 1``, as the
+    Wilson iteration builds them, and keeps the count of -1.
 
     Regression: the recount interpolated on lags -16 to 15, read that tail
     as negative lags and counted 0, so the factor was not flagged."""
