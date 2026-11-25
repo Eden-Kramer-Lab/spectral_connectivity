@@ -2,7 +2,7 @@
 
 import contextlib
 import warnings
-from collections.abc import Hashable, Iterator, Sequence
+from collections.abc import Callable, Hashable, Iterator, Sequence
 from logging import getLogger
 from typing import (
     TYPE_CHECKING,
@@ -1099,6 +1099,7 @@ def _warn_about_unusual_time_series(
     time_series: BackendArray,
     artifact_samples: BackendArray | None = None,
     *,
+    unused_samples: Callable[[], BackendArray] | None = None,
     suggest_artifact_samples: bool = False,
     finite_outside_artifacts: bool = False,
 ) -> bool:
@@ -1108,7 +1109,12 @@ def _warn_about_unusual_time_series(
     already warned about NaN or Inf in its input (see
     :meth:`Connectivity.from_transform`). With ``artifact_samples``, a
     ``(n_time_samples, n_trials)`` mask, the samples it marks as artifacts
-    do not count: they never reach an estimate. ``suggest_artifact_samples``
+    do not count: they never reach an estimate (and are zeroed before the
+    FFT). ``unused_samples`` returns a mask of the same shape that also marks
+    the other samples no kept trial window covers (called only for NaN or
+    Inf input): NaN or Inf there is not reported either, but may reach
+    coefficients (of weight 0), so the result is ``False``, with no warning
+    when there is no other. ``suggest_artifact_samples``
     names the transform's ``artifact_samples`` among the remedies, and
     ``finite_outside_artifacts`` (``artifact_samples="nonfinite"``) skips the
     finiteness check its caller has already made.
@@ -1141,11 +1147,17 @@ def _warn_about_unusual_time_series(
     if bool(xp.all(is_finite)):
         return True
     is_nonfinite = ~is_finite
+    if unused_samples is not None:
+        is_nonfinite &= ~unused_samples()[..., xp.newaxis]
     n_nonfinite = int(xp.sum(is_nonfinite))
+    if n_nonfinite == 0:
+        # Each lies where no kept trial window reaches (in a dropped one's
+        # coefficients, of weight 0, or in no window): no estimate sees it.
+        return False
     where = f"signals {_listed_indices(xp.any(is_nonfinite, axis=(0, 1)))}"
     if time_series.shape[1] > 1:
         where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
-    at_valid = "" if artifact_samples is None else " at samples artifact_samples does not mark"
+    at_valid = "" if unused_samples is None else " in the trial windows artifact_samples keeps"
     leave_out = (
         "pass artifact_samples='nonfinite' to leave them out (it drops every trial "
         "window that contains one), or "
@@ -1857,6 +1869,7 @@ Frequency Analysis
         self._time_series_is_finite = _warn_about_unusual_time_series(
             self._time_series,
             self._artifact_samples,
+            unused_samples=None if self._artifact_samples is None else self._unused_samples,
             suggest_artifact_samples=True,
             finite_outside_artifacts=self._artifact_samples_mode == "nonfinite",
         )
@@ -1888,6 +1901,27 @@ Frequency Analysis
         """Warnings of a subclass about the windows it drops, as (text, closing
         sentence) pairs, given before the base ones; none by default."""
         return []
+
+    def _unused_samples(self) -> BackendArray:
+        """``(n_time_samples, n_trials)``, ``True`` at the samples no kept trial
+        window covers: the artifacts, the rest of each dropped trial window
+        that no kept window overlaps, and any sample past the last window."""
+        assert self._artifact_samples is not None
+        n_time, n_trials = self._artifact_samples.shape
+        kept = (
+            xp.ones((len(self.time), n_trials), dtype=xp.int64)
+            if self._valid_windows is None
+            else self._valid_windows.astype(xp.int64)
+        )
+        # Each kept window adds 1 from its first sample and removes it after
+        # its last; the running sum counts the kept windows over each sample.
+        # The starts are distinct, as are the ends, so each += sees each index once.
+        starts = xp.arange(kept.shape[0]) * self.n_time_samples_per_step
+        steps = xp.zeros((n_time + 1, n_trials), dtype=xp.int64)
+        steps[starts] += kept
+        steps[starts + self.n_time_samples_per_window] -= kept
+        unused: BackendArray = xp.cumsum(steps, axis=0)[:n_time] == 0
+        return unused
 
     def _check_kept_trial_windows(self, valid_windows: BackendArray) -> None:
         """Raise if ``valid_windows`` keeps no trial window; warn if it keeps
@@ -2211,8 +2245,9 @@ class Multitaper(_WindowedFourierTransform):
         samples as ``True``, pass ``~mask``. Artifact intervals convert
         directly: set the mask ``True`` inside each one (for an MNE ``BAD_``
         annotation, the samples from its onset for its duration; for a row
-        ``[begin, end]`` of a FieldTrip artifact matrix, those samples). With
-        the default ``artifact_handling="drop"``, a
+        ``[begsample, endsample]`` of a FieldTrip artifact matrix, 1-based
+        sample numbers that include both ends, ``mask[begsample - 1:endsample]``).
+        With the default ``artifact_handling="drop"``, a
         trial's window touching any artifact sample is dropped whole: all its
         tapers' coefficients get observation weight 0 in every expectation,
         and the window's other trials are averaged on their own, so long
@@ -2242,8 +2277,9 @@ class Multitaper(_WindowedFourierTransform):
         NaN in every measure); a mask that leaves no trial window raises
         ``ValueError``. The artifact samples are set to zero before
         detrending and tapering, so the coefficients of a dropped window are
-        finite (and unused), and the NaN warning reports only NaN or Inf at
-        samples not marked as artifacts. The mask is read by position, like
+        finite unless it holds NaN or Inf the mask does not mark (they are
+        unused either way), and the NaN warning reports only NaN or Inf in
+        the trial windows kept. The mask is read by position, like
         ``time_series``. Provenance records the kind of mask (``"mask"`` or
         ``"nonfinite"``) with ``artifact_handling`` and the numbers of
         artifact samples and dropped trial windows, not the mask itself.

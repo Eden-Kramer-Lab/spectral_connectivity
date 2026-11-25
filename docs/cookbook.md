@@ -304,10 +304,9 @@ result's `transform_parameters_json` records the kind of mask and the numbers
 of artifact samples and dropped trial windows (`n_observations` stays the raw
 count).
 
-Artifact intervals given in seconds (an MNE `BAD_` annotation's onset and
-duration, a FieldTrip artifact matrix's `[begin, end]` rows converted to
-seconds) become a mask that is `True` inside each one, with the time series'
-`(n_time_samples, n_trials)` layout:
+Artifact intervals given in seconds, such as an MNE `BAD_` annotation's onset
+and duration, become a mask that is `True` from each onset for its duration,
+with the time series' `(n_time_samples, n_trials)` layout:
 
 ```python
 >>> sampling_frequency = 500
@@ -327,12 +326,35 @@ seconds) become a mask that is `True` inside each one, with the time series'
 
 ```
 
+A FieldTrip artifact definition (`cfg.artfctdef.<type>.artifact`) gives each
+interval as a row `[begsample, endsample]` of 1-based sample numbers that
+include both ends: FieldTrip marks `begsample:endsample`
+([`trl2boolvec`](https://github.com/fieldtrip/fieldtrip/blob/00ecb6e750c6e0d22e087be1874834e689a475d8/private/trl2boolvec.m)).
+In Python that is the slice `begsample - 1:endsample`. The numbers count from
+the start of the recording, so in an epoch that starts at recording sample
+`trl_begsample` (the first column of FieldTrip's `trl`) the slice is
+`begsample - trl_begsample:endsample - trl_begsample + 1`:
+
+```python
+>>> artifact = np.array([[601, 650]])  # one row, samples 601 to 650 of the recording
+>>> recording_mask = np.zeros(1000, dtype=bool)
+>>> for begsample, endsample in artifact:
+...     recording_mask[begsample - 1 : endsample] = True
+>>> int(recording_mask.sum()), int(np.flatnonzero(recording_mask)[0])  # 50 samples from index 600
+(50, 600)
+
+```
+
 A `(n_time_samples,)` mask is shared by every trial. A mask may also mark each
 channel, with the time series' own `(n_time_samples, n_trials, n_signals)`
 shape: an artifact in one channel then leaves the sample out of every channel,
 since every cross-spectrum needs both channels at the same samples. For a 2-D
 `(n_time_samples, n_channels)` time series give the wrapper a
-`(n_time_samples,)` or `(n_time_samples, n_channels)` mask.
+`(n_time_samples,)` or `(n_time_samples, n_channels)` mask. For an
+`xarray.DataArray` time series, a `DataArray` mask is aligned by dimension
+name: it needs the time dimension, and is shared by every trial or channel
+when it lacks that dimension. An unlabeled mask is read in the time, trial,
+channel order.
 
 The measures that count observations (listed under
 `Connectivity.n_valid_observations`) count each bin's kept observations.
@@ -357,6 +379,9 @@ frequency, for the statistics functions:
 ... )
 
 ```
+
+A bin that keeps fewer than two observations, such as a window that keeps no
+trial, has no test, and its p-value is NaN.
 
 Dropping a window throws away its valid samples too. With
 `artifact_handling="missing_data_tapers"` (a `Multitaper` setting; for the

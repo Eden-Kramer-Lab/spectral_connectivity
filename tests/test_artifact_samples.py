@@ -1,10 +1,11 @@
 """``Multitaper(artifact_samples=...)``: dropping the trial windows that
 contain artifact samples (``True`` in the mask).
 
-A trial's window is used only if none of its samples is an artifact. Every measure,
-those that count observations and the jackknife included, must equal its value
-for the data with the dropped trial windows physically removed; the counting
-measures stay unbiased and the coherence test keeps its size.
+A trial's window is used only if none of its samples is an artifact. The
+oracles (test_artifact_samples_oracles.py) test every measure against the data
+with the dropped trial windows physically removed, and the coherence test's
+null; these test the mask's forms and messages, the wrapper's layouts, the
+counting measures' null mean, the STFT, and delay's per-window selection.
 """
 
 import warnings
@@ -19,29 +20,14 @@ from spectral_connectivity import (
     multitaper_connectivity,
 )
 from spectral_connectivity.connectivity import _find_significant_frequencies
-from spectral_connectivity.statistics import coherence_significance_pvalue
 from tests._artifact_helpers import COUNTING_MEASURES, quietly
-from tests._backend_helpers import to_host
+from tests._backend_helpers import ON_GPU, to_host
 
 SAMPLING_FREQUENCY = 200.0
 WINDOW = 50  # samples
-# Plain averages, the normalized and phase-lag families, the measures that
-# count observations, and those that invert or factor the cross-spectrum.
-MEASURES = (
-    "power",
-    "magnitude_squared_coherence",
-    "imaginary_coherence",
-    "phase_locking_value",
-    "phase_lag_index",
-    "weighted_phase_lag_index",
-    "debiased_squared_phase_lag_index",
-    "debiased_squared_weighted_phase_lag_index",
-    "pairwise_phase_consistency",
-    "partial_coherence",
-    "pairwise_spectral_granger_prediction",
-)
-FACTORIZED = frozenset({"pairwise_spectral_granger_prediction"})
-JACKKNIFED = ("magnitude_squared_coherence", "pairwise_phase_consistency")
+# The oracles test the jackknife of coherence against one computed by hand;
+# this tests a counting measure with the default transformation.
+JACKKNIFED = ("pairwise_phase_consistency",)
 
 
 def _multitaper(time_series, artifacts, **kwargs):
@@ -74,32 +60,6 @@ def recording():
     return time_series, artifacts
 
 
-@pytest.mark.parametrize("step", [WINDOW, WINDOW // 2], ids=["adjacent", "overlapping"])
-def test_every_measure_equals_that_of_the_kept_trial_windows(recording, step):
-    time_series, artifacts = recording
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)  # overlap; few trials
-        multitaper = _multitaper(
-            time_series, artifacts, time_halfbandwidth_product=2, n_time_samples_per_step=step
-        )
-        connectivity = Connectivity.from_transform(multitaper)
-    starts = np.arange(0, time_series.shape[0] - WINDOW + 1, step)
-    assert len(starts) == len(multitaper.time)
-    for measure in MEASURES:
-        masked = quietly(getattr(connectivity, measure))
-        rtol = 1e-7 if measure in FACTORIZED else 1e-10
-        for window, start in enumerate(starts):
-            kept = _kept_window(time_series, artifacts, start, time_halfbandwidth_product=2)
-            np.testing.assert_allclose(
-                masked[window],
-                quietly(getattr(kept, measure))[0],
-                rtol=rtol,
-                atol=1e-13,
-                err_msg=f"{measure}, window {window}",
-            )
-            assert (connectivity.n_valid_observations[window] == kept.n_observations).all()
-
-
 def test_jackknife_equals_that_of_the_kept_trial_windows(recording):
     time_series, artifacts = recording
     connectivity = Connectivity.from_transform(
@@ -126,22 +86,6 @@ def test_jackknife_equals_that_of_the_kept_trial_windows(recording):
             kept_lower, kept_upper = kept.confidence_interval
             np.testing.assert_allclose(lower[window], kept_lower[0], rtol=1e-9, atol=1e-13)
             np.testing.assert_allclose(upper[window], kept_upper[0], rtol=1e-9, atol=1e-13)
-
-
-def test_without_time_resolution_the_kept_trials_are_used(recording):
-    time_series, artifacts = recording
-    trials = ~artifacts.any(axis=0)
-    with pytest.warns(UserWarning, match=r"drops 80% of trial windows \(1 of 5 kept\)"):
-        multitaper = Multitaper(time_series, SAMPLING_FREQUENCY, artifact_samples=artifacts)
-    masked = Connectivity.from_transform(multitaper)
-    kept = Connectivity.from_transform(Multitaper(time_series[:, trials], SAMPLING_FREQUENCY))
-    assert trials.sum() == 1  # only trial 4 is clean throughout
-    for measure in ("power", "magnitude_squared_coherence"):
-        np.testing.assert_allclose(
-            quietly(getattr(masked, measure)),
-            quietly(getattr(kept, measure)),
-            rtol=1e-10,
-        )
 
 
 def test_nonfinite_marks_the_nonfinite_samples_as_artifacts(recording):
@@ -202,7 +146,8 @@ def test_nan_outside_the_artifacts_still_warns(recording):
     time_series = time_series.copy()
     time_series[120, 0, 1] = np.nan  # in window 2, which every trial keeps
     with pytest.warns(
-        UserWarning, match="1 NaN or infinite value at samples artifact_samples does not mark"
+        UserWarning,
+        match="1 NaN or infinite value in the trial windows artifact_samples keeps",
     ):
         _multitaper(time_series, artifacts)
 
@@ -213,6 +158,20 @@ def test_nan_covered_by_the_mask_does_not_warn(recording):
         warnings.simplefilter("error")
         multitaper = _multitaper(time_series, artifacts)
         Connectivity.from_transform(multitaper).magnitude_squared_coherence()
+
+
+def test_nan_only_in_dropped_trial_windows_does_not_warn(recording):
+    """An unmarked NaN in a trial window the mask drops reaches no estimate."""
+    time_series, artifacts = recording
+    with_nan = time_series.copy()
+    with_nan[20, 0, 1] = np.nan  # window 0 drops trial 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        coherence = Connectivity.from_transform(
+            _multitaper(with_nan, artifacts)
+        ).magnitude_squared_coherence()
+    clean = Connectivity.from_transform(_multitaper(time_series, artifacts))
+    np.testing.assert_array_equal(coherence, clean.magnitude_squared_coherence())
 
 
 def test_unmasked_nan_warning_suggests_artifact_samples():
@@ -317,7 +276,8 @@ def test_artifact_samples_is_immutable_and_reported(recording):
     with pytest.raises(AttributeError, match="immutable"):
         multitaper.artifact_samples = None
     returned = multitaper.artifact_samples
-    assert not returned.flags.writeable
+    if not ON_GPU:  # CuPy arrays have no writeable flag; the copy alone isolates them
+        assert not returned.flags.writeable
     assert "artifact_samples=<mask> (16 of 20 trial windows kept)" in repr(multitaper)
     assert "Artifact samples:              <mask> (16 of 20 trial windows kept)" in (
         multitaper.summarize_parameters()
@@ -421,6 +381,98 @@ def test_delay_significance_agrees_window_by_window(recording):
         )
 
 
+@pytest.mark.parametrize(
+    ("dims", "index"),
+    [
+        (("time",), (60,)),
+        (("time", "trial"), (60, 1)),
+        (("trial", "time"), (1, 60)),
+        (("channel", "time"), (2, 60)),
+    ],
+)
+def test_the_wrapper_shares_a_labeled_mask_over_the_dims_it_lacks(dims, index):
+    """A DataArray mask of a (time, trial, channel) series that lacks the
+    trial or channel dimension is shared by every trial or channel, whatever
+    order its dimensions are in. (The oracles test (time, channel) where the
+    trial and channel counts are equal.)"""
+    xr = pytest.importorskip("xarray")
+    time_series = np.random.default_rng(13).standard_normal((200, 4, 3))
+    labeled = xr.DataArray(time_series, dims=("time", "trial", "channel"))
+    mask = np.zeros([{"time": 200, "trial": 4, "channel": 3}[dim] for dim in dims], bool)
+    mask[index] = True
+    # The same artifacts as a (time, trial) mask: trial 1, or every trial.
+    expected = np.zeros((200, 4), bool)
+    expected[60, 1 if "trial" in dims else slice(None)] = True
+    transform_kwargs = {"n_time_samples_per_window": WINDOW}
+
+    def power(artifact_samples):
+        return quietly(
+            multitaper_connectivity,
+            labeled,
+            SAMPLING_FREQUENCY,
+            method="power",
+            transform_kwargs={**transform_kwargs, "artifact_samples": artifact_samples},
+        ).values
+
+    np.testing.assert_array_equal(power(xr.DataArray(mask, dims=dims)), power(expected))
+
+
+@pytest.mark.parametrize(
+    ("dims", "match"),
+    [
+        (("time", "epoch"), r"has dimension\(s\) \['epoch'\] that time_series"),
+        (("channel",), r"not the time dimension 'time'"),
+    ],
+)
+def test_the_wrapper_refuses_a_labeled_mask_without_the_series_dims(dims, match):
+    xr = pytest.importorskip("xarray")
+    labeled = xr.DataArray(
+        np.random.default_rng(14).standard_normal((200, 4, 3)),
+        dims=("time", "trial", "channel"),
+    )
+    mask = xr.DataArray(np.zeros((200, 3) if len(dims) == 2 else 3, bool), dims=dims)
+    with pytest.raises(ValueError, match=match):
+        multitaper_connectivity(
+            labeled,
+            SAMPLING_FREQUENCY,
+            method="power",
+            transform_kwargs={"artifact_samples": mask},
+        )
+
+
+@pytest.mark.parametrize(
+    ("shape", "match"),
+    [
+        (
+            (3, 200, 4),
+            (
+                r"for time_series with dimensions \('channel', 'time', 'trial'\) and shape "
+                r"\(3, 200, 4\), an unlabeled mask is read by position in the order "
+                r"\('time', 'trial', 'channel'\): it must be \(200,\) for \('time',\), "
+                r"\(200, 4\) for \('time', 'trial'\), or \(200, 4, 3\) .*"
+                r"pass xr.DataArray\(artifact_samples, dims=\('channel', 'time', 'trial'\)\)"
+            ),
+        ),
+        ((4, 200), r"Did you transpose it\? Pass artifact_samples.T"),
+    ],
+)
+def test_the_wrapper_states_the_mask_shapes_of_labeled_input_in_its_dims(shape, match):
+    """An unlabeled mask of a labeled series is read in the order the series
+    is transposed to; a wrong shape is reported in the series' own names."""
+    xr = pytest.importorskip("xarray")
+    labeled = xr.DataArray(
+        np.random.default_rng(15).standard_normal((3, 200, 4)),
+        dims=("channel", "time", "trial"),
+    )
+    with pytest.raises(ValueError, match=match):
+        multitaper_connectivity(
+            labeled,
+            SAMPLING_FREQUENCY,
+            method="power",
+            transform_kwargs={"artifact_samples": np.zeros(shape, dtype=bool)},
+        )
+
+
 def test_the_wrapper_transposes_a_labeled_mask_like_its_labeled_input(recording):
     xr = pytest.importorskip("xarray")
     time_series, artifacts = recording
@@ -509,17 +561,6 @@ def test_counting_measures_are_unbiased_with_dropped_trials(
     biased, _ = _replicate_mean_and_limit(getattr(raw_counted, measure)())
     # Four limits: twenty standard errors.
     assert abs(biased) > 4 * limit, (biased, limit)
-
-
-def test_coherence_test_keeps_its_size_with_dropped_trials(independent_signals):
-    coherency = independent_signals.coherency()[:, MC_FREQUENCIES, 0, 1]
-    counts = independent_signals.n_valid_observations[:, MC_FREQUENCIES]
-    rejected = coherence_significance_pvalue(coherency, counts) < 0.05
-    size = rejected.mean()
-    limit = 5 * np.sqrt(0.05 * 0.95 / rejected.size)
-    assert abs(size - 0.05) < limit, (size, limit)
-    raw = coherence_significance_pvalue(coherency, independent_signals.n_observations) < 0.05
-    assert raw.mean() - 0.05 > 10 * limit, raw.mean()
 
 
 def test_stft_drops_the_trial_windows_with_artifacts(recording):
