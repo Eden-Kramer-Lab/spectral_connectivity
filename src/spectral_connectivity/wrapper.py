@@ -1814,6 +1814,10 @@ def _artifact_samples_in_core_layout(
         artifact_samples = _labeled_artifact_samples_in_core_layout(
             artifact_samples, shape, dimension_order, time_series_dims
         )
+    elif dimension_order is not None:
+        _require_core_layout_of_labeled_input(
+            artifact_samples, shape, dimension_order, time_series_dims
+        )
     if len(shape) == 2:
         mask = np.asarray(artifact_samples)
         n_time, n_signals = shape
@@ -1874,6 +1878,40 @@ def _labeled_artifact_samples_in_core_layout(
     if missing:
         artifact_samples = artifact_samples.expand_dims(missing)
     return artifact_samples.transpose(*dimension_order[: last + 1]).data
+
+
+def _require_core_layout_of_labeled_input(
+    artifact_samples: Any,
+    shape: tuple[int, ...],
+    dimension_order: tuple[Hashable, ...],
+    time_series_dims: tuple[Hashable, ...] | None,
+) -> None:
+    """Refuse an unlabeled mask of a DataArray time series whose shape is
+    none of the layouts it is read in, saying them in the series' dimension
+    names."""
+    mask_shape = np.shape(artifact_samples)
+    accepted = [tuple(shape[:n_axes]) for n_axes in range(1, len(shape) + 1)]
+    if mask_shape in accepted:
+        return
+    own_dims = tuple(time_series_dims) if time_series_dims is not None else dimension_order
+    own_shape = tuple(shape[dimension_order.index(dimension)] for dimension in own_dims)
+    layouts = [f"{layout} for {dimension_order[: len(layout)]!r}" for layout in accepted]
+    hint = ""
+    if mask_shape == own_shape:
+        hint = (
+            " That is time_series' own shape in its own dimension order: pass "
+            f"xr.DataArray(artifact_samples, dims={own_dims!r}) to have it transposed "
+            "like time_series."
+        )
+    elif len(mask_shape) == 2 and mask_shape[::-1] == accepted[1]:
+        hint = " Did you transpose it? Pass artifact_samples.T."
+    msg = (
+        f"artifact_samples has shape {mask_shape}; for time_series with dimensions "
+        f"{own_dims!r} and shape {own_shape}, an unlabeled mask is read by position "
+        f"in the order {dimension_order!r}: it must be "
+        f"{', '.join(layouts[:-1])}, or {layouts[-1]}.{hint}"
+    )
+    raise ValueError(msg)
 
 
 # Every Multitaper setting, in its signature's order; the ones that

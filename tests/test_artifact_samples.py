@@ -480,6 +480,39 @@ def test_the_wrapper_refuses_a_labeled_mask_without_the_series_dims(dims, match)
         )
 
 
+@pytest.mark.parametrize(
+    ("shape", "match"),
+    [
+        (
+            (3, 200, 4),
+            (
+                r"for time_series with dimensions \('channel', 'time', 'trial'\) and shape "
+                r"\(3, 200, 4\), an unlabeled mask is read by position in the order "
+                r"\('time', 'trial', 'channel'\): it must be \(200,\) for \('time',\), "
+                r"\(200, 4\) for \('time', 'trial'\), or \(200, 4, 3\) .*"
+                r"pass xr.DataArray\(artifact_samples, dims=\('channel', 'time', 'trial'\)\)"
+            ),
+        ),
+        ((4, 200), r"Did you transpose it\? Pass artifact_samples.T"),
+    ],
+)
+def test_the_wrapper_states_the_mask_shapes_of_labeled_input_in_its_dims(shape, match):
+    """An unlabeled mask of a labeled series is read in the order the series
+    is transposed to; a wrong shape is reported in the series' own names."""
+    xr = pytest.importorskip("xarray")
+    labeled = xr.DataArray(
+        np.random.default_rng(15).standard_normal((3, 200, 4)),
+        dims=("channel", "time", "trial"),
+    )
+    with pytest.raises(ValueError, match=match):
+        multitaper_connectivity(
+            labeled,
+            SAMPLING_FREQUENCY,
+            method="power",
+            transform_kwargs={"artifact_samples": np.zeros(shape, dtype=bool)},
+        )
+
+
 def test_the_wrapper_transposes_a_labeled_mask_like_its_labeled_input(recording):
     xr = pytest.importorskip("xarray")
     time_series, artifacts = recording
