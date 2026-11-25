@@ -364,26 +364,34 @@ sets the null, so choose it for the question:
 | Question | `kind` | Needs | A shared stimulus-locked response |
 | --- | --- | --- | --- |
 | Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
-| Are the signals independent at all? | `"phase_rotation"` | the half bandwidth | is rejected |
-| Is there more than zero-lag mixing? | `"conjugation"` | 2+ independent observations | is rejected if lagged |
+| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged time windows), the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged time windows) | is rejected if lagged |
 
 - `"trial_shuffle"` shuffles each signal's trials, keeping each trial whole.
   The expectation must average trials.
-- `"phase_rotation"` rotates each trial and taper by a random phase. The
-  frequencies within the transform's half bandwidth of 0 Hz and Nyquist are
-  not tested; `Connectivity.from_transform` records it for a `Multitaper`
+- `"phase_rotation"` rotates each trial (every taper alike) by a random
+  phase. The frequencies within the transform's half bandwidth of 0 Hz and
+  Nyquist are not tested; `Connectivity.from_transform` records it for a `Multitaper`
   (`frequency_resolution / 2`), and `half_bandwidth=` overrides it. A common
   stimulus-locked response is rejected too; to ask about interaction beyond
   it, use `"trial_shuffle"`. Subtracting each signal's mean across trials
   first leaves p-values too small unless there are many trials (6.2-7.7% of
   tests rejected at nominal 5% with 10 trials, about 5% with 40).
-- `"conjugation"` conjugates (time-reverses) random observations. 0 Hz and
-  Nyquist, which it leaves unchanged, are not tested. Instantaneous mixing of
+- `"conjugation"` conjugates (time-reverses) random trials. 0 Hz and Nyquist,
+  which it leaves unchanged, are not tested. Instantaneous mixing of
   independent sources is in its null, so pair it with
   a measure of lagged interaction: `imaginary_coherence`, the phase-lag
   indices, `phase_slope_index`, or pairwise spectral Granger. With
   `magnitude_squared_coherence` it asks only whether the coupling exceeds what
   a real coherency gives.
+- `"phase_rotation"` and `"conjugation"` randomize whole trials, so each needs
+  2 or more: a trial's tapers are correlated wherever the spectrum is not flat
+  across the half bandwidth (near a peak, or on a steep 1/f spectrum), and
+  randomizing them separately would reject independent signals far too
+  often. With one recording, average its time windows instead
+  (`expectation_type="time_tapers"`), which makes each window a unit; that
+  holds only for windows longer than the signals' memory, which a narrow
+  spectral peak makes long.
 
 Here signal 1 is signal 0 delayed by 3 samples (6 ms) and signal 2 is
 independent:
@@ -393,7 +401,7 @@ independent:
 >>> rng = np.random.default_rng(1)
 >>> leader = rng.standard_normal((503, 10))
 >>> lagged = np.stack([leader[3:], leader[:-3], rng.standard_normal((500, 10))], axis=-1)
->>> lagged += rng.standard_normal(lagged.shape)
+>>> lagged += 0.5 * rng.standard_normal(lagged.shape)
 >>> multitaper = Multitaper(lagged, sampling_frequency=500, time_halfbandwidth_product=2)
 >>> connectivity = Connectivity.from_transform(multitaper)
 >>> result = connectivity.surrogate_test(

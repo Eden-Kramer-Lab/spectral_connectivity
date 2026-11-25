@@ -99,7 +99,7 @@ _NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife", "surrogate_test"})
 # The question each kind answers, for the message naming them.
 _SURROGATE_QUESTIONS = {
     "trial_shuffle": "do the signals covary from trial to trial (several trials)?",
-    "phase_rotation": "are the signals independent at all (one trial suffices)?",
+    "phase_rotation": "are the signals independent at all?",
     "conjugation": "is there more than zero-lag mixing such as volume conduction?",
 }
 _SURROGATE_KINDS = tuple(_SURROGATE_QUESTIONS)
@@ -2924,13 +2924,14 @@ class Connectivity:
 
         Choose ``kind`` for the question:
 
-        ==========================================  ====================  ===========================  =================================
-        Question                                    ``kind``              Needs                        A shared stimulus-locked response
-        ==========================================  ====================  ===========================  =================================
-        Do the signals covary from trial to trial?  ``"trial_shuffle"``   2+ trials                    stays in the null
-        Are the signals independent at all?         ``"phase_rotation"``  the half bandwidth           is rejected
-        Is there more than zero-lag mixing?         ``"conjugation"``     2+ independent observations  is rejected if lagged
-        ==========================================  ====================  ===========================  =================================
+        ==========================================  ====================  ==================================  =================================
+        Question                                    ``kind``              Needs                               A shared stimulus-locked response
+        ==========================================  ====================  ==================================  =================================
+        Do the signals covary from trial to trial?  ``"trial_shuffle"``   2+ trials                           stays in the null
+        Are the signals independent at all?         ``"phase_rotation"``  2+ units (see Notes), the half      is rejected
+                                                                          bandwidth
+        Is there more than zero-lag mixing?         ``"conjugation"``     2+ units (see Notes)                is rejected if lagged
+        ==========================================  ====================  ==================================  =================================
 
         A shared stimulus-locked response is one common to the signals and the
         same in every trial (see Notes).
@@ -2958,27 +2959,31 @@ class Connectivity:
               n_surrogates`` (fewer than 7 trials for the default) a warning
               says how coarse the p-values are.
             - ``"phase_rotation"``: multiply each signal's coefficients by an
-              independent random phase per independent observation (see
-              Notes), the same at every positive frequency (and conjugate at
-              the negative ones, so a real signal stays real). Null: the
-              signals are independent. Works with a single trial. The
+              independent random phase per unit (each trial, or averaged time
+              window; see Notes), the same for every taper and positive
+              frequency of the unit (and conjugate at the negative
+              frequencies, so a real signal stays real). Null: the signals
+              are independent; exact when each is stationary and Gaussian,
+              whose coefficients are circular. Needs at least 2 units: one
+              trial is refused unless its time windows are averaged. The
               coefficients within ``half_bandwidth`` of 0 Hz and Nyquist are
               not circular, so rotating them does not give valid surrogates;
               those frequencies are not tested.
-            - ``"conjugation"``: replace each independent observation (every
-              signal and frequency of it together) by its complex conjugate
-              with probability 1/2, which for a real signal amounts to
-              reversing that observation in time. Null: the coherency is real
-              at every frequency, as for instantaneous (zero-lag) mixing such
-              as volume conduction of independent sources; exact for circular
-              Gaussian coefficients. The coefficients at 0 Hz and Nyquist are
-              real, so conjugation leaves them unchanged and those two
-              frequencies are not tested. Pair it with a measure of lagged
-              interaction: ``imaginary_coherence``, the phase-lag indices,
-              ``phase_slope_index``, or pairwise spectral Granger (for
-              Granger causality beyond what mixing produces). With
-              ``magnitude_squared_coherence`` it asks only whether the
-              coupling exceeds what a real coherency gives.
+            - ``"conjugation"``: replace each unit (every taper, signal and
+              frequency of it together) by its complex conjugate with
+              probability 1/2, which for a real signal amounts to reversing
+              that unit in time. Null: the coherency is real at every
+              frequency, as for instantaneous (zero-lag) mixing such as volume
+              conduction of independent sources; exact when the signals are
+              stationary and Gaussian, whose distribution such mixing leaves
+              unchanged by time reversal. Needs at least 2 units. The
+              coefficients at 0 Hz and Nyquist are real, so conjugation leaves
+              them unchanged and those two frequencies are not tested. Pair it
+              with a measure of lagged interaction: ``imaginary_coherence``,
+              the phase-lag indices, ``phase_slope_index``, or pairwise
+              spectral Granger (for Granger causality beyond what mixing
+              produces). With ``magnitude_squared_coherence`` it asks only
+              whether the coupling exceeds what a real coherency gives.
         n_surrogates : int, default=999
             Number of surrogates. The smallest p-value is ``1 / (n_surrogates
             + 1)``; the computation takes ``n_surrogates`` times as long as
@@ -3043,8 +3048,9 @@ class Connectivity:
             If ``kind``, ``n_surrogates``, ``alternative``, ``fwer_axis`` or
             ``half_bandwidth`` is invalid, or ``kind="phase_rotation"`` has no
             half bandwidth; if the expectation does not average what ``kind``
-            randomizes (trials for ``"trial_shuffle"``, independent
-            observations otherwise) or there are fewer than 2 of them; if
+            randomizes (trials for ``"trial_shuffle"``, units otherwise) or
+            there are fewer than 2 of them (one trial and no averaged time
+            windows, for ``"phase_rotation"`` and ``"conjugation"``); if
             ``"trial_shuffle"`` meets observation weights that differ between
             trials; if ``"phase_rotation"`` meets one-sided coefficients, or a
             measure that does not return one value per frequency, or a
@@ -3081,26 +3087,33 @@ class Connectivity:
         measure is significant; ``p_value`` is uncorrected (see
         :class:`~spectral_connectivity.statistics.SurrogateTestResult`).
 
-        **Independent observations.** ``"phase_rotation"`` and
-        ``"conjugation"`` draw one phase or flip for each independent
-        observation the expectation averages: each trial-taper observation
-        for ``"trials_tapers"``, each time window too when the expectation
-        averages time. Observations that are not independent share one draw,
-        since randomizing them separately would destroy their correlation and
-        make the null too narrow: the tapers of one trial when
-        ``observations_are_independent`` is ``False`` (a ``MorletWavelet``
-        smoothing neighborhood, ``Welch`` segments overlapping by more than
-        half), and the time windows when ``time_bins_are_independent`` is
-        ``False``. The axes the expectation keeps (each time window by
-        default) share the draws, so the surrogates keep the dependence
-        between them that the family maximum depends on.
+        **Units.** ``"phase_rotation"`` and ``"conjugation"`` draw one phase
+        or flip for each unit the expectation averages: each trial, and each
+        time window too when the expectation averages time and
+        ``time_bins_are_independent`` is ``True``. Every taper of a unit
+        shares its draw. A trial's tapers are uncorrelated only where the
+        spectrum is flat across ``half_bandwidth``; near a spectral peak or on
+        a steep spectrum they are correlated, and randomizing each taper
+        separately would destroy that correlation and make the null too narrow
+        (see Measured sizes). Randomizing whole units keeps it, which makes the
+        test exact for independent units of stationary Gaussian signals,
+        whatever their spectrum. With a single unit (one trial, no averaged
+        windows) whole-unit randomization cannot change the magnitude of a
+        cross-spectrum (rotation) or does no more than conjugate the whole
+        spectrum (conjugation), so it is refused: average over time windows (an
+        ``expectation_type`` that includes ``"time"``), record more trials, or
+        use ``"trial_shuffle"`` where there are trials. Windows of one recording are independent units
+        only if they are longer than the signals' memory: a narrow spectral
+        peak has a long one (see Measured sizes). The axes the expectation
+        keeps (each time window by default) share the draws, so the surrogates
+        keep the dependence between them that the family maximum depends on.
 
         **Shared stimulus-locked responses.** ``"trial_shuffle"`` keeps each
         signal's response in every surrogate, so a response common to the
         signals is in its null: the test asks about trial-by-trial
         covariation beyond it. ``"phase_rotation"`` randomizes each trial's
-        and taper's phase, which destroys stimulus-locked timing, so a shared
-        response alone is significant. ``"conjugation"`` keeps a response
+        phase, which destroys stimulus-locked timing, so a shared response
+        alone is significant. ``"conjugation"`` keeps a response
         shared at zero lag in its null (its coherency is real) and rejects
         one that reaches the signals at different times. To ask about
         interaction beyond a common drive, use ``"trial_shuffle"``.
@@ -3170,7 +3183,9 @@ class Connectivity:
           uncorrected p-values. A second design (5 trials, 2 s windows,
           7 tapers) gave 4.0-4.7% with ``"trial_shuffle"`` and 1.7-4.8% with
           ``"phase_rotation"``: the maximum statistic keeps the family-wise
-          rate at or below nominal, not exactly at it.
+          rate at or below nominal, not exactly at it. Conjugation rejected
+          pairwise Granger at 0 Hz in 6.5% of these datasets (5.8% under the
+          mixing above).
         - Correlated observations, Welch segments overlapping by 75% (13 per
           trial): randomizing each segment rejected independent signals in
           19.6% of datasets (5 trials, magnitude-squared coherence and
@@ -3210,7 +3225,7 @@ class Connectivity:
         >>> signals = np.stack(
         ...     [leader[3:], leader[:-3], rng.standard_normal((500, 10))], axis=-1
         ... )  # (time, trials, signals)
-        >>> signals += rng.standard_normal(signals.shape)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
         >>> multitaper = Multitaper(signals, sampling_frequency=500, time_halfbandwidth_product=2)
         >>> connectivity = Connectivity.from_transform(multitaper)
         >>> result = connectivity.surrogate_test(
@@ -3428,16 +3443,16 @@ class Connectivity:
         """Observation axes indexing the independent units a surrogate randomizes.
 
         For ``trial_shuffle`` the trials (axis 1). For ``phase_rotation`` and
-        ``conjugation`` the averaged axes whose observations are independent:
-        trials always, tapers unless ``observations_are_independent`` is
-        False, time windows unless ``time_bins_are_independent`` is False.
-        Coefficients sharing a unit get the same phase or flip.
+        ``conjugation`` the averaged trials, and the averaged time windows
+        unless ``time_bins_are_independent`` is False; never the tapers.
+        Coefficients sharing a unit (every taper of a trial) get the same phase
+        or flip.
 
         Raises
         ------
         ValueError
-            If the expectation leaves no such axis, or there are fewer than 2
-            units.
+            If there are fewer than 2 units (one trial and no averaged
+            independent time windows).
         """
         shape = self._fourier_coefficients.shape
         averaged = self._expectation_axes
@@ -3486,33 +3501,36 @@ class Connectivity:
                     stacklevel=stacklevel_outside_package(),
                 )
             return (1,)
-        independent = {
-            0: self._time_bins_are_independent,
-            1: True,
-            2: self._observations_are_independent,
-        }
-        unit_axes = tuple(axis for axis in averaged if independent[axis])
+        # Whole trials, and the time windows when the expectation averages
+        # independent ones; never the tapers of one trial (see Notes).
+        unit_axes = tuple(
+            axis
+            for axis in averaged
+            if axis == 1 or (axis == 0 and self._time_bins_are_independent)
+        )
         n_units = int(np.prod([shape[axis] for axis in unit_axes]))
         if n_units < 2:
             msg = (
-                f"surrogate_test(kind={kind!r}) randomizes each independent "
-                "observation the expectation averages, and this Connectivity has "
-                f"{n_units if unit_axes else 'none'}"
+                f"surrogate_test(kind={kind!r}) randomizes whole independent units "
+                "(each trial, and each time window when the expectation averages "
+                f"independent windows), and this Connectivity has {n_units} "
+                f"({shape[1]} trial(s), {shape[0]} time window(s), expectation_type="
+                f"{self.expectation_type!r}"
             )
-            if not self._observations_are_independent and 2 in averaged:
-                msg += (
-                    " (its tapers are correlated, observations_are_independent is "
-                    "False, so only whole trials are independent)"
-                )
-            if not self._time_bins_are_independent and 0 in averaged:
-                msg += (
-                    " (its time bins are correlated, time_bins_are_independent is "
-                    "False, so they are not independent units)"
-                )
+            if 0 in averaged and not self._time_bins_are_independent:
+                msg += ", time_bins_are_independent is False"
             msg += (
-                f", expectation_type={self.expectation_type!r}. It needs at least 2: "
-                "average more independent observations (more trials, or "
-                "expectation_type='trials_tapers' with independent tapers)."
+                "); it needs at least 2. Randomizing the tapers of one trial "
+                "separately is not offered: their coefficients are correlated "
+                "wherever the spectrum is not flat across the half bandwidth, and "
+                "for independent signals with one trial (1 s, 7 tapers, 99 "
+                "surrogates, nominal 5%) it rejected 57% (phase rotation) and 28% "
+                "(conjugation) of tests around a narrow spectral peak, and 19% and "
+                "10% just past the half bandwidth of a steep 1/f**2 spectrum. Average over time windows (an expectation_type that "
+                "includes 'time', e.g. 'time_tapers' for one recording, with "
+                "windows that do not overlap by more than half), record more "
+                "trials, or, with 2 or more trials, use an expectation that "
+                "averages them (kind='trial_shuffle' then works too)."
             )
             raise ValueError(msg)
         if kind == "conjugation" and n_units - 1 < math.log2(n_surrogates):
@@ -3521,11 +3539,11 @@ class Connectivity:
             n_distinct = 2 ** (n_units - 1)
             warnings.warn(
                 f"surrogate_test(kind='conjugation'): only {n_units} independent "
-                f"observations, so conjugation can make only 2**{n_units - 1} = "
-                f"{n_distinct} distinct surrogates (fewer than n_surrogates="
-                f"{n_surrogates}): p-values cannot go below about 1/{n_distinct}. "
-                "They remain valid. Use more trials, or more tapers per trial, for "
-                "a finer test.",
+                f"units (trials and averaged time windows), so conjugation can make "
+                f"only 2**{n_units - 1} = {n_distinct} distinct surrogates (fewer "
+                f"than n_surrogates={n_surrogates}): p-values cannot go below about "
+                f"1/{n_distinct}. They remain valid. Use more trials, or average "
+                "more time windows, for a finer test.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )

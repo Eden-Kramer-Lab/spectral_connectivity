@@ -19,7 +19,6 @@ from spectral_connectivity import (
     DirectedOrientationWarning,
     Multitaper,
     SurrogateTestResult,
-    Welch,
 )
 from spectral_connectivity.statistics import _SurrogateTally
 from tests._backend_helpers import to_host
@@ -122,26 +121,21 @@ def test_trial_shuffle_moves_whole_trials_of_each_signal():
     assert len({tuple(order) for order in orders}) > 1
 
 
-@pytest.mark.parametrize(
-    ("independent", "unit_axes"),
-    [(True, (1, 2)), (False, (1,))],
-    ids=["per taper", "per trial"],
-)
-def test_phase_rotation_turns_each_unit_by_one_phase(independent, unit_axes):
-    """Ratio to the data is exp(i phi) at every positive frequency of a unit and
+@pytest.mark.parametrize("independent", [True, False])
+def test_phase_rotation_turns_each_trial_by_one_phase(independent):
+    """Ratio to the data is exp(i phi) at every positive frequency of a trial and
     signal, exp(-i phi) at the negative ones, and the sign of cos(phi) at 0 Hz
-    and Nyquist; units with correlated tapers share phi; the kept time-window
-    axis shares it too. A real signal's coefficients stay conjugate-symmetric."""
+    and Nyquist; every taper of a trial shares phi, whether or not the tapers
+    are independent; the kept time-window axis shares it too. A real signal's
+    coefficients stay conjugate-symmetric."""
     rng = np.random.default_rng(2)
     n_fft = 16
     series = rng.standard_normal((2, 5, 3, n_fft, 2))
     coefficients = np.fft.fft(series, axis=3)
     connectivity = Connectivity(coefficients, observations_are_independent=independent)
-    assert connectivity._surrogate_unit_axes("phase_rotation", 99) == unit_axes
+    assert connectivity._surrogate_unit_axes("phase_rotation", 99) == (1,)
     surrogate = to_host(
-        connectivity._surrogate_coefficients(
-            "phase_rotation", unit_axes, np.random.default_rng(3)
-        )
+        connectivity._surrogate_coefficients("phase_rotation", (1,), np.random.default_rng(3))
     )
     ratio = surrogate / coefficients
     phase = np.angle(ratio[..., 1:2, :])
@@ -160,42 +154,42 @@ def test_phase_rotation_turns_each_unit_by_one_phase(independent, unit_axes):
     np.testing.assert_allclose(ratio[..., [n_fft // 2], :], expected_sign, atol=1e-12)
     # The surrogate is still the FFT of a real series.
     np.testing.assert_allclose(np.fft.ifft(surrogate, axis=3).imag, 0.0, atol=1e-12)
-    # Shared across time windows (kept), and across tapers when they are correlated.
+    # Shared across time windows (kept) and the tapers of a trial.
     np.testing.assert_allclose(phase[0], phase[1], atol=1e-12)
-    taper_phases_differ = not np.allclose(phase[:, :, 0], phase[:, :, 1])
-    assert taper_phases_differ == independent
+    np.testing.assert_allclose(phase[:, :, 0], phase[:, :, 2], atol=1e-12)
     # Independent across trials and signals.
     assert not np.allclose(phase[:, 0], phase[:, 1])
     assert not np.allclose(phase[..., 0], phase[..., 1])
 
 
-def test_conjugation_flips_whole_observations():
-    """Each trial-taper observation is either kept or conjugated, every signal
-    and frequency together, with both outcomes present."""
+def test_conjugation_flips_whole_trials():
+    """Each trial is either kept or conjugated, every taper, signal and
+    frequency together, with both outcomes present."""
     rng = np.random.default_rng(4)
     coefficients = _coefficients(rng, (2, 8, 3, 8, 3))
     connectivity = Connectivity(coefficients)
+    assert connectivity._surrogate_unit_axes("conjugation", 99) == (1,)
     surrogate = to_host(
-        connectivity._surrogate_coefficients("conjugation", (1, 2), np.random.default_rng(5))
+        connectivity._surrogate_coefficients("conjugation", (1,), np.random.default_rng(5))
     )
-    kept = np.all(surrogate == coefficients, axis=(0, 3, 4))
-    conjugated = np.all(surrogate == np.conj(coefficients), axis=(0, 3, 4))
+    kept = np.all(surrogate == coefficients, axis=(0, 2, 3, 4))
+    conjugated = np.all(surrogate == np.conj(coefficients), axis=(0, 2, 3, 4))
     assert np.all(kept ^ conjugated)
     assert kept.any()
     assert conjugated.any()
 
 
 def test_correlated_time_bins_share_the_draws_when_time_is_averaged():
-    """With expectation over time and trials, independent time bins are units;
-    correlated ones are not."""
+    """With expectation over time and trials, independent time bins are units
+    besides the trials; correlated ones are not."""
     rng = np.random.default_rng(6)
     coefficients = _coefficients(rng, (4, 3, 2, 8, 2))
     independent = Connectivity(coefficients, expectation_type="time_trials_tapers")
     correlated = Connectivity(
         coefficients, expectation_type="time_trials_tapers", time_bins_are_independent=False
     )
-    assert independent._surrogate_unit_axes("conjugation", 9) == (0, 1, 2)
-    assert correlated._surrogate_unit_axes("conjugation", 9) == (1, 2)
+    assert independent._surrogate_unit_axes("conjugation", 4) == (0, 1)
+    assert correlated._surrogate_unit_axes("conjugation", 4) == (1,)
 
 
 # --------------------------------------------------------------------------
@@ -257,7 +251,8 @@ def lagged_connectivity():
 def test_surrogate_test_returns_the_estimate_and_p_values_on_its_grid(lagged_connectivity):
     """The estimate is the measure; p-values are multiples of 1/(n + 1) in
     (0, 1], NaN on the diagonal; fwer p-values are no smaller; a seed
-    reproduces the result and a Generator is accepted."""
+    reproduces the result, a Generator seeded alike gives the same surrogates,
+    and another seed different ones."""
     result = lagged_connectivity.surrogate_test(
         "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=19, random_state=0
     )
@@ -287,6 +282,10 @@ def test_surrogate_test_returns_the_estimate_and_p_values_on_its_grid(lagged_con
     )
     np.testing.assert_array_equal(again.p_value, result.p_value)
     np.testing.assert_array_equal(again.null_maxima, result.null_maxima)
+    other = lagged_connectivity.surrogate_test(
+        "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=19, random_state=1
+    )
+    assert not np.array_equal(other.null_maxima, result.null_maxima)
 
 
 def test_coupled_pair_is_detected_and_the_independent_one_is_not(lagged_connectivity):
@@ -490,7 +489,8 @@ def test_migration_notice_is_emitted_once_per_call(lagged_connectivity):
 
 @pytest.fixture(scope="module")
 def small_connectivity():
-    return Connectivity(_coefficients(np.random.default_rng(9), (1, 4, 3, 16, 2)))
+    """12 trials: enough for 999 distinct conjugation surrogates."""
+    return Connectivity(_coefficients(np.random.default_rng(9), (1, 12, 3, 16, 2)))
 
 
 @pytest.mark.parametrize(
@@ -602,19 +602,35 @@ def test_trial_shuffle_refuses_weights_that_differ_between_trials():
     )
 
 
-def test_randomizing_kinds_need_two_independent_observations():
-    """One trial with correlated tapers leaves one unit; the message says why."""
+@pytest.mark.parametrize("kind", ["phase_rotation", "conjugation"])
+def test_randomizing_kinds_refuse_a_single_unit(kind):
+    """One trial and no averaged time windows is one unit, refused whether or
+    not its tapers are independent; the message gives the measured failure of
+    per-taper randomization and the remedies. Averaging independent windows of
+    the one trial makes each window a unit; correlated windows are not."""
     rng = np.random.default_rng(12)
-    connectivity = Connectivity(
-        _coefficients(rng, (1, 1, 5, 16, 2)), observations_are_independent=False
+    for independent in (True, False):
+        connectivity = Connectivity(
+            _coefficients(rng, (1, 1, 5, 16, 2)),
+            observations_are_independent=independent,
+            half_bandwidth=2.0,
+        )
+        with pytest.raises(ValueError, match="this Connectivity has 1 ") as excinfo:
+            connectivity.surrogate_test("imaginary_coherence", kind=kind)
+        message = str(excinfo.value)
+        assert "57% (phase rotation) and 28% (conjugation)" in message
+        assert "an expectation_type that includes 'time'" in message
+    windows = _coefficients(rng, (12, 1, 5, 16, 2))
+    averaged = Connectivity(windows, expectation_type="time_tapers", half_bandwidth=2.0)
+    assert averaged._surrogate_unit_axes(kind, 99) == (0,)
+    correlated = Connectivity(
+        windows,
+        expectation_type="time_tapers",
+        half_bandwidth=2.0,
+        time_bins_are_independent=False,
     )
-    with pytest.raises(ValueError, match="its tapers are correlated") as excinfo:
-        connectivity.surrogate_test("imaginary_coherence", kind="conjugation")
-    assert "It needs at least 2" in str(excinfo.value)
-    with pytest.raises(ValueError, match="has none"):
-        Connectivity(
-            _coefficients(rng), expectation_type="time", time_bins_are_independent=False
-        ).surrogate_test("imaginary_coherence", kind="conjugation")
+    with pytest.raises(ValueError, match="time_bins_are_independent is False"):
+        correlated.surrogate_test("imaginary_coherence", kind=kind)
 
 
 def test_phase_rotation_refuses_one_sided_coefficients():
@@ -627,15 +643,15 @@ def test_phase_rotation_refuses_one_sided_coefficients():
 
 
 def test_few_distinct_surrogates_warn():
-    """3 trials align in 3! = 6 ways; 4 independent observations give 2**3 = 8
-    distinct conjugations of a conjugation-symmetric measure."""
+    """3 trials align in 3! = 6 ways; 4 trials give 2**3 = 8 distinct
+    conjugations of a conjugation-symmetric measure, however many tapers."""
     rng = np.random.default_rng(14)
     with pytest.warns(UserWarning, match=re.escape("3! = 6 ways (fewer than n_surrogates=9)")):
         Connectivity(_coefficients(rng, (1, 3, 1, 16, 2))).surrogate_test(
             "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=9
         )
     with pytest.warns(UserWarning, match=re.escape("only 2**3 = 8 distinct surrogates")):
-        Connectivity(_coefficients(rng, (1, 4, 1, 16, 2))).surrogate_test(
+        Connectivity(_coefficients(rng, (1, 4, 5, 16, 2))).surrogate_test(
             "imaginary_coherence", kind="conjugation", n_surrogates=9
         )
 
@@ -732,7 +748,7 @@ def test_family_wise_error_is_held_under_the_global_null(
     assert result.null_maxima.shape == (_N_SURROGATES, result.estimate.shape[0])
 
 
-@pytest.mark.parametrize("n_trials", [1, 5])
+@pytest.mark.parametrize("n_trials", [5])
 @pytest.mark.parametrize(
     "measure", ["magnitude_squared_coherence", "pairwise_spectral_granger_prediction"]
 )
@@ -818,41 +834,6 @@ def test_conjugation_detects_a_lagged_interaction():
     )
     # Measured 0.86; 99 surrogates, since the margin is small.
     assert _rejection(result.p_value[:, 15:26, 0, 1]).mean() > 0.75
-
-
-def test_correlated_tapers_are_randomized_as_whole_trials():
-    """Welch segments overlapping by 75% are correlated: one phase per trial
-    holds the size, one per segment (forcing observations_are_independent)
-    rejects independent signals far more often."""
-    rng = np.random.default_rng(26)
-    n_replicates, n_trials = 300, 5
-    series = _ar1(rng, 128, n_replicates * n_trials, 2)
-    coefficients, welch = _replicates(
-        series,
-        n_trials,
-        transform=Welch,
-        sampling_frequency=128,
-        segment_duration=0.25,
-        segment_overlap=0.75,
-    )
-    assert not welch.observations_are_independent
-    frequencies = np.fft.fftfreq(coefficients.shape[3], 1 / 128)
-    rates = {}
-    for independent in (False, True):
-        result = Connectivity(
-            coefficients,
-            frequencies=frequencies,
-            observations_are_independent=independent,
-            half_bandwidth=8.0,  # the Hann main lobe's half-width, 2 / 0.25 s
-        ).surrogate_test(
-            "magnitude_squared_coherence",
-            kind="phase_rotation",
-            n_surrogates=_N_SURROGATES,
-            random_state=27,
-        )
-        rates[independent] = _rejection(result.p_value[..., 0, 1])
-    _, limit = _assert_rate(rates[False], _ALPHA, label="one phase per trial")
-    assert rates[True].mean() > _ALPHA + 5 * limit
 
 
 def test_a_shared_evoked_response_is_in_the_shuffle_null_but_not_the_rotation_null():
