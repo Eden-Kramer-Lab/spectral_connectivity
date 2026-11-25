@@ -1120,10 +1120,12 @@ def test_a_winding_aliased_by_a_coarse_grid_is_not_reported(real_signals):
     ``det G ≈ h⁸`` turns by up to 7.3 radians between bins, each step
     aliased to under ``π / 2``, so the grid counts a winding of -2. A nonzero
     count is recounted on finer grids, interpolating the factor's
-    coefficients, where it is 0, so no warning is given. A complex ``c``
-    makes the spectrum asymmetric, for the two-sided iteration."""
+    coefficients, where it is 0, so no warning is given. An imaginary ``c``
+    makes the spectrum asymmetric, for the two-sided iteration, and keeps
+    the count of -2 (``c = 0.7 e^{0.3i}`` turns by 2.07 radians in a step, so
+    the grid does not count it and the recount is never reached)."""
     n_fft, n_signals = 16, 8
-    coefficient = 0.7 if real_signals else 0.7 * np.exp(0.3j)
+    coefficient = 0.7 if real_signals else 0.7j
     filter_response = 1 - coefficient * np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
     power = np.abs(filter_response) ** 2
     if real_signals:  # exactly symmetric, not only to rounding
@@ -1137,6 +1139,8 @@ def test_a_winding_aliased_by_a_coarse_grid_is_not_reported(real_signals):
         warnings.simplefilter("error")
         factor = to_host(minimum_phase_decomposition(to_device(spectrum[np.newaxis])))[0]
 
+    phase = mpd_module._determinant_phase(to_device(factor))
+    assert float(mpd_module._grid_winding_number(phase)) == pytest.approx(-2)
     expected = np.zeros_like(spectrum)
     expected[diagonal] = filter_response[:, np.newaxis]
     np.testing.assert_allclose(factor, expected, rtol=0, atol=2 * 0.7**n_fft)
