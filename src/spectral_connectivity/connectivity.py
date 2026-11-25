@@ -3662,36 +3662,52 @@ class Connectivity:
         frequencies = self.frequencies
         grid = frequencies.astype(np.float64)
         n_fft_samples = len(self._frequencies)
-        if kind == "conjugation":
-            valid = grid != 0
-            if not self._is_one_sided and n_fft_samples % 2 == 0:
-                valid[-1] = False
-        else:
-            assert half_bandwidth is not None
-            # Nyquist is the last non-negative bin for an even FFT length and
-            # half a bin above it for an odd one.
-            nyquist = float(frequencies[-1])
-            if n_fft_samples % 2 and n_fft_samples > 1:
-                nyquist += float(frequencies[1] - frequencies[0]) / 2
-            # The bounds are inclusive, by the package's rule for a bin lying on
-            # a bound (that of frequency_range), so a band starting at
-            # half_bandwidth is accepted below whenever its bins are.
-            lower, upper = half_bandwidth, nyquist - half_bandwidth
-            on_lower, on_upper = _bins_on_bounds(frequencies, (lower, upper))
-            valid = ((grid > lower) | on_lower) & ((grid < upper) | on_upper)
-            if not valid.any():
-                msg = (
-                    f"surrogate_test(kind='phase_rotation') tests no frequency: every "
-                    f"frequency lies within half_bandwidth={half_bandwidth!r} of 0 or "
-                    f"of Nyquist ({nyquist!r}). Check half_bandwidth is in the units "
-                    "of frequencies (half the transform's frequency resolution)."
-                )
-                raise ValueError(msg)
+        # A registered measure without a frequency axis sums over its
+        # frequency_range. Otherwise the frequency axis follows the kept
+        # observation axes; an unregistered measure is taken to have it there
+        # if its length is right.
         dims = self._result_dims(method, estimate.ndim)
-        if dims is not None and "frequency" not in dims:
-            if kind == "conjugation":
+        band_summed = dims is not None and "frequency" not in dims
+        frequency_axis = (
+            dims.index("frequency")
+            if dims is not None and not band_summed
+            else len(self._kept_observation_axes)
+        )
+        per_frequency = (
+            not band_summed
+            and estimate.ndim >= frequency_axis + 3
+            and estimate.shape[frequency_axis] == len(frequencies)
+        )
+        trailing = [1] * (estimate.ndim - frequency_axis - 1)
+        if kind == "conjugation":
+            if not per_frequency:
                 return everywhere
-            # A measure without a frequency axis sums over its frequency_range.
+            untouched = grid == 0
+            if not self._is_one_sided and n_fft_samples % 2 == 0:
+                untouched[-1] = True
+            conjugated: NDArray[np.bool_] = ~untouched.reshape(-1, *trailing)
+            return conjugated
+        assert half_bandwidth is not None
+        # Nyquist is the last non-negative bin for an even FFT length and half a
+        # bin above it for an odd one.
+        nyquist = float(frequencies[-1])
+        if n_fft_samples % 2 and n_fft_samples > 1:
+            nyquist += float(frequencies[1] - frequencies[0]) / 2
+        # The bounds are inclusive, by the package's rule for a bin lying on a
+        # bound (that of frequency_range), so a band starting at half_bandwidth
+        # is accepted below whenever its bins are.
+        lower, upper = half_bandwidth, nyquist - half_bandwidth
+        on_lower, on_upper = _bins_on_bounds(frequencies, (lower, upper))
+        valid = ((grid > lower) | on_lower) & ((grid < upper) | on_upper)
+        if not valid.any():
+            msg = (
+                f"surrogate_test(kind='phase_rotation') tests no frequency: every "
+                f"frequency lies within half_bandwidth={half_bandwidth!r} of 0 or "
+                f"of Nyquist ({nyquist!r}). Check half_bandwidth is in the units "
+                "of frequencies (half the transform's frequency resolution)."
+            )
+            raise ValueError(msg)
+        if band_summed:
             band = _select_measure_frequencies(
                 frequencies,
                 method_kwargs.get("frequency_range"),
@@ -3707,16 +3723,7 @@ class Connectivity:
                 )
                 raise ValueError(msg)
             return everywhere
-        # The frequency axis follows the kept observation axes; an unregistered
-        # measure is taken to have it there if its length is right.
-        frequency_axis = (
-            dims.index("frequency") if dims is not None else len(self._kept_observation_axes)
-        )
-        if estimate.ndim < frequency_axis + 3 or estimate.shape[frequency_axis] != len(
-            frequencies
-        ):
-            if kind == "conjugation":
-                return everywhere
+        if not per_frequency:
             msg = (
                 "surrogate_test(kind='phase_rotation') leaves untested the frequencies "
                 "within half_bandwidth of 0 Hz and Nyquist, so the measure must "
@@ -3725,9 +3732,7 @@ class Connectivity:
                 "kind='conjugation'."
             )
             raise ValueError(msg)
-        valid_by_frequency: NDArray[np.bool_] = valid.reshape(
-            -1, *([1] * (estimate.ndim - frequency_axis - 1))
-        )
+        valid_by_frequency: NDArray[np.bool_] = valid.reshape(-1, *trailing)
         return valid_by_frequency
 
     @_asnumpy
