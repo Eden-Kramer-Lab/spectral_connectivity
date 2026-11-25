@@ -3102,11 +3102,12 @@ class Connectivity:
         cross-spectrum (rotation) or does no more than conjugate the whole
         spectrum (conjugation), so it is refused: average over time windows (an
         ``expectation_type`` that includes ``"time"``), record more trials, or
-        use ``"trial_shuffle"`` where there are trials. Windows of one recording are independent units
-        only if they are longer than the signals' memory: a narrow spectral
-        peak has a long one (see Measured sizes). The axes the expectation
-        keeps (each time window by default) share the draws, so the surrogates
-        keep the dependence between them that the family maximum depends on.
+        use ``"trial_shuffle"`` where there are trials. Windows of one
+        recording are independent units only if they are longer than the
+        signals' memory: a narrow spectral peak has a long one (see Measured
+        sizes). The axes the expectation keeps (each time window by default)
+        share the draws, so the surrogates keep the dependence between them
+        that the family maximum depends on.
 
         **Shared stimulus-locked responses.** ``"trial_shuffle"`` keeps each
         signal's response in every surrogate, so a response common to the
