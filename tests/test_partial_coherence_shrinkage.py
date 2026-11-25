@@ -1,8 +1,8 @@
 """Shrinkage of partial coherence toward the diagonal (``shrinkage=``).
 
-``"auto"`` is checked against the same intensity computed one observation at
-a time (the definitions, limits and the error against the VAR's partial
-coherence are in ``test_partial_coherence_oracles.py``). The Monte Carlo tests
+The definition of ``"auto"``, the limits, and the error against the VAR's
+partial coherence are in ``test_partial_coherence_oracles.py``; these are its
+arguments, warnings, caching and behavior with few observations. The Monte Carlo tests
 draw complex Gaussian eigencoefficients whose expected cross-spectral matrix
 is the exact spectrum of a VAR (``tests/_var_oracle.py``), with replicate
 datasets on the time-window axis, and compare against the VAR's exact partial
@@ -21,7 +21,10 @@ import pytest
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
 from tests._var_oracle import (
     _analytic_var,
+    _coherency,
     _companion_spectral_radius,
+    _gaussian_coefficients,
+    _mean_and_limit,
     _normalized_inverse,
 )
 
@@ -51,12 +54,6 @@ def _dense_var(n_signals):
 _MODELS = {"chain": _chain_var, "dense": _dense_var}
 
 
-def _true_coherency(spectrum):
-    """Coherency ``S_ij / sqrt(S_ii S_jj)`` of a cross-spectral matrix."""
-    power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
-    return spectrum / np.sqrt(power[..., :, None] * power[..., None, :])
-
-
 def _var_replicates(model, n_signals, n_observations, n_replicates, seed=0):
     """``(connectivity, true_spectrum)`` for replicate datasets of a VAR.
 
@@ -68,19 +65,8 @@ def _var_replicates(model, n_signals, n_observations, n_replicates, seed=0):
     assert _companion_spectral_radius(coefficients) < 1
     _, _, spectrum = _analytic_var(coefficients, np.eye(n_signals), 32)
     spectrum = spectrum[_FREQUENCY_BINS]
-    cholesky = np.linalg.cholesky(spectrum)
-    rng = np.random.default_rng(seed)
-    shape = (n_replicates, n_observations, 1, len(_FREQUENCY_BINS), n_signals)
-    white = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / np.sqrt(2)
-    observations = np.einsum("fij,rnkfj->rnkfi", cholesky, white)
+    observations = _gaussian_coefficients(spectrum, n_replicates, n_observations, seed=seed)
     return Connectivity(observations, is_one_sided=True), spectrum
-
-
-def _mean_and_limit(values):
-    """Replicate mean of ``values`` (replicates on the first axis) and five
-    standard errors of it, for each of its other entries."""
-    values = np.asarray(values)
-    return values.mean(axis=0), 5 * values.std(axis=0, ddof=1) / np.sqrt(len(values))
 
 
 def _squared_error(estimate, truth):
@@ -120,60 +106,6 @@ def test_rejects_invalid_shrinkage(shrinkage, hint):
         Connectivity(coefficients).partial_coherence(shrinkage=shrinkage)
 
 
-def _intensity_one_observation_at_a_time(observations):
-    """The ``"auto"`` intensity of one bin, ``observations`` ``(n, n_signals)``."""
-    n_observations = observations.shape[0]
-    spectrum = observations.T @ observations.conj() / n_observations
-    power = np.real(np.diag(spectrum))
-    scale = np.sqrt(np.outer(power, power))
-    coherency = spectrum / scale
-    products = observations[:, :, None] * observations.conj()[:, None, :] / scale
-    relative_power = np.abs(observations) ** 2 / power
-    influence = products - coherency / 2 * (
-        relative_power[:, :, None] + relative_power[:, None, :]
-    )
-    variance = np.sum(np.abs(influence) ** 2, axis=0) / (n_observations * (n_observations - 1))
-    off_diagonal = ~np.eye(len(power), dtype=bool)
-    return np.clip(
-        variance[off_diagonal].sum() / np.sum(np.abs(coherency[off_diagonal]) ** 2), 0, 1
-    )
-
-
-@pytest.mark.parametrize(
-    ("expectation_type", "shape"),
-    [("trials_tapers", (3, 4, 3, 7, 6)), ("time_tapers", (5, 2, 3, 7, 6))],
-)
-def test_auto_intensity_matches_the_estimator_one_observation_at_a_time(
-    expectation_type, shape
-):
-    """The intensity, computed from batched means, equals its definition with
-    each observation's influence formed explicitly, per kept index and bin."""
-    rng = np.random.default_rng(2)
-    coefficients = _coefficients(rng, shape)
-    connectivity = Connectivity(coefficients, expectation_type=expectation_type)
-    intensity = connectivity.partial_coherence_shrinkage()
-
-    n_nonnegative = 4
-    kept_axis = 0 if expectation_type == "trials_tapers" else 1
-    expected = np.empty((shape[kept_axis], n_nonnegative))
-    for kept in range(shape[kept_axis]):
-        for frequency in range(n_nonnegative):
-            selected = np.take(coefficients[..., frequency, :], kept, axis=kept_axis)
-            expected[kept, frequency] = _intensity_one_observation_at_a_time(
-                selected.reshape(-1, shape[-1])
-            )
-    np.testing.assert_allclose(intensity, expected, rtol=1e-12)
-    assert np.all((expected > 0.05) & (expected < 0.95))  # not clipped
-
-    # partial_coherence(shrinkage="auto") shrinks each bin by its intensity.
-    auto = connectivity.partial_coherence(shrinkage="auto")
-    for index, frequency in [(0, 0), (1, 3)]:
-        fixed = connectivity.partial_coherence(shrinkage=float(intensity[index, frequency]))
-        np.testing.assert_allclose(
-            auto[index, frequency], fixed[index, frequency], rtol=1e-12, equal_nan=True
-        )
-
-
 def test_auto_intensity_is_the_same_for_reordered_signals():
     """Reordering the signals leaves the intensity unchanged, and the shrunk
     estimate is symmetric (rescaling is tested in test_connectivity.py)."""
@@ -209,7 +141,7 @@ def test_auto_intensity_falls_as_one_over_n_and_results_approach_unshrunk(model)
         shrunk = connectivity.partial_coherence(shrinkage="auto")
         off_diagonal = ~np.eye(n_signals, dtype=bool)
         changes.append(np.sqrt(np.mean((shrunk - unshrunk)[..., off_diagonal] ** 2)))
-    squared_rho = np.abs(_true_coherency(spectrum)[..., off_diagonal]) ** 2
+    squared_rho = np.abs(_coherency(spectrum)[..., off_diagonal]) ** 2
     variance = (1 - squared_rho) * (1 - squared_rho / 2) / n_observations
     first_order = variance.sum(axis=-1) / (squared_rho + variance).sum(axis=-1)
 

@@ -33,7 +33,6 @@ from tests._var_oracle import (
     _analytic_var,
     _companion_spectral_radius,
     _fourier_coefficients_with_cross_spectrum,
-    _normalized_inverse,
 )
 
 PHASE_LAG_MEASURES = (
@@ -406,33 +405,6 @@ def test_imaginary_coherency_preserves_pair_orientation():
     assert signed[0, 1] == pytest.approx(1.0)
     assert signed[1, 0] == pytest.approx(-1.0)
     assert np.isnan(signed[0, 0])
-
-
-def test_partial_coherence_matches_inverse_spectral_matrix_definition():
-    """Each signal's power is loaded by ``regularization`` times itself.
-
-    The signals' scales differ by 1e6 and the loading is large, so loading
-    every signal by the same multiple of the RMS entry would differ."""
-    rng = np.random.default_rng(102)
-    coefficients = rng.standard_normal((1, 200, 3, 4, 3)) + 1j * (
-        rng.standard_normal((1, 200, 3, 4, 3))
-    )
-    coefficients[..., 1] += coefficients[..., 0]
-    coefficients *= np.array([1e-3, 1.0, 1e3])
-    conn = Connectivity(coefficients)
-    actual = conn.partial_coherence(regularization=1e-2)
-
-    spectrum = to_host(conn._expectation_cross_spectral_matrix())[..., :3, :, :]
-    power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
-    off_diagonal = ~np.eye(3, dtype=bool)
-    expected = _normalized_inverse(spectrum, 1e-2 * power)
-    np.testing.assert_allclose(
-        actual[..., off_diagonal], expected[..., off_diagonal], rtol=1e-12
-    )
-    assert np.isnan(actual[..., ~off_diagonal]).all()
-    rms = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=(-2, -1)))[..., None]
-    uniform = _normalized_inverse(spectrum, 1e-2 * rms * np.ones(3))
-    assert np.max(np.abs(actual - uniform)[..., off_diagonal]) > 0.1
 
 
 def _rescaling_coefficients(n_trials, n_windows=2):
