@@ -3,7 +3,8 @@
 A transform needs only ``fft()``, ``frequencies``, and ``time``; the optional
 capability attributes (``is_one_sided``, ``observation_weights``,
 ``observations_are_independent``, ``time_bins_are_independent``) default to a
-two-sided, unweighted, independent spectrum when absent. How the two
+two-sided, unweighted, independent spectrum when absent, and
+``time_bins_are_disjoint`` to time windows that may overlap. How the two
 independence flags change the measures is covered in
 ``test_observation_independence.py``.
 """
@@ -90,6 +91,7 @@ def test_minimal_transform_gets_the_documented_defaults(coefficients):
     assert connectivity.observation_weights is None
     assert connectivity.observations_are_independent is True
     assert connectivity.time_bins_are_independent is True
+    assert connectivity.time_bins_are_disjoint is False
     np.testing.assert_array_equal(connectivity.time, transform.time)
     np.testing.assert_array_equal(connectivity.all_frequencies, frequencies)
     expected = Connectivity(
@@ -108,6 +110,7 @@ def test_optional_capability_attributes_are_honored(coefficients):
     transform.observation_weights = weights
     transform.observations_are_independent = False
     transform.time_bins_are_independent = False
+    transform.time_bins_are_disjoint = True
 
     connectivity = Connectivity.from_transform(transform)
 
@@ -116,6 +119,7 @@ def test_optional_capability_attributes_are_honored(coefficients):
     np.testing.assert_array_equal(to_host(connectivity.observation_weights), weights)
     assert connectivity.observations_are_independent is False
     assert connectivity.time_bins_are_independent is False
+    assert connectivity.time_bins_are_disjoint is True
 
 
 @pytest.mark.parametrize("one_sided", [False, True])
@@ -161,6 +165,7 @@ _CAPABILITY_FLAGS = (
     "is_one_sided",
     "observations_are_independent",
     "time_bins_are_independent",
+    "time_bins_are_disjoint",
 )
 
 

@@ -1005,6 +1005,15 @@ class Connectivity:
         ``MorletWavelet`` samples closer than four wavelet standard
         deviations). The measures that count observations then warn for
         expectations that include time; it has no effect otherwise.
+    time_bins_are_disjoint : bool, default=False
+        Whether successive time windows share no samples (a step of at least
+        the window length), which :meth:`from_transform` reads from
+        ``Multitaper`` and ``ShortTimeFourierTransform``. Only then does
+        :meth:`surrogate_test` randomize each averaged time window as a
+        separate unit: windows that overlap, even by half, have correlated
+        coefficients. The default assumes that coefficients passed directly
+        may come from overlapping windows; pass ``True`` for ones that do
+        not. It changes no measure.
     half_bandwidth : float, optional
         Half-width of the transform's spectral smoothing, in the units of
         ``frequencies`` (``frequency_resolution / 2`` for ``Multitaper``,
@@ -1179,6 +1188,7 @@ class Connectivity:
         observations_are_independent: bool = True,
         time_bins_are_independent: bool = True,
         *,
+        time_bins_are_disjoint: bool = False,
         half_bandwidth: float | None = None,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
@@ -1208,6 +1218,9 @@ class Connectivity:
         )
         self._time_bins_are_independent = _validated_flag(
             "time_bins_are_independent", time_bins_are_independent
+        )
+        self._time_bins_are_disjoint = _validated_flag(
+            "time_bins_are_disjoint", time_bins_are_disjoint
         )
         self._half_bandwidth = (
             None if half_bandwidth is None else _validated_half_bandwidth(half_bandwidth)
@@ -1665,12 +1678,14 @@ class Connectivity:
             init_kwargs["observations_are_independent"] = False
         if not _transform_flag(transform, "time_bins_are_independent", True):
             init_kwargs["time_bins_are_independent"] = False
-        # Unlike the flags, the half bandwidth does not change any measure, so
-        # it is set after construction: a subclass mirroring the older
-        # signature keeps working with a Multitaper, which defines it.
+        # Unlike the flags above, the half bandwidth and whether the time bins
+        # are disjoint do not change any measure, so they are set after
+        # construction: a subclass mirroring the older signature keeps working
+        # with a Multitaper, which defines both.
         half_bandwidth = _optional_transform_attribute(transform, "half_bandwidth", None)
         if half_bandwidth is not None:
             half_bandwidth = _validated_half_bandwidth(half_bandwidth)
+        time_bins_are_disjoint = _transform_flag(transform, "time_bins_are_disjoint", False)
         init_kwargs["fourier_coefficients"] = transform.fft()
         init_kwargs["time"] = transform.time
         init_kwargs["frequencies"] = transform.frequencies
@@ -1695,6 +1710,7 @@ class Connectivity:
         ):
             connectivity = cls(**init_kwargs)
         connectivity._half_bandwidth = half_bandwidth
+        connectivity._time_bins_are_disjoint = time_bins_are_disjoint
         return connectivity
 
     @contextlib.contextmanager
@@ -2488,6 +2504,19 @@ class Connectivity:
         measures that rely on it warn.
         """
         return self._time_bins_are_independent
+
+    @property
+    def time_bins_are_disjoint(self) -> bool:
+        """Whether successive time windows share no samples.
+
+        :meth:`from_transform` reads it from the transform
+        (:attr:`Multitaper.time_bins_are_disjoint
+        <spectral_connectivity.transforms.Multitaper.time_bins_are_disjoint>`:
+        a step of at least the window length); otherwise it is ``False``
+        unless passed. :meth:`surrogate_test` randomizes each averaged time
+        window as a separate unit only when it is ``True``.
+        """
+        return self._time_bins_are_disjoint
 
     def _resampled_measure(self, method: Any, caller: str) -> tuple[str, Callable[..., Any]]:
         """The canonical name and bound method of the measure ``caller`` recomputes.

@@ -202,6 +202,25 @@ def test_multitaper_and_stft_time_bins_are_independent_up_to_half_overlap(
     assert stft.time_bins_are_independent is expected
 
 
+@pytest.mark.parametrize(
+    ("n_time_samples_per_step", "expected"), [(32, True), (16, False), (31, False)]
+)
+def test_multitaper_and_stft_time_bins_are_disjoint_only_without_overlap(
+    n_time_samples_per_step, expected
+):
+    """Windows are disjoint only when the step is at least the window length:
+    even half overlap, which still counts as independent, shares samples."""
+    data = np.zeros((256, 1, 2))
+    for transform_class in (Multitaper, ShortTimeFourierTransform):
+        transform = transform_class(
+            data,
+            sampling_frequency=64,
+            n_time_samples_per_window=32,
+            n_time_samples_per_step=n_time_samples_per_step,
+        )
+        assert transform.time_bins_are_disjoint is expected
+
+
 def test_multitaper_single_window_time_bins_are_independent():
     assert Multitaper(np.zeros((256, 1, 2)), sampling_frequency=64).time_bins_are_independent
 

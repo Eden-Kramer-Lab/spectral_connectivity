@@ -668,6 +668,15 @@ class SpectralTransform(Protocol):
         Whether successive time windows are independent (e.g. ``False`` for
         windows overlapping by more than half). It affects only expectations that
         average over time.
+    ``time_bins_are_disjoint`` : bool, default False
+        Whether successive time windows share no samples, as
+        :class:`Multitaper` and :class:`ShortTimeFourierTransform` report
+        for a step of at least the window length. Unlike the flags above,
+        the default is the cautious one, since a transform that does not say
+        may overlap its windows: :meth:`Connectivity.surrogate_test` then
+        randomizes whole trials, never single time windows.
+        :class:`MorletWavelet`, whose wavelets at successive samples always
+        overlap, and :class:`Welch`, which has one time bin, do not define it.
     ``half_bandwidth`` : float, default None
         Half-width of the transform's spectral smoothing, in Hz (the units of
         ``frequencies``): within it of 0 Hz and Nyquist the coefficients of a
@@ -1554,6 +1563,25 @@ Frequency Analysis
             ``True`` when successive windows overlap by at most half.
         """
         return 2 * self.n_time_samples_per_step >= self.n_time_samples_per_window
+
+    @property
+    def time_bins_are_disjoint(self) -> bool:
+        """Whether successive time windows share no samples.
+
+        Stricter than :attr:`time_bins_are_independent`: windows overlapping
+        by half are close enough to independent for counting observations,
+        but their coefficients are still correlated, so
+        :meth:`Connectivity.surrogate_test
+        <spectral_connectivity.Connectivity.surrogate_test>` randomizes
+        averaged windows as separate units only when they do not overlap.
+
+        Returns
+        -------
+        bool
+            ``True`` when ``n_time_samples_per_step`` is at least
+            ``n_time_samples_per_window``.
+        """
+        return self.n_time_samples_per_step >= self.n_time_samples_per_window
 
     def fft(self) -> NDArray[np.complexfloating]:
         """Compute the tapered Fourier coefficients of every time window.
