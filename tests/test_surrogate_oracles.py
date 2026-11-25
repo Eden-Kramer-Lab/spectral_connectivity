@@ -29,7 +29,7 @@ from scipy.stats import ks_2samp
 from spectral_connectivity import Connectivity, Multitaper
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.statistics import _SurrogateTally
-from tests._backend_helpers import to_host
+from tests._backend_helpers import to_device, to_host
 from tests._monte_carlo import replicate_mean_and_limit
 from tests._var_oracle import _analytic_var
 
@@ -695,7 +695,7 @@ def _shuffle_signals_jointly(original):
         if kind != "trial_shuffle":
             return original(self, kind, unit_axes, rng)
         coefficients = to_host(self._fourier_coefficients)
-        return coefficients[:, rng.permutation(coefficients.shape[1])]
+        return to_device(coefficients[:, rng.permutation(coefficients.shape[1])])
 
     return surrogate_coefficients
 
@@ -709,7 +709,7 @@ def _conjugate_each_signal_separately(original):
             coefficients.shape[axis] if axis in unit_axes else 1 for axis in range(3)
         )
         flip = rng.random((*unit_shape, 1, coefficients.shape[-1])) < 0.5
-        return np.where(flip, coefficients.conj(), coefficients)
+        return to_device(np.where(flip, coefficients.conj(), coefficients))
 
     return surrogate_coefficients
 
