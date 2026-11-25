@@ -1,7 +1,8 @@
 """Shrinkage of partial coherence toward the diagonal (``shrinkage=``).
 
-A fixed intensity is checked against its definition, and ``"auto"`` against
-the same intensity computed one observation at a time. The Monte Carlo tests
+``"auto"`` is checked against the same intensity computed one observation at
+a time (the definitions, limits and the error against the VAR's partial
+coherence are in ``test_partial_coherence_oracles.py``). The Monte Carlo tests
 draw complex Gaussian eigencoefficients whose expected cross-spectral matrix
 is the exact spectrum of a VAR (``tests/_var_oracle.py``), with replicate
 datasets on the time-window axis, and compare against the VAR's exact partial
@@ -18,7 +19,6 @@ import numpy as np
 import pytest
 
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
-from tests._backend_helpers import to_host
 from tests._var_oracle import (
     _analytic_var,
     _companion_spectral_radius,
@@ -120,27 +120,6 @@ def test_rejects_invalid_shrinkage(shrinkage, hint):
         Connectivity(coefficients).partial_coherence(shrinkage=shrinkage)
 
 
-@pytest.mark.parametrize("intensity", [0.0, 0.3, 1.0])
-def test_fixed_shrinkage_matches_its_definition(intensity):
-    """``(1 - lambda) S + lambda diag(S)`` before inversion, the same as every
-    coherency times ``1 - lambda``; 0 is no shrinkage and 1 gives 0."""
-    rng = np.random.default_rng(1)
-    connectivity = Connectivity(_coefficients(rng, (2, 6, 2, 5, 4)) * [1e-3, 1, 10, 1e4])
-    actual = connectivity.partial_coherence(shrinkage=intensity)
-
-    spectrum = to_host(connectivity._expectation_cross_spectral_matrix())[..., :3, :, :]
-    shrunk = (1 - intensity) * _true_coherency(spectrum) + intensity * np.eye(4)
-    expected = _normalized_inverse(shrunk, np.full(4, 1e-12))
-    off_diagonal = ~np.eye(4, dtype=bool)
-    np.testing.assert_allclose(
-        actual[..., off_diagonal], expected[..., off_diagonal], rtol=1e-10, atol=1e-15
-    )
-    if intensity == 0:
-        np.testing.assert_array_equal(actual, connectivity.partial_coherence())
-    if intensity == 1:
-        np.testing.assert_array_equal(actual[..., off_diagonal], 0.0)
-
-
 def _intensity_one_observation_at_a_time(observations):
     """The ``"auto"`` intensity of one bin, ``observations`` ``(n, n_signals)``."""
     n_observations = observations.shape[0]
@@ -209,54 +188,6 @@ def test_auto_intensity_is_the_same_for_reordered_signals():
     )
     auto = Connectivity(coefficients).partial_coherence(shrinkage="auto")
     np.testing.assert_allclose(auto, np.swapaxes(auto, -1, -2), rtol=1e-12, equal_nan=True)
-
-
-@pytest.mark.parametrize("model", ["chain", "dense"])
-@pytest.mark.parametrize(
-    ("n_signals", "n_observations"), [(8, 10), (8, 20), (16, 20), (16, 40)]
-)
-def test_auto_shrinkage_lowers_the_error_with_few_observations(
-    model, n_signals, n_observations
-):
-    """Against the VAR's exact partial coherence, ``"auto"`` has a lower mean
-    squared error than no shrinkage with 1.25 to 2.5 observations per signal:
-    the ratio was 0.06-0.08 with 10 observations for 8 signals, 0.28-0.42
-    with 20, 0.06-0.09 with 20 for 16 signals and 0.40-0.58 with 40, each
-    lower by 7.8 to 13.4 limits."""
-    connectivity, spectrum = _var_replicates(model, n_signals, n_observations, 400)
-    truth = _normalized_inverse(spectrum)
-    unshrunk = _squared_error(connectivity.partial_coherence(), truth)
-    shrunk = _squared_error(connectivity.partial_coherence(shrinkage="auto"), truth)
-    mean, limit = _mean_and_limit(shrunk - unshrunk)
-    assert mean + limit < 0
-
-
-@pytest.mark.parametrize("model", ["chain", "dense"])
-@pytest.mark.parametrize(("n_signals", "n_observations"), [(8, 10), (8, 40), (16, 20)])
-def test_auto_intensity_is_near_the_monte_carlo_optimum(model, n_signals, n_observations):
-    """The intensity is near the one that minimizes the replicates' squared
-    error of the shrunk coherencies, ``1 - sum Re(conj(rho) r) / sum |r|^2``
-    over pairs and replicates, at each frequency.
-
-    The estimator is first order in ``1 / n``. The allowance of 15% of the
-    optimum covers what that leaves out: the mean intensity was 0.1-10% below
-    or above it with 10 observations, 0.3-4.4% with 40 (8 signals), and 0.6-8%
-    with 20 for 16 signals. Without the delta-method terms for the estimated
-    powers (Schäfer & Strimmer's variance), it was 1.1-2.2 times the optimum
-    in these cases, and fails this test for five of the six.
-    """
-    connectivity, spectrum = _var_replicates(model, n_signals, n_observations, 400, seed=1)
-    rho = _true_coherency(spectrum)
-    coherency = connectivity.coherency()
-    off_diagonal = ~np.eye(n_signals, dtype=bool)
-    squared = np.sum(np.abs(coherency[..., off_diagonal]) ** 2, axis=-1).mean(axis=0)
-    aligned = np.sum(
-        np.real(np.conj(rho[..., off_diagonal]) * coherency[..., off_diagonal]), axis=-1
-    ).mean(axis=0)
-    optimum = 1 - aligned / squared
-
-    mean, limit = _mean_and_limit(connectivity.partial_coherence_shrinkage())
-    assert np.all(np.abs(mean - optimum) <= 0.15 * optimum + limit)
 
 
 @pytest.mark.parametrize("model", ["chain", "dense"])
