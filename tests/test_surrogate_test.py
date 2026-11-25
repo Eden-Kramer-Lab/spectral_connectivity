@@ -1,10 +1,8 @@
-"""Tests of Connectivity.surrogate_test and the surrogate p-value arithmetic.
+"""Tests of Connectivity.surrogate_test: the surrogates, the p-value
+arithmetic, the method's results and its refusals.
 
-The Monte Carlo tests put replicate datasets on the time-window axis, so one
-call tests every replicate (the expectation keeps that axis). A rejection
-rate's limit is five standard errors of the replicate mean, where the standard
-error is that of the per-replicate rejection fraction (frequencies within one
-replicate are correlated, so they are not counted as independent).
+The Monte Carlo tests (size, power and family-wise error against known
+nulls) are in ``tests/test_surrogate_oracles.py``.
 """
 
 import re
@@ -12,7 +10,6 @@ import warnings
 
 import numpy as np
 import pytest
-from scipy.signal import lfilter
 
 from spectral_connectivity import (
     Connectivity,
@@ -22,69 +19,12 @@ from spectral_connectivity import (
 )
 from spectral_connectivity.statistics import _SurrogateTally
 from tests._backend_helpers import to_host
-from tests._monte_carlo import replicate_mean_and_limit
 
 _ALPHA = 0.05
-# P(p <= 0.05) is exactly 1 / 20 for an exact test without ties, as for 99
-# surrogates (5 / 100), and the size tests run five times faster.
-_N_SURROGATES = 19
 
 
 def _coefficients(rng, shape=(2, 4, 3, 16, 3)):
     return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-
-
-def _ar1(rng, n_time, n_columns, n_signals, coefficient=0.5):
-    """Independent AR(1) series, shape (n_time, n_columns, n_signals)."""
-    noise = rng.standard_normal((n_time + 100, n_columns, n_signals))
-    return lfilter([1.0], [1.0, -coefficient], noise, axis=0)[100:]
-
-
-def _ar2(rng, n_time, n_columns, peak, radius, sampling_frequency):
-    """AR(2) series peaked at ``peak`` Hz, shape (n_time, n_columns)."""
-    a1 = 2 * radius * np.cos(2 * np.pi * peak / sampling_frequency)
-    noise = rng.standard_normal((n_time + 200, n_columns))
-    return lfilter([1.0], [1.0, -a1, radius**2], noise, axis=0)[200:]
-
-
-def _replicates(time_series, n_trials, transform=Multitaper, **transform_kwargs):
-    """Coefficients of independent datasets stacked on the time-window axis.
-
-    ``time_series`` has shape ``(n_time, n_replicates * n_trials, n_signals)``;
-    its single window is split into ``n_replicates`` windows of ``n_trials``.
-    Returns the coefficients and the transform.
-    """
-    spectral = transform(time_series, **transform_kwargs)
-    coefficients = to_host(spectral.fft())
-    n_replicates = coefficients.shape[1] // n_trials
-    return coefficients.reshape(n_replicates, n_trials, *coefficients.shape[2:]), spectral
-
-
-def _first_replicates(connectivity, n_replicates):
-    """``connectivity`` restricted to its first ``n_replicates`` time windows
-    (all of them for ``None``), to bound the cost of the directed measures."""
-    if n_replicates is None:
-        return connectivity
-    return Connectivity(
-        connectivity.fourier_coefficients[:n_replicates],
-        frequencies=connectivity.all_frequencies,
-        half_bandwidth=connectivity.half_bandwidth,
-    )
-
-
-def _rejection(p_value, select=np.s_[...]):
-    """Per-replicate fraction of tests rejected at 5% (NaN p-values excluded)."""
-    values = p_value[select]
-    rejected = np.where(np.isnan(values), np.nan, values <= _ALPHA)
-    return np.nanmean(rejected.reshape(values.shape[0], -1), axis=1)
-
-
-def _assert_rate(per_replicate, expected, *, allowance=0.0, label=""):
-    """The replicate mean is within 5 standard errors (plus ``allowance``)."""
-    mean, limit = replicate_mean_and_limit(per_replicate)
-    limit += allowance
-    assert abs(mean - expected) <= limit, f"{label}: {mean:.4f} vs {expected} +/- {limit:.4f}"
-    return mean, limit
 
 
 # --------------------------------------------------------------------------
@@ -654,228 +594,6 @@ def test_few_distinct_surrogates_warn():
         Connectivity(_coefficients(rng, (1, 4, 5, 16, 2))).surrogate_test(
             "imaginary_coherence", kind="conjugation", n_surrogates=9
         )
-
-
-# --------------------------------------------------------------------------
-# Monte Carlo: size, power, and family-wise error
-# --------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def independent_replicates():
-    """300 replicate datasets of 3 independent broadband AR(1) signals, 10
-    trials, 1 s at 64 Hz, NW=2 (3 tapers, half bandwidth 2 Hz)."""
-    rng = np.random.default_rng(15)
-    n_replicates, n_trials = 300, 10
-    series = _ar1(rng, 64, n_replicates * n_trials, 3)
-    coefficients, _ = _replicates(
-        series, n_trials, sampling_frequency=64, time_halfbandwidth_product=2
-    )
-    return Connectivity(
-        coefficients,
-        frequencies=np.fft.fftfreq(coefficients.shape[3], 1 / 64),
-        half_bandwidth=2.0,
-    )
-
-
-@pytest.fixture(scope="module")
-def shuffled_coherence(independent_replicates):
-    """The trial-shuffle test of magnitude-squared coherence of
-    ``independent_replicates``, one family per replicate."""
-    return independent_replicates.surrogate_test(
-        "magnitude_squared_coherence",
-        kind="trial_shuffle",
-        n_surrogates=_N_SURROGATES,
-        random_state=16,
-        fwer_axis=(1, 2, 3),
-    )
-
-
-@pytest.mark.parametrize(
-    "measure", ["magnitude_squared_coherence", "pairwise_spectral_granger_prediction"]
-)
-def test_trial_shuffle_holds_its_size_at_every_frequency(
-    independent_replicates, shuffled_coherence, measure
-):
-    """Independent signals: the trial-shuffle test is exact (iid trials), at
-    every frequency including 0 Hz and Nyquist."""
-    if measure == "magnitude_squared_coherence":
-        result = shuffled_coherence
-    else:
-        result = _first_replicates(independent_replicates, 100).surrogate_test(
-            measure, kind="trial_shuffle", n_surrogates=_N_SURROGATES, random_state=16
-        )
-    off_diagonal = ~np.eye(3, dtype=bool)
-    _assert_rate(
-        _rejection(result.p_value[..., off_diagonal]), _ALPHA, label="all frequencies"
-    )
-    _assert_rate(
-        _rejection(result.p_value[:, [0, -1]][..., off_diagonal]),
-        _ALPHA,
-        label="0 Hz and Nyquist",
-    )
-
-
-@pytest.mark.parametrize("kind", ["trial_shuffle", "phase_rotation", "conjugation"])
-def test_family_wise_error_is_held_under_the_global_null(
-    independent_replicates, shuffled_coherence, kind
-):
-    """One family per replicate (every frequency and pair): some element is
-    rejected in at most 5% of replicates, while uncorrected p-values reject
-    somewhere in most of them."""
-    if kind == "trial_shuffle":
-        result = shuffled_coherence
-    else:
-        result = independent_replicates.surrogate_test(
-            "magnitude_squared_coherence",
-            kind=kind,
-            n_surrogates=_N_SURROGATES,
-            random_state=17,
-            fwer_axis=(1, 2, 3),
-        )
-    any_family = np.nanmin(
-        result.fwer_p_value.reshape(result.fwer_p_value.shape[0], -1), axis=1
-    )
-    any_raw = np.nanmin(result.p_value.reshape(result.p_value.shape[0], -1), axis=1)
-    # Exact for trial_shuffle; the other kinds' surrogates are exact only for
-    # circular coefficients, so allow 2 points for that. The smallest adjusted
-    # p-value of a family is itself a valid p-value, so check several levels.
-    allowance = 0.0 if kind == "trial_shuffle" else 0.02
-    for level in (_ALPHA, 0.2, 0.5):
-        family_rejected = (any_family <= level).astype(float)
-        _assert_rate(family_rejected, level, allowance=allowance, label=f"{kind} {level}")
-    assert np.mean(any_raw <= _ALPHA) > 0.8  # the correction is needed
-    assert result.null_maxima.shape == (_N_SURROGATES, result.estimate.shape[0])
-
-
-@pytest.mark.parametrize("n_trials", [5])
-@pytest.mark.parametrize(
-    "measure", ["magnitude_squared_coherence", "pairwise_spectral_granger_prediction"]
-)
-def test_phase_rotation_holds_its_size_away_from_the_edges(n_trials, measure):
-    """Independent signals, 7 tapers per trial: about 5% at every tested frequency."""
-    rng = np.random.default_rng(18 + n_trials)
-    n_replicates = (200 if "granger" in measure else 400) // n_trials
-    series = _ar1(rng, 128, n_replicates * n_trials, 2)
-    coefficients, multitaper = _replicates(
-        series, n_trials, sampling_frequency=128, time_halfbandwidth_product=4
-    )
-    connectivity = Connectivity(
-        coefficients,
-        frequencies=np.fft.fftfreq(128, 1 / 128),
-        half_bandwidth=multitaper.half_bandwidth,
-    )
-    result = connectivity.surrogate_test(
-        measure, kind="phase_rotation", n_surrogates=_N_SURROGATES, random_state=20
-    )
-    # Directed measures carry a small excess just past the edges (see Notes).
-    allowance = 0.01 if measure == "pairwise_spectral_granger_prediction" else 0.0
-    _assert_rate(_rejection(result.p_value[..., 0, 1]), _ALPHA, allowance=allowance)
-
-
-@pytest.fixture(scope="module")
-def mixed_replicates():
-    """Instantaneous mixing of two independent AR(2) sources (cross-weights
-    0.7): real coherency, nonzero pairwise Granger in both directions.
-    200 replicates of 10 trials, 1 s at 128 Hz, NW=2."""
-    rng = np.random.default_rng(21)
-    n_replicates, n_trials = 200, 10
-    first = _ar2(rng, 128, n_replicates * n_trials, 20, 0.9, 128)
-    second = _ar2(rng, 128, n_replicates * n_trials, 40, 0.8, 128)
-    series = np.stack([first + 0.7 * second, second + 0.7 * first], axis=-1)
-    coefficients, _ = _replicates(
-        series, n_trials, sampling_frequency=128, time_halfbandwidth_product=2
-    )
-    return Connectivity(coefficients, frequencies=np.fft.fftfreq(128, 1 / 128))
-
-
-@pytest.mark.parametrize(
-    ("measure", "allowance"),
-    [("imaginary_coherence", 0.0), ("pairwise_spectral_granger_prediction", 0.02)],
-)
-def test_conjugation_holds_its_size_under_instantaneous_mixing(
-    mixed_replicates, measure, allowance
-):
-    """The null of real coherency holds, so conjugation rejects about 5%; the
-    trial shuffle, whose null is independence, finds Granger 'causality' in
-    most of the same data."""
-    connectivity = _first_replicates(mixed_replicates, 100 if "granger" in measure else None)
-    result = connectivity.surrogate_test(
-        measure, kind="conjugation", n_surrogates=_N_SURROGATES, random_state=22
-    )
-    # Granger's null is approximate (Granger is a nonlinear function of the
-    # whole spectrum); allow 2 points.
-    rate, limit = _assert_rate(
-        _rejection(result.p_value[..., 0, 1]), _ALPHA, allowance=allowance
-    )
-    if measure == "pairwise_spectral_granger_prediction":
-        # Measured 96% with 400 datasets; 30 replicates show it.
-        shuffled = _first_replicates(connectivity, 30).surrogate_test(
-            measure, kind="trial_shuffle", n_surrogates=_N_SURROGATES, random_state=23
-        )
-        assert _rejection(shuffled.p_value[..., 0, 1]).mean() > rate + 10 * limit
-
-
-def test_conjugation_detects_a_lagged_interaction():
-    """Signal 1 receives signal 0 three samples late: conjugation rejects the
-    imaginary coherence at its spectral peak in most replicates."""
-    rng = np.random.default_rng(24)
-    n_replicates, n_trials = 100, 10
-    first = _ar2(rng, 131, n_replicates * n_trials, 20, 0.9, 128)
-    second = _ar2(rng, 128, n_replicates * n_trials, 40, 0.8, 128) + 0.5 * first[:-3]
-    series = np.stack([first[3:], second], axis=-1)
-    coefficients, _ = _replicates(
-        series, n_trials, sampling_frequency=128, time_halfbandwidth_product=2
-    )
-    result = Connectivity(
-        coefficients, frequencies=np.fft.fftfreq(128, 1 / 128)
-    ).surrogate_test(
-        "imaginary_coherence", kind="conjugation", n_surrogates=99, random_state=25
-    )
-    # Measured 0.86; 99 surrogates, since the margin is small.
-    assert _rejection(result.p_value[:, 15:26, 0, 1]).mean() > 0.75
-
-
-def test_a_shared_evoked_response_is_in_the_shuffle_null_but_not_the_rotation_null():
-    """The same 10 Hz evoked burst, at zero lag, in every trial of two otherwise
-    independent signals: the trial shuffle keeps it in every surrogate and holds
-    its size, conjugation keeps it too (zero lag, real coherency), and phase
-    rotation, which destroys stimulus-locked timing, rejects it."""
-    rng = np.random.default_rng(28)
-    n_replicates, n_trials, sampling_frequency = 200, 10, 128
-    time = np.arange(128) / sampling_frequency - 0.5
-    evoked = 3 * np.exp(-(time**2) / (2 * 0.05**2)) * np.cos(2 * np.pi * 10 * time)
-    series = np.stack(
-        [
-            _ar2(rng, 128, n_replicates * n_trials, 20, 0.9, sampling_frequency),
-            _ar2(rng, 128, n_replicates * n_trials, 40, 0.8, sampling_frequency),
-        ],
-        axis=-1,
-    )
-    series += evoked[:, np.newaxis, np.newaxis]
-    coefficients, _ = _replicates(
-        series, n_trials, sampling_frequency=sampling_frequency, time_halfbandwidth_product=2
-    )
-    connectivity = Connectivity(
-        coefficients, frequencies=np.fft.fftfreq(128, 1 / 128), half_bandwidth=2.0
-    )
-    evoked_band = np.s_[:, 5:16, 0, 1]
-    rates = {}
-    for kind in ("trial_shuffle", "conjugation", "phase_rotation"):
-        # Rotation rejects in about 70% of tests; 30 replicates show it.
-        tested = (
-            _first_replicates(connectivity, 30) if kind == "phase_rotation" else connectivity
-        )
-        result = tested.surrogate_test(
-            "magnitude_squared_coherence",
-            kind=kind,
-            n_surrogates=_N_SURROGATES,
-            random_state=29,
-        )
-        rates[kind] = _rejection(result.p_value[evoked_band])
-    _, limit = _assert_rate(rates["trial_shuffle"], _ALPHA, label="trial_shuffle")
-    _assert_rate(rates["conjugation"], _ALPHA, allowance=0.02, label="conjugation")
-    assert rates["phase_rotation"].mean() > _ALPHA + 5 * limit
 
 
 def test_phase_rotation_uses_the_half_bandwidth_from_the_transform(lagged_connectivity):
