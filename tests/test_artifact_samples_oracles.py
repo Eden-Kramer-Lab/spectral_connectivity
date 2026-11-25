@@ -44,24 +44,12 @@ N_FFT = 64  # padded
 N_TRIALS = 7  # differs from the signal, taper and frequency counts
 N_SIGNALS = 3
 GROUPS = ["a", "a", "b"]
-# The Wilson factorization iterates to a tolerance, and canonical coherency's
-# component phase comes from an eigen-solver: both move by more than rounding.
+# The Wilson factorization (of the measures that need a two-sided spectrum)
+# iterates to a tolerance, and canonical coherency's component phase comes
+# from an eigen-solver: both move by more than rounding.
 LOOSE = frozenset(
-    {
-        "pairwise_spectral_granger_prediction",
-        "subset_pairwise_spectral_granger_prediction",
-        "conditional_spectral_granger_prediction",
-        "time_reversed_spectral_granger_prediction",
-        "time_reversed_conditional_spectral_granger_prediction",
-        "blockwise_spectral_granger_prediction",
-        "time_reversed_blockwise_spectral_granger_prediction",
-        "directed_transfer_function",
-        "directed_coherence",
-        "partial_directed_coherence",
-        "generalized_partial_directed_coherence",
-        "direct_directed_transfer_function",
-        "canonical_coherency",
-    }
+    {info.name for info in list_measures() if info.requires_two_sided}
+    | {"canonical_coherency"}
 )
 # global_coherence's components come from svds by default, iterative on CuPy.
 GPU_ITERATIVE = frozenset({"global_coherence"})
