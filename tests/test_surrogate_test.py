@@ -14,6 +14,7 @@ import pytest
 from spectral_connectivity import (
     Connectivity,
     DirectedOrientationWarning,
+    MorletWavelet,
     Multitaper,
     ShortTimeFourierTransform,
     SurrogateTestResult,
@@ -615,6 +616,29 @@ def test_randomizing_kinds_refuse_a_single_unit(kind):
     assert "use non-overlapping windows" in message
     assert "time_bins_are_disjoint=True" in message
     assert "an expectation_type that includes 'time'" not in message
+
+
+def test_single_unit_refusal_for_one_morlet_trial_names_only_its_remedies():
+    """A Morlet transform of one trial averaged over time has one taper and
+    bins that overlap: the refusal says the bins overlap, does not suggest
+    averaging over time (it already does) or mention tapers (there is one),
+    and suggests a transform with non-overlapping windows or more trials."""
+    morlet = MorletWavelet(
+        np.random.default_rng(15).standard_normal((256, 1, 2)),
+        sampling_frequency=128,
+        frequencies=np.array([10.0, 20.0]),
+        decimation=8,
+    )
+    connectivity = Connectivity.from_transform(morlet, expectation_type="time_trials")
+    assert connectivity.fourier_coefficients.shape[2] == 1
+    with pytest.raises(ValueError, match="this Connectivity has 1 ") as excinfo:
+        connectivity.surrogate_test("imaginary_coherence", kind="conjugation")
+    message = str(excinfo.value)
+    assert "windows that overlap are not independent units" in message
+    assert "a Multitaper or ShortTimeFourierTransform with time_window_step" in message
+    assert "record more trials" in message
+    assert "includes 'time'" not in message
+    assert "tapers" not in message
 
 
 def test_phase_rotation_refuses_one_sided_coefficients():

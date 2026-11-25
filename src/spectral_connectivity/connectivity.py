@@ -3605,9 +3605,10 @@ class Connectivity:
         """Why ``kind`` cannot randomize these coefficients, and what would let it.
 
         The remedies follow what the expectation already averages: windows
-        that overlap are told to stop overlapping, not to be averaged.
+        that overlap are told to stop overlapping, not to be averaged, and
+        the tapers are mentioned only where there are several.
         """
-        n_windows, n_trials = self._fourier_coefficients.shape[:2]
+        n_windows, n_trials, n_tapers = self._fourier_coefficients.shape[:3]
         averaged = self._expectation_axes
         msg = (
             f"surrogate_test(kind={kind!r}) randomizes whole independent units "
@@ -3627,15 +3628,16 @@ class Connectivity:
                 "(conjugation) of tests at nominal 5% (one 10 s recording, 1 s "
                 "windows, 99 surrogates)."
             )
-        msg += (
-            " Randomizing the tapers of one trial separately is not offered: "
-            "their coefficients are correlated wherever the spectrum is not "
-            "flat across the half bandwidth, and for independent signals with "
-            "one trial (1 s, 7 tapers, 99 surrogates, nominal 5%) it rejected "
-            "57% (phase rotation) and 28% (conjugation) of tests around a "
-            "narrow spectral peak, and 19% and 10% just past the half "
-            "bandwidth of a steep 1/f**2 spectrum."
-        )
+        if n_tapers > 1:
+            msg += (
+                " Randomizing the tapers of one trial separately is not offered: "
+                "their coefficients are correlated wherever the spectrum is not "
+                "flat across the half bandwidth, and for independent signals with "
+                "one trial (1 s, 7 tapers, 99 surrogates, nominal 5%) it rejected "
+                "57% (phase rotation) and 28% (conjugation) of tests around a "
+                "narrow spectral peak, and 19% and 10% just past the half "
+                "bandwidth of a steep 1/f**2 spectrum."
+            )
         if windows_overlap:
             windows_remedy = (
                 "use non-overlapping windows (a Multitaper or "
