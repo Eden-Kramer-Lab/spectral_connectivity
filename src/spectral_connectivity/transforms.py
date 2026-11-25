@@ -2070,7 +2070,8 @@ class Multitaper(_WindowedFourierTransform):
         samples as ``True``, pass ``~mask``. Artifact intervals convert
         directly: set the mask ``True`` inside each one (for an MNE ``BAD_``
         annotation, the samples from its onset for its duration; for a row
-        ``[begin, end]`` of a FieldTrip artifact matrix, those samples). A
+        ``[begsample, endsample]`` of a FieldTrip artifact matrix, 1-based
+        sample numbers that include both ends, ``mask[begsample - 1:endsample]``). A
         trial's window touching any artifact sample is dropped whole: all its
         tapers' coefficients get observation weight 0 in every expectation,
         and the window's other trials are averaged on their own, so long
