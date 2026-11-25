@@ -381,7 +381,10 @@ frequency, for the statistics functions:
 ```
 
 A bin that keeps fewer than two observations, such as a window that keeps no
-trial, has no test, and its p-value is NaN.
+trial, has no test, and its p-value is NaN. Every statistics function that
+takes a count reads such an array the same way: an entry below the fewest
+observations the statistic needs (two for the coherence statistics, one for
+the power statistics) gives NaN there, while a single count below it raises.
 
 Dropping a window throws away its valid samples too. With
 `artifact_handling="missing_data_tapers"` (a `Multitaper` setting; for the

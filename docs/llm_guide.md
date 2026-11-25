@@ -177,8 +177,9 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `"artifact_handling": "missing_data_tapers"`. The outputs mark what is kept:
   `Multitaper.valid_windows`, `Multitaper.n_kept_tapers`, and
   `Connectivity.n_valid_observations`, the per-bin counts to give the
-  statistics functions instead of `n_observations`. See the
-  [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
+  statistics functions instead of `n_observations`; a bin keeping too few
+  (fewer than 2 for coherence, none for power) is NaN in their results. See
+  the [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
 
   ```python
   >>> with_gap = time_series.copy()

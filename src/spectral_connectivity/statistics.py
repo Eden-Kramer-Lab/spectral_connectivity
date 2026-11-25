@@ -735,9 +735,9 @@ def _normalized_axes(axis: int | tuple[int, ...], ndim: int) -> tuple[int, ...]:
 
 def coherence_fisher_z_transform(
     coherency1: NDArray[np.complexfloating] | complex,
-    n_obs1: int,
+    n_obs1: int | NDArray[np.integer],
     coherency2: NDArray[np.complexfloating] | complex = 0,
-    n_obs2: int = 0,
+    n_obs2: int | NDArray[np.integer] = 0,
 ) -> NDArray[np.floating]:
     """Transform coherence magnitude to approximately normal distribution.
 
@@ -753,13 +753,19 @@ def coherence_fisher_z_transform(
         result. Do not pass ``magnitude_squared_coherence()``: its values are
         already squared, and they are read as magnitudes, so the z-scores are
         wrong with no error (take the square root first).
-    n_obs1 : int
-        Number of observations for coherency1 (n_tapers * n_trials).
+    n_obs1 : int or NDArray[int]
+        Number of observations for coherency1 (n_tapers * n_trials), at least
+        2, or an array of counts that broadcasts against it, one per estimate,
+        such as ``Connectivity.n_valid_observations``. An entry of the array
+        below 2 (a bin that keeps fewer observations) makes the z-score NaN
+        there; a single count below 2 raises ``ValueError``.
     coherency2 : NDArray[complexfloating] or float, default=0
         Second coherency for comparison, in the same form as ``coherency1``. If
         0, tests against null hypothesis.
-    n_obs2 : int, default=0
-        Number of observations for coherency2 (n_tapers * n_trials).
+    n_obs2 : int or NDArray[int], default=0
+        Number of observations for coherency2 (n_tapers * n_trials), 0 for no
+        second sample, or an array of counts as for ``n_obs1``, in which 0
+        means no second sample at that entry and 1 gives NaN.
 
     Returns
     -------
@@ -804,8 +810,10 @@ def coherence_fisher_z_transform(
     # here, too, so the message names n_obs1 or n_obs2; 0 (no second sample) is
     # valid for n_obs2.
     why = "The coherence bias is undefined below 2 observations."
-    counts1 = _validated_n_observations(n_obs1, 2, why, name="n_obs1")
-    counts2 = _validated_n_observations(n_obs2, 2, why, name="n_obs2", zero_is_one_sample=True)
+    counts1, too_few1 = _validated_n_observations(n_obs1, 2, why, name="n_obs1")
+    counts2, too_few2 = _validated_n_observations(
+        n_obs2, 2, why, name="n_obs2", zero_is_one_sample=True
+    )
     # Clip saturated magnitudes below 1 so arctanh stays finite. np.minimum
     # accepts Python and 0-d scalars (whose np.abs is a NumPy scalar that does
     # not support item assignment) and preserves the input's shape.
@@ -826,7 +834,7 @@ def coherence_fisher_z_transform(
     z1: NDArray[np.floating] = np.arctanh(coherence_magnitude1) - bias1
     z2: NDArray[np.floating] = np.arctanh(coherence_magnitude2) - bias2
     scale = np.sqrt(bias1 + bias2)
-    return (z1 - z2) / scale
+    return _nan_where((z1 - z2) / scale, too_few1 | too_few2)
 
 
 def get_normal_distribution_p_values(
@@ -1044,17 +1052,10 @@ def coherence_significance_pvalue(
     >>> connectivity.frequencies[significant.all(axis=0)].tolist()
     [16.0, 18.0, 20.0, 22.0, 24.0]
     """
-    # One count below 2 leaves nothing testable, so it is refused; an array of
-    # counts, one per estimate, may hold bins that keep fewer (NaN there).
-    minimum, why_below_minimum = (
-        (2, "The zero-coherence null, Beta(1, n_observations - 1), needs at least 2.")
-        if np.ndim(n_observations) == 0
-        else (0, "")
-    )
-    counts = _validated_n_observations(
+    counts, too_few = _validated_n_observations(
         n_observations,
-        minimum,
-        why_below_minimum,
+        2,
+        "The zero-coherence null, Beta(1, n_observations - 1), needs at least 2.",
         how=(
             "Pass the number of averaged observations (trials x tapers), "
             "Connectivity.n_observations, or, where artifact_samples drops "
@@ -1075,9 +1076,7 @@ def coherence_significance_pvalue(
         "coherency shaped (..., n_frequencies, n_signals, n_signals).",
     )
     # One count keeps its Python scalar, as before arrays were accepted.
-    # Untestable estimates take a stand-in count, made NaN below.
-    too_few = counts < 2
-    n_observations = counts.item() if counts.ndim == 0 else np.where(too_few, 2, counts)
+    n_observations = counts.item() if counts.ndim == 0 else counts
     real_valued = _validated_real_valued(
         real_valued, magnitude_squared_coherence.shape, "coherency"
     )
@@ -1094,9 +1093,7 @@ def coherence_significance_pvalue(
             0.5,
             (np.broadcast_to(n_observations, shape)[is_real] - 1) / 2,
         )
-    if np.any(too_few):
-        p_values = np.where(too_few, np.nan, p_values)
-    return p_values
+    return _nan_where(p_values, too_few)
 
 
 def _validated_n_observations(
@@ -1110,16 +1107,29 @@ def _validated_n_observations(
         "Pass the number of averaged observations (trials x tapers), "
         "Connectivity.n_observations."
     ),
-) -> NDArray[Any]:
-    """Observation counts, a scalar or one per estimate, as a validated array.
+) -> tuple[NDArray[Any], NDArray[np.bool_]]:
+    """Observation counts, a scalar or one per estimate, validated, and which are too few.
 
     Raises ``TypeError`` unless every count is a real number (a boolean, a
     string, or None is not a count), and ``ValueError`` unless every count is
-    a finite whole number of at least ``minimum``. ``why_below_minimum`` is
-    added to the message when a finite whole count lies below ``minimum``,
-    and ``how``, the counts to pass, ends every message. With
+    a finite whole number. A single count must be at least ``minimum``
+    (``why_below_minimum`` is added to the message when it is not), since it
+    would leave no estimate defined. An array of counts, one per estimate,
+    may hold counts from 0 up: those below ``minimum`` (bins that keep too few
+    observations) are flagged in the returned mask and replaced by
+    ``minimum`` in the returned counts, so the caller's formula stays finite
+    there, and the caller makes those results NaN with :func:`_nan_where`.
+    ``how``, the counts to pass, ends every message. With
     ``zero_is_one_sample``, a count of 0 (no second sample, for a one-sample
-    test) is valid too.
+    test) is valid too and is not flagged.
+
+    Returns
+    -------
+    counts : NDArray
+        The counts, with ``minimum`` in place of each flagged entry.
+    too_few : NDArray[bool]
+        True where an array count is below ``minimum``; all False for a
+        single count.
     """
     counts = np.asarray(n_observations)
     if counts.dtype.kind not in "iuf":
@@ -1128,23 +1138,44 @@ def _validated_n_observations(
             f"{type(n_observations).__name__} {n_observations!r}. {how}"
         )
         raise TypeError(msg)
+    is_array = counts.ndim > 0
+    floor = 0 if is_array else minimum
     whole = np.isfinite(counts) & (counts == np.round(counts))
-    too_few = counts < minimum
+    below_floor = counts < floor
+    too_few = whole & (counts < minimum)
     if zero_is_one_sample:
+        below_floor &= counts != 0
         too_few &= counts != 0
-    invalid = ~whole | too_few
+    invalid = ~whole | below_floor
     if np.any(invalid):
         offending = ", ".join(repr(value) for value in counts[invalid].ravel().tolist()[:5])
-        below_minimum = np.any(whole & too_few)
-        accepted = f">= {minimum}" + (
-            ", or 0 for a one-sample test" if zero_is_one_sample else ""
+        below_minimum = not is_array and np.any(whole & below_floor)
+        one_sample = zero_is_one_sample and not is_array
+        accepted = f">= {floor}" + (", or 0 for a one-sample test" if one_sample else "")
+        array_rules = []
+        if minimum > int(zero_is_one_sample):
+            array_rules.append(
+                f"an entry below {minimum} (a bin that keeps too few observations) gives NaN"
+            )
+        if zero_is_one_sample:
+            array_rules.append("0 means no second sample there")
+        in_an_array = (
+            "In an array of counts " + ", and ".join(array_rules) + ". " if is_array else ""
         )
         msg = (
             f"{name} must be a finite integer {accepted}, got {offending}. "
-            f"{why_below_minimum + ' ' if below_minimum and why_below_minimum else ''}{how}"
+            f"{why_below_minimum + ' ' if below_minimum and why_below_minimum else ''}"
+            f"{in_an_array}{how}"
         )
         raise ValueError(msg)
-    return counts
+    return np.where(too_few, minimum, counts) if is_array else counts, too_few
+
+
+def _nan_where(
+    values: NDArray[np.floating], too_few: NDArray[np.bool_]
+) -> NDArray[np.floating]:
+    """``values`` with NaN where ``too_few`` (from :func:`_validated_n_observations`)."""
+    return np.where(too_few, np.nan, values) if np.any(too_few) else values
 
 
 def coherence_bias(
@@ -1161,19 +1192,24 @@ def coherence_bias(
 
     Parameters
     ----------
-    n_observations : int
+    n_observations : int or NDArray[int]
         Number of observations used in coherence estimation (n_tapers *
-        n_trials), at least 2: pass ``Connectivity.n_observations``.
+        n_trials), at least 2: pass ``Connectivity.n_observations``. Or an
+        array of counts, one per estimate, such as
+        ``Connectivity.n_valid_observations``: an entry below 2 (a bin that
+        keeps fewer observations) gives NaN there.
 
     Returns
     -------
-    bias : float
-        Bias correction factor for Fisher z-transform of coherence.
+    bias : float or NDArray[floating]
+        Bias correction factor for Fisher z-transform of coherence: a float
+        for a single count, otherwise an array of the counts' shape.
 
     Raises
     ------
     ValueError
-        If ``n_observations`` is not a finite integer of at least 2.
+        If a single ``n_observations`` is not a finite integer of at least 2,
+        or an array of them holds a negative, non-finite, or fractional count.
 
     Examples
     --------
@@ -1193,13 +1229,13 @@ def coherence_bias(
            Journal of Neuroscience Methods 159,
            337-345. 10.1016/j.jneumeth.2006.07.011.
     """
-    counts = _validated_n_observations(
+    counts, too_few = _validated_n_observations(
         n_observations,
         2,
         "The bias, 1 / (2 * n_observations - 2), is undefined below 2 observations.",
     )
     degrees_of_freedom = 2 * counts
-    return _float_if_scalar(1.0 / (degrees_of_freedom - 2))
+    return _float_if_scalar(_nan_where(1.0 / (degrees_of_freedom - 2), too_few))
 
 
 def coherence_rate_adjustment(
@@ -1417,7 +1453,7 @@ _DEFAULT_CONFIDENCE_LEVEL = _DefaultConfidenceLevel(0.95)
 
 
 def power_confidence_intervals(
-    n_observations: int | None = None,
+    n_observations: int | NDArray[np.integer] | None = None,
     power: NDArray[np.floating] | float = 1,
     confidence_level: float = _DEFAULT_CONFIDENCE_LEVEL,
     *,
@@ -1447,9 +1483,15 @@ def power_confidence_intervals(
         degrees of freedom ``2 * n_observations``, as in :func:`power_bias` and
         :func:`power_variance`. Passing only the taper count for a multi-trial
         average makes the interval far too wide (about 100% coverage instead of
-        95% for 5 tapers x 5 trials).
+        95% for 5 tapers x 5 trials). Or an array of counts that broadcasts
+        against ``power``, one per estimate, such as
+        ``Connectivity.n_valid_observations[..., np.newaxis]``: where an entry
+        is 0 (a bin that keeps no observation) the bounds are NaN; a single
+        count of 0 raises ``ValueError``.
     power : NDArray[floating] or float, default=1
-        Power spectrum estimates. Can be array of values or scalar.
+        Power spectrum estimates. Can be array of values or scalar. It must be
+        finite and non-negative, except where an array count is 0, where it
+        may be NaN, as ``Connectivity.power()`` is there.
     confidence_level : float, default=0.95
         The probability mass inside the two-sided interval (0.95 for a 95%
         interval), in the range [0.5, 1.0).
@@ -1550,7 +1592,7 @@ def power_confidence_intervals(
             )
             raise ValueError(msg)
         confidence_level, level_name = ci, "ci"
-    counts = _validated_n_observations(
+    counts, too_few = _validated_n_observations(
         n_observations,
         1,
         "It sets the chi-squared degrees of freedom, 2 * n_observations, which "
@@ -1565,9 +1607,12 @@ def power_confidence_intervals(
         raise ValueError(msg)
     # Power spectral density is non-negative; a negative value scales the bounds
     # negative and reversed (e.g. power=-1 -> ~(-0.488, -3.080)), and a
-    # non-finite value gives NaN/Inf bounds. Reject both explicitly.
+    # non-finite value gives NaN/Inf bounds. Reject both explicitly, except
+    # where an array count keeps no observation: the power there is NaN, and
+    # its bounds are NaN whatever it is.
     power_values = np.asarray(power, dtype=float)
-    if not np.all(np.isfinite(power_values)) or np.any(power_values < 0):
+    checked_power = np.where(too_few, 0.0, power_values)
+    if not np.all(np.isfinite(checked_power)) or np.any(checked_power < 0):
         msg = (
             "power must be finite and non-negative (it is a power spectral "
             "density); got a non-finite or negative value."
@@ -1603,7 +1648,7 @@ def power_confidence_intervals(
         degrees_of_freedom / scipy.stats.chi2.ppf(alpha / 2, degrees_of_freedom) * power
     )
 
-    return lower_bound, upper_bound
+    return _nan_where(lower_bound, too_few), _nan_where(upper_bound, too_few)
 
 
 def _chi_squared_shape(
@@ -1642,9 +1687,11 @@ def power_bias(
 
     Parameters
     ----------
-    n_observations : int
+    n_observations : int or NDArray[int]
         Number of observations used in power estimation (n_tapers * n_trials),
-        at least 1: pass ``Connectivity.n_observations``.
+        at least 1: pass ``Connectivity.n_observations``. Or an array of
+        counts, one per estimate, such as ``Connectivity.n_valid_observations``:
+        an entry of 0 (a bin that keeps no observation) gives NaN there.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
         mask such as
@@ -1659,7 +1706,8 @@ def power_bias(
     Raises
     ------
     ValueError
-        If ``n_observations`` is not a finite positive integer.
+        If a single ``n_observations`` is not a finite positive integer, or an
+        array of them holds a negative, non-finite, or fractional count.
 
     Examples
     --------
@@ -1670,11 +1718,11 @@ def power_bias(
     >>> print(f"At a real-valued bin: {power_bias(100, real_valued=True):.6f}")
     At a real-valued bin: -0.010033
     """
-    counts = _validated_n_observations(
+    counts, too_few = _validated_n_observations(
         n_observations, 1, "The digamma function has poles at 0 and the negative integers."
     )
     shape = _chi_squared_shape(counts, real_valued)
-    return _float_if_scalar(scipy.special.psi(shape) - np.log(shape))
+    return _float_if_scalar(_nan_where(scipy.special.psi(shape) - np.log(shape), too_few))
 
 
 def power_variance(
@@ -1689,9 +1737,10 @@ def power_variance(
 
     Parameters
     ----------
-    n_observations : int
+    n_observations : int or NDArray[int]
         Number of observations used in power estimation (n_tapers * n_trials),
-        at least 1: pass ``Connectivity.n_observations``.
+        at least 1, or an array of counts, as in :func:`power_bias`: an entry
+        of 0 gives NaN there.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, as in
         :func:`power_bias`.
@@ -1705,7 +1754,8 @@ def power_variance(
     Raises
     ------
     ValueError
-        If ``n_observations`` is not a finite positive integer.
+        If a single ``n_observations`` is not a finite positive integer, or an
+        array of them holds a negative, non-finite, or fractional count.
 
     Examples
     --------
@@ -1723,18 +1773,18 @@ def power_variance(
     chi-squared shape parameter ``nu / 2 = n_observations``; at a real-valued
     bin ``nu = n_observations``, which about doubles it.
     """
-    counts = _validated_n_observations(
+    counts, too_few = _validated_n_observations(
         n_observations, 1, "The trigamma function has poles at 0 and the negative integers."
     )
     shape = _chi_squared_shape(counts, real_valued)
-    return _float_if_scalar(scipy.special.polygamma(1, shape))
+    return _float_if_scalar(_nan_where(scipy.special.polygamma(1, shape), too_few))
 
 
 def power_fisher_z_transform(
     spectrum1: NDArray[np.floating],
-    n_obs1: int,
+    n_obs1: int | NDArray[np.integer],
     spectrum2: NDArray[np.floating] | float = 1.0,
-    n_obs2: int = 0,
+    n_obs2: int | NDArray[np.integer] = 0,
     *,
     real_valued: bool | NDArray[np.bool_] = False,
 ) -> NDArray[np.floating]:
@@ -1747,19 +1797,25 @@ def power_fisher_z_transform(
     Parameters
     ----------
     spectrum1 : NDArray[floating], shape (...,)
-        Power spectrum estimates from first condition.
-    n_obs1 : int
-        Number of observations for spectrum1 (n_tapers * n_trials).
+        Power spectrum estimates from first condition, finite and positive
+        except where an array ``n_obs1`` is 0, where it may be NaN, as
+        ``Connectivity.power()`` is there.
+    n_obs1 : int or NDArray[int]
+        Number of observations for spectrum1 (n_tapers * n_trials), at least
+        1, or an array of counts that broadcasts against it, one per estimate,
+        such as ``Connectivity.n_valid_observations[..., np.newaxis]``. An
+        entry of 0 (a bin that keeps no observation) makes the z-score NaN
+        there; a single count of 0 raises ``ValueError``.
     spectrum2 : NDArray[floating] or float, default=1.0
         For a two-sample comparison (``n_obs2 > 0``), the power spectrum
         estimates from the second condition. For a one-sample test
         (``n_obs2 == 0``), a fixed positive baseline power against which
         ``spectrum1`` is compared; must be > 0 because the test operates on
         ``log(power)``.
-    n_obs2 : int, default=0
+    n_obs2 : int or NDArray[int], default=0
         Number of observations for spectrum2 (n_tapers * n_trials). If 0,
         performs a one-sample test of ``spectrum1`` against the fixed baseline
-        ``spectrum2``.
+        ``spectrum2``; in an array of counts, at that entry.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, broadcast
         against the spectra (see :func:`power_bias`); there the log power has
@@ -1791,12 +1847,17 @@ def power_fisher_z_transform(
     # counts would silently produce NaN z-scores. Checked here so the message
     # names n_obs1 or n_obs2; 0 (no second sample) is valid for n_obs2.
     why = "The power bias and variance (digamma and trigamma) have poles at 0."
-    counts1 = _validated_n_observations(n_obs1, 1, why, name="n_obs1")
-    counts2 = _validated_n_observations(n_obs2, 1, why, name="n_obs2", zero_is_one_sample=True)
+    counts1, too_few = _validated_n_observations(n_obs1, 1, why, name="n_obs1")
+    # Every n_obs2 from 0 up is valid, so none is too few.
+    counts2, _ = _validated_n_observations(
+        n_obs2, 1, why, name="n_obs2", zero_is_one_sample=True
+    )
     # The test operates on log(power); non-finite or non-positive inputs would
-    # produce silent -inf/nan z-scores. Fail loudly instead.
+    # produce silent -inf/nan z-scores. Fail loudly instead, except where an
+    # array n_obs1 keeps no observation: spectrum1 is NaN there, and so is z.
     spectrum1_values = np.asarray(spectrum1, dtype=float)
-    if not np.all(np.isfinite(spectrum1_values)) or np.any(spectrum1_values <= 0):
+    checked_spectrum1 = np.where(too_few, 1.0, spectrum1_values)
+    if not np.all(np.isfinite(checked_spectrum1)) or np.any(checked_spectrum1 <= 0):
         msg = (
             "spectrum1 must be finite and strictly positive (the test uses "
             "log(power)); got a non-finite or <= 0 value."
@@ -1834,5 +1895,4 @@ def power_fisher_z_transform(
     z2: NDArray[np.floating] = np.log(spectrum2) - bias2
 
     scale = np.sqrt(variance1 + variance2)
-    z: NDArray[np.floating] = (z1 - z2) / scale
-    return z
+    return _nan_where((z1 - z2) / scale, too_few)

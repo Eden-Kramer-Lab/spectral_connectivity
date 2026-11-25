@@ -3440,8 +3440,8 @@ class Connectivity:
         involving a zero-power signal are 0, not NaN: :meth:`coherency` masks
         them with ``nan + 0j``, whose imaginary part is 0, so use
         :meth:`power` to find such signals. A pair is NaN where a signal's
-        power is NaN, as in a bin that keeps no observation (see
-        :attr:`n_valid_observations`). The diagonal is NaN, a mask
+        power is not finite: NaN, as in a bin that keeps no observation (see
+        :attr:`n_valid_observations`), or infinite. The diagonal is NaN, a mask
         matching :meth:`coherency`: the imaginary part of a signal's coherency
         with itself is 0, which :meth:`imaginary_coherence` returns there.
 
@@ -3465,11 +3465,11 @@ class Connectivity:
         """
         imaginary = self._coherency().imag
         # Coherency is nan + 0j both where a signal has zero power (0 here, as
-        # documented) and where its power is NaN, such as a bin that keeps no
-        # observation, which must stay NaN.
+        # documented) and where its power is not finite: NaN, such as a bin
+        # that keeps no observation, or infinite, from overflow. Those stay NaN.
         n_nonnegative = self._nonnegative_frequency_count(self._power.shape[-2])
-        nan_power = xp.isnan(self._power[..., :n_nonnegative, :])
-        imaginary[nan_power[..., :, xp.newaxis] | nan_power[..., xp.newaxis, :]] = xp.nan
+        bad_power = ~xp.isfinite(self._power[..., :n_nonnegative, :])
+        imaginary[bad_power[..., :, xp.newaxis] | bad_power[..., xp.newaxis, :]] = xp.nan
         diagonal = xp.arange(self.n_signals)
         imaginary[..., diagonal, diagonal] = xp.nan
         return imaginary
