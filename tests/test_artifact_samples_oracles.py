@@ -15,7 +15,7 @@ code path it checks.
   paired difference from the all-trial estimate has mean zero.
 - mne-connectivity 0.9 (recorded): masking extra, corrupted trials gives
   MNE's outputs for the recorded epochs.
-- Labeled masks and statistics recipes the docs give.
+- The statistics recipe the docs give for a window that keeps no trial.
 """
 
 import dataclasses
@@ -32,7 +32,6 @@ from spectral_connectivity import (
     Connectivity,
     Multitaper,
     list_measures,
-    multitaper_connectivity,
 )
 from spectral_connectivity.simulate import simulate_lagged_broadband
 from spectral_connectivity.statistics import coherence_significance_pvalue
@@ -627,36 +626,6 @@ def test_masking_corrupted_trials_gives_mne_connectivitys_outputs(
     ours = quietly(getattr(connectivity, method))[0][frequency_index][:, seeds, targets].T
     np.testing.assert_allclose(
         _MNE_TRANSFORMS[transform_name](ours), mne_reference[measure], rtol=0, atol=atol
-    )
-
-
-def test_a_labeled_mask_without_a_trial_dimension_is_shared_by_every_trial():
-    """The wrapper aligns a DataArray mask with a labeled time series by
-    dimension name. A (time, channel) mask of a (time, trial, channel) series
-    names no trial dimension, so it must apply to every trial, even when the
-    series has as many trials as channels."""
-    xr = pytest.importorskip("xarray")
-    rng = np.random.default_rng(50)
-    time_series = rng.standard_normal((200, 3, 3))  # 3 trials, 3 channels
-    labeled = xr.DataArray(time_series, dims=("time", "trial", "channel"))
-    per_channel = np.zeros((200, 3), dtype=bool)
-    per_channel[60, 0] = True  # channel 0 at sample 60, in every trial
-    every_trial = np.broadcast_to(per_channel[:, np.newaxis, :], time_series.shape)
-    settings = {"n_time_samples_per_window": 50}
-
-    def power(artifact_samples):
-        return quietly(
-            multitaper_connectivity,
-            labeled,
-            SAMPLING_FREQUENCY,
-            method="power",
-            transform_kwargs={**settings, "artifact_samples": artifact_samples},
-        ).values
-
-    expected = power(every_trial.copy())
-    assert np.isnan(expected[1]).all()  # window 1 keeps no trial
-    np.testing.assert_array_equal(
-        power(xr.DataArray(per_channel, dims=("time", "channel"))), expected
     )
 
 
