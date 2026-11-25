@@ -103,17 +103,26 @@ def _fourier_coefficients_with_cross_spectrum(S, conjugate_symmetric=False):
     cross-spectrum is then exactly conjugate-symmetric and the factorization
     takes its half-spectrum path.
     """
-    n_fft, n_signals, _ = S.shape
+    n_signals = S.shape[-1]
     L = np.linalg.cholesky(S)  # (n_fft, n_signals, n_signals), lower-triangular
     # taper axis <- columns of L; scale so the taper-mean reproduces S.
     fc = np.sqrt(n_signals) * np.moveaxis(L, -1, -2)  # (n_fft, taper, signal)
-    fc = np.moveaxis(fc, 0, 1)  # (taper, n_fft, signal)
     if conjugate_symmetric:
-        fc[:, 0] = fc[:, 0].real
-        if n_fft % 2 == 0:
-            fc[:, n_fft // 2] = fc[:, n_fft // 2].real
-        fc[:, n_fft // 2 + 1 :] = fc[:, 1 : (n_fft + 1) // 2][:, ::-1].conj()
+        fc = _mirrored(fc)
+    fc = np.moveaxis(fc, 0, 1)  # (taper, n_fft, signal)
     return fc[None, None]  # (1, 1, n_tapers, n_fft, n_signals)
+
+
+def _mirrored(spectrum):
+    """``spectrum`` made exactly conjugate-symmetric along its first (FFT) axis
+    from its non-negative bins, with a real zero and Nyquist bin."""
+    n_fft = spectrum.shape[0]
+    mirrored = spectrum.copy()
+    mirrored[0] = mirrored[0].real
+    if n_fft % 2 == 0:
+        mirrored[n_fft // 2] = mirrored[n_fft // 2].real
+    mirrored[n_fft // 2 + 1 :] = mirrored[1 : (n_fft + 1) // 2][::-1].conj()
+    return mirrored
 
 
 def _analytic_directed_measures(A, H, noise_covariance):

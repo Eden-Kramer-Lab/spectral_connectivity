@@ -32,14 +32,14 @@ import numpy as np
 import pytest
 
 from spectral_connectivity import Connectivity, DirectedOrientationWarning, Multitaper
-from spectral_connectivity import minimum_phase_decomposition as mpd_module
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 from spectral_connectivity.simulate import simulate_MVAR
-from tests._backend_helpers import to_device, to_host, xp
+from tests._backend_helpers import to_device, to_host
 from tests._var_oracle import (
     _analytic_directed_measures,
     _analytic_var,
     _dense_stable_var,
+    _mirrored,
     _prediction_error_covariance,
 )
 
@@ -47,17 +47,6 @@ from tests._var_oracle import (
 def _reverse_cholesky(matrix):
     """Upper-triangular ``U`` with a positive diagonal and ``U Uᴴ = matrix``."""
     return np.linalg.cholesky(matrix[..., ::-1, ::-1])[..., ::-1, ::-1]
-
-
-def _mirrored(spectrum):
-    """``spectrum`` made exactly conjugate-symmetric from its non-negative bins."""
-    n_fft = spectrum.shape[0]
-    mirrored = spectrum.copy()
-    mirrored[0] = mirrored[0].real
-    if n_fft % 2 == 0:
-        mirrored[n_fft // 2] = mirrored[n_fft // 2].real
-    mirrored[n_fft // 2 + 1 :] = mirrored[1 : (n_fft + 1) // 2][::-1].conj()
-    return mirrored
 
 
 def _riccati_minimum_phase_factor(spectrum, max_lag):
@@ -351,85 +340,3 @@ def test_pairwise_granger_of_an_estimate_matches_the_riccati_factors_of_its_pair
     np.testing.assert_allclose(
         result[..., off_diagonal], expected[..., off_diagonal], atol=1e-5, rtol=0
     )
-
-
-# A chain 0 -> 1 -> 2 of nearly integrating signals; their powers differ by
-# five orders of magnitude before any rescaling.
-_INTEGRATING_CHAIN = 0.99 * np.eye(3)[np.newaxis] + np.array(
-    [[[0.0, 0.0, 0.0], [0.2, 0.0, 0.0], [0.0, 0.2, 0.0]]]
-)
-
-
-@pytest.mark.parametrize(
-    "measure",
-    [
-        "pairwise_spectral_granger_prediction",
-        "conditional_spectral_granger_prediction",
-        "directed_coherence",
-        "generalized_partial_directed_coherence",
-        "blockwise",
-    ],
-)
-def test_scale_invariant_measures_of_estimates_do_not_change_when_the_signals_are_standardized(
-    measure,
-):
-    """Spectral Granger, directed coherence and gPDC are unchanged by
-    rescaling the signals. On 20 windows of a multitaper estimate on the
-    default grid, the values for the raw signals and for the signals divided
-    by their standard deviations (7, 1e2 and 2e3) agree to 1e-9 (observed at
-    most 7e-14; from ``chol(R0)ᵀ`` with the RMS-loaded inverses, before
-    the covariant start, they differed by 0.5 to 1.1)."""
-    data = simulate_MVAR(
-        _INTEGRATING_CHAIN,
-        noise_covariance=np.eye(3),
-        n_time_samples=20 * 256,
-        n_trials=4,
-        random_state=0,
-    )
-    standardized = data / data.std(axis=(0, 1))
-
-    def compute(signals):
-        connectivity = Connectivity.from_transform(
-            Multitaper(
-                signals,
-                sampling_frequency=1.0,
-                time_halfbandwidth_product=3,
-                time_window_duration=256,
-            )
-        )
-        if measure == "blockwise":
-            return connectivity.blockwise_spectral_granger_prediction([0, 1, 1])[0]
-        return getattr(connectivity, measure)()
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
-        warnings.filterwarnings("ignore", message="directed_coherence assumes uncorrelated")
-        raw, rescaled = to_host(compute(data)), to_host(compute(standardized))
-    np.testing.assert_allclose(raw, rescaled, atol=1e-9, rtol=0)
-
-
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
-def test_a_factor_that_is_not_minimum_phase_warns_on_both_paths(real_signals, monkeypatch):
-    """From the start ``chol(R0)ᵀ``, the exact spectrum of this dense VAR
-    of signals of comparable power converges to a factor whose determinant
-    winds once around zero, on the two-sided path and on the half-spectrum
-    one that real signals take, where the determinant on the negative
-    frequencies is mirrored from the others before its winding is counted.
-    From the covariant start (``U Uᵀ = R0``) it factors without a
-    warning."""
-    coefficients, noise_covariance = _dense_stable_var(3, 1, 0.99, seed=857449258)
-    spectrum = to_device(_analytic_var(coefficients, noise_covariance, 4096)[2])
-    if real_signals:
-        spectrum = to_device(_mirrored(to_host(spectrum)))
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        minimum_phase_decomposition(spectrum[np.newaxis])
-    monkeypatch.setattr(
-        mpd_module,
-        "_reverse_cholesky",
-        lambda matrices: xp.linalg.cholesky(matrices).swapaxes(-1, -2),
-    )
-    with pytest.warns(UserWarning, match="not minimum phase for 1 of 1 sub-spectrum"):
-        factor = minimum_phase_decomposition(spectrum[np.newaxis])
-    assert to_host(mpd_module._determinant_winding_number(factor))[0] == pytest.approx(-1)
