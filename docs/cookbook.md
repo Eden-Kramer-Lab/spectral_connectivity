@@ -413,8 +413,11 @@ their 5 tapers:
 Which to choose:
 
 - `"drop"` when few windows have artifacts, or when the spectrum spans more
-  than about 1000 in power (strong peaks over a low floor), where the
-  gapped windows' extra leakage matters;
+  than about 1000 in power (strong peaks over a low floor, or steep 1/f
+  power), where the gapped windows' extra leakage matters. A spectrum's span
+  is its largest true power over its smallest at every frequency from 0 Hz to
+  Nyquist, those below the band of interest included, since leakage brings
+  power from any of them;
 - `"missing_data_tapers"` when `"drop"` would lose much of the data, the
   artifacts are short, and the spectrum spans less than about 100;
 - in between, compute both on your data and compare.
@@ -424,13 +427,16 @@ The gapped windows' tapers are less concentrated than the DPSS (down to 0.9
 rather than about 0.95), and fewer of them smooth less, so their expected
 spectrum differs from that without gaps. For 64-sample windows (NW = 3) and
 the gap patterns tested (a 4-, a 12-, and two 3-sample gaps), away from 0 Hz
-and Nyquist, it differs by about 5% for a spectrum spanning a factor of 100
-(an AR(2) with poles of radius 0.77) and by up to 37% for one spanning 2400
-(poles of radius 0.95 at 0.1 cycles per sample, two 3-sample gaps). Other gap
+and Nyquist, it differs by about 5% for a spectrum spanning about 120 (an
+AR(2) with poles of radius 0.77) and by up to 37% for one spanning 2400
+(poles of radius 0.95 at 0.1 cycles per sample, two 3-sample gaps), each
+span taken over the window's 64 FFT frequencies. Other gap
 positions gave 1-13% (a single 4- to 12-sample gap at 165 positions, under 6%
 for 68% of them) and 7-70% (two 3-sample gaps at 325, median 34%), and the
-difference grows
-toward Nyquist. In exchange the valid samples are used: with three of four
+difference grows toward Nyquist. Several short gaps can leak far more than
+one long one: for 500-sample windows (NW = 4) of an AR(1) with coefficient
+0.99 (spanning about 40000), two 5-sample gaps changed the expected spectrum
+by up to 55% and one 20-sample gap by 2.4%, a bandwidth or more above 0 Hz. In exchange the valid samples are used: with three of four
 trials gapped in every window, the variance of white-noise power is a third of
 that of `"drop"`. Building the transform finds the tapers of each distinct
 pattern of artifacts in a trial window, about 2 ms per pattern for 1000
