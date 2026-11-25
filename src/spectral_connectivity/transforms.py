@@ -3192,16 +3192,23 @@ class Multitaper(_WindowedFourierTransform):
         n_time_samples_per_window, n_tapers)``, rather than a set for every
         trial window: the DPSS coefficients of the others are already right.
 
-        The windows are recomputed in chunks of at most
-        ``1 / _RESCUE_CHUNKS`` of the trial windows, so the temporaries stay
-        a fixed fraction of ``coefficients`` however many windows are
-        rescued. A window's temporaries peak at about three times its share
-        of ``coefficients`` (its FFT before and after scaling, plus its
-        tapered product, tapers, and copies, each at most half its share as
-        ``n_time_samples_per_window <= n_fft_samples``), so a chunk's stay
-        under a quarter of ``coefficients``: less than computing
-        ``coefficients`` held (the FFT before and after scaling of every
-        window), so rescuing windows adds no memory to dropping them.
+        The windows are recomputed in at most ``_RESCUE_CHUNKS`` chunks of
+        ``ceil(n_trial_windows / _RESCUE_CHUNKS)`` trial windows each (at
+        least one), so the temporaries stay a fixed fraction of
+        ``coefficients`` however many windows are rescued. A window's
+        temporaries peak at about three times its share of ``coefficients``
+        (its FFT before and after scaling, plus its tapered product, tapers,
+        and copies, each at most half its share as
+        ``n_time_samples_per_window <= n_fft_samples``), so with 13 or more
+        trial windows a chunk's stay under a quarter of ``coefficients``:
+        less than computing ``coefficients`` held (the FFT before and after
+        scaling of every window), so rescuing windows adds no memory to
+        dropping them. With fewer, a chunk is a larger share; a single
+        rescued trial window adds about half of ``coefficients`` (measured
+        1.5 times the transform's peak without artifacts). The recomputed
+        windows equal a one-batch recomputation to rounding: the FFT of a
+        sub-batch can differ from the same rows of a larger batch in the
+        last bits.
         """
         if not self._rescues_windows:
             return
