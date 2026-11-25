@@ -3427,8 +3427,8 @@ class Connectivity:
         self._validate_multiple_signals()
         regularization = _validated_regularization(regularization)
         # Before any warning: "auto" raises for a single observation.
-        cross_spectral_density, shrunk, shrinkage = self._shrunk_cross_spectral_matrix(
-            shrinkage
+        cross_spectral_density, intensity, shrinkage = (
+            self._cross_spectral_matrix_and_intensity(shrinkage)
         )
         n_observations, n_signals = self.n_observations, self.n_signals
         if shrinkage is None:
@@ -3497,20 +3497,27 @@ class Connectivity:
         # Invert the coherency matrix D^-1/2 S D^-1/2 (D = diag(S)) loaded by
         # regularization * I: the inverse of S + regularization * D up to the
         # diagonal scaling the normalization below removes, but with the
-        # signals' scales out of the solve. In their units, a rank-deficient
-        # S made the loaded solve so ill-conditioned (about 1e12) that its
-        # rounding moved the estimate by 1e-3 when the signals were rescaled.
-        power = xp.real(xp.diagonal(shrunk, axis1=-2, axis2=-1))
+        # signals' scales out of the solve, so that its rounding does not
+        # depend on them. Shrinkage keeps the powers, so it multiplies the
+        # coherencies by 1 - lambda in place. A zero-power bin is solved as
+        # the identity (its result is NaN); a signal with no power keeps a
+        # zero diagonal, loaded by regularization alone, which decouples it.
+        power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
         inverse_root_power = 1 / xp.sqrt(xp.where(power > 0, power, 1))
-        coherency_matrix = (
-            shrunk
-            * inverse_root_power[..., :, xp.newaxis]
-            * inverse_root_power[..., xp.newaxis, :]
+        coherency_matrix = cross_spectral_density * inverse_root_power[..., :, xp.newaxis]
+        coherency_matrix *= inverse_root_power[..., xp.newaxis, :]
+        if intensity is not None:
+            off_diagonal = 1 - xp.eye(n_signals, dtype=power.dtype)
+            coherency_matrix *= 1 - intensity * off_diagonal
+        coherency_matrix *= ~zero_power
+        diagonal = xp.arange(n_signals)
+        coherency_matrix[..., diagonal, diagonal] = (
+            xp.where((power > 0) | zero_power[..., 0], 1.0, 0.0) + regularization
         )
-        identity = xp.eye(n_signals, dtype=shrunk.dtype)
-        safe_spectrum = xp.where(zero_power, identity, coherency_matrix)
-        precision = _regularized_inverse(
-            safe_spectrum, regularization=regularization, per_signal=True
+        identity = xp.eye(n_signals, dtype=coherency_matrix.dtype)
+        # Broadcast so that CuPy's batched solve accepts the right-hand side.
+        precision: BackendArray = xp.linalg.solve(
+            coherency_matrix, xp.broadcast_to(identity, coherency_matrix.shape)
         )
         precision_diagonal = xp.maximum(
             xp.real(xp.diagonal(precision, axis1=-2, axis2=-1)), 0.0
@@ -3526,19 +3533,20 @@ class Connectivity:
         )
         result = xp.clip(_squared_magnitude(partial_coherency), 0.0, 1.0)
         result = xp.where(zero_power, xp.nan, result)
-        diagonal = xp.arange(n_signals)
         result[..., diagonal, diagonal] = xp.nan
         return result
 
-    def _shrunk_cross_spectral_matrix(
+    def _cross_spectral_matrix_and_intensity(
         self, shrinkage: Any
-    ) -> tuple[BackendArray, BackendArray, float | Literal["auto"] | None]:
-        """The cross-spectral matrix at the non-negative frequencies, shrunk.
+    ) -> tuple[BackendArray, BackendArray | float | None, float | Literal["auto"] | None]:
+        """The cross-spectral matrix at the non-negative frequencies and its shrinkage.
 
         Validates ``shrinkage`` (0 means none), runs the checks of ``"auto"``,
-        and returns ``(S, shrunk S, shrinkage)``: ``S`` and its shrunk form,
-        ``(..., n_nonnegative_frequencies, n_signals, n_signals)`` (the same
-        array without shrinkage), and the validated ``shrinkage`` (``None``,
+        and returns ``(S, intensity, shrinkage)``: ``S``, ``(...,
+        n_nonnegative_frequencies, n_signals, n_signals)``; the intensity
+        ``lambda`` by which every coherency is multiplied by ``1 - lambda``
+        (``None`` without shrinkage, an array ``(..., n_nonnegative_frequencies,
+        1, 1)`` for ``"auto"``); and the validated ``shrinkage`` (``None``,
         ``"auto"``, or a float in ``(0, 1]``).
         """
         shrinkage = _validated_shrinkage(shrinkage)
@@ -3547,7 +3555,7 @@ class Connectivity:
         # Drop negative frequencies before the per-bin inversion, not after.
         cross_spectral_density = self._nonnegative_cross_spectral_matrix()
         if shrinkage is None:
-            return cross_spectral_density, cross_spectral_density, None
+            return cross_spectral_density, None, None
         intensity = (
             self._auto_shrinkage_intensity(
                 'partial_coherence(shrinkage="auto")',
@@ -3556,11 +3564,7 @@ class Connectivity:
             if shrinkage == "auto"
             else shrinkage
         )
-        # (1 - lambda) S + lambda diag(S) as one product: the powers are kept
-        # exactly and every off-diagonal entry is multiplied by 1 - lambda.
-        off_diagonal = 1 - xp.eye(self.n_signals, dtype=cross_spectral_density.real.dtype)
-        shrunk = cross_spectral_density * (1 - intensity * off_diagonal)
-        return cross_spectral_density, shrunk, shrinkage
+        return cross_spectral_density, intensity, shrinkage
 
     @_asnumpy
     def partial_coherence_shrinkage(self) -> NDArray[np.floating]:
