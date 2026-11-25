@@ -1046,13 +1046,15 @@ def coherence_significance_pvalue(
     """
     # One count below 2 leaves nothing testable, so it is refused; an array of
     # counts, one per estimate, may hold bins that keep fewer (NaN there).
-    is_one_count = np.ndim(n_observations) == 0
+    minimum, why_below_minimum = (
+        (2, "The zero-coherence null, Beta(1, n_observations - 1), needs at least 2.")
+        if np.ndim(n_observations) == 0
+        else (0, "")
+    )
     counts = _validated_n_observations(
         n_observations,
-        2 if is_one_count else 0,
-        "The zero-coherence null, Beta(1, n_observations - 1), needs at least 2."
-        if is_one_count
-        else "",
+        minimum,
+        why_below_minimum,
         how=(
             "Pass the number of averaged observations (trials x tapers), "
             "Connectivity.n_observations, or, where artifact_samples drops "
@@ -1079,22 +1081,21 @@ def coherence_significance_pvalue(
     real_valued = _validated_real_valued(
         real_valued, magnitude_squared_coherence.shape, "coherency"
     )
-    complex_null = (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
+    p_values: NDArray[np.floating] = (1.0 - magnitude_squared_coherence) ** (
+        n_observations - 1
+    )
+    if np.any(real_valued):
+        # Only the real-valued entries (typically two bins) need the beta tail.
+        shape = np.broadcast_shapes(real_valued.shape, np.shape(p_values))
+        is_real = np.broadcast_to(real_valued, shape)
+        p_values = np.array(np.broadcast_to(p_values, shape), dtype=float, copy=True)
+        p_values[is_real] = scipy.stats.beta.sf(
+            np.broadcast_to(magnitude_squared_coherence, shape)[is_real],
+            0.5,
+            (np.broadcast_to(n_observations, shape)[is_real] - 1) / 2,
+        )
     if np.any(too_few):
-        complex_null = np.where(too_few, np.nan, complex_null)
-    if not np.any(real_valued):
-        return complex_null
-    # Only the real-valued entries (typically two bins) need the beta tail.
-    shape = np.broadcast_shapes(real_valued.shape, np.shape(complex_null))
-    is_real = np.broadcast_to(real_valued, shape) & ~np.broadcast_to(too_few, shape)
-    p_values: NDArray[np.floating] = np.array(
-        np.broadcast_to(complex_null, shape), dtype=float, copy=True
-    )
-    p_values[is_real] = scipy.stats.beta.sf(
-        np.broadcast_to(magnitude_squared_coherence, shape)[is_real],
-        0.5,
-        (np.broadcast_to(n_observations, shape)[is_real] - 1) / 2,
-    )
+        p_values = np.where(too_few, np.nan, p_values)
     return p_values
 
 
