@@ -2300,10 +2300,12 @@ class Multitaper(_WindowedFourierTransform):
           ``taper_weighting`` uses each window's own concentrations. Needs
           generated DPSS tapers, ``is_low_bias=True`` and at least 2 tapers.
           Construction finds the tapers of each distinct artifact pattern,
-          about 2 ms per pattern for a 1000-sample window (much slower with
-          multithreaded OpenBLAS, unless threadpoolctl is installed or
-          ``OPENBLAS_NUM_THREADS=1`` is set). When to use it, its leakage, its
-          gap limit and that slowdown:
+          about 2 ms per pattern for a 1000-sample window. With the
+          multithreaded OpenBLAS of NumPy 1.24 and SciPy 1.11-era wheels on
+          many cores, each solve can be 190-840 times slower; set
+          ``OPENBLAS_NUM_THREADS=1``, or call within
+          ``threadpoolctl.threadpool_limits(1)``. When to use it, its
+          leakage, its gap limit and that slowdown:
           https://spectral-connectivity.readthedocs.io/en/latest/cookbook.html#leave-out-artifacts-and-missing-samples
 
     Attributes
@@ -5060,21 +5062,6 @@ def _aligned_with_dpss(
     return aligned
 
 
-def _one_blas_thread() -> contextlib.AbstractContextManager[Any]:
-    """Limit BLAS to one thread, if threadpoolctl is installed.
-
-    The per-pattern eigensolves are small and sequential, and multithreaded
-    OpenBLAS can run them hundreds of times slower (measured in the cookbook's
-    missing-data note). threadpoolctl is optional: without it this does
-    nothing, and ``OPENBLAS_NUM_THREADS=1`` does the same.
-    """
-    try:
-        from threadpoolctl import threadpool_limits  # type: ignore[import-not-found]
-    except ImportError:
-        return contextlib.nullcontext()
-    return threadpool_limits(limits=1, user_api="blas")  # type: ignore[no-any-return]
-
-
 def _missing_data_taper_sets(
     valid: NDArray[np.bool_],
     time_halfbandwidth_product: float,
@@ -5112,19 +5099,18 @@ def _missing_data_taper_sets(
     is_solved = 2 * half_bandwidth * n_valid > 2 * MIN_EIGENVALUE_THRESHOLD
     n_kept = np.zeros(n_patterns, dtype=np.intp)
     tapers, concentrations = [], []
-    with _one_blas_thread():
-        for pattern in np.flatnonzero(is_solved):
-            taper, concentration = _missing_data_slepian_tapers(
-                valid[pattern], time_halfbandwidth_product, n_tapers, orientation
-            )
-            kept = int(np.count_nonzero(concentration > MIN_EIGENVALUE_THRESHOLD))
-            if kept < 2:
-                continue
-            taper[:, kept:] = 0
-            concentration[kept:] = 0
-            n_kept[pattern] = kept
-            tapers.append(taper)
-            concentrations.append(concentration)
+    for pattern in np.flatnonzero(is_solved):
+        taper, concentration = _missing_data_slepian_tapers(
+            valid[pattern], time_halfbandwidth_product, n_tapers, orientation
+        )
+        kept = int(np.count_nonzero(concentration > MIN_EIGENVALUE_THRESHOLD))
+        if kept < 2:
+            continue
+        taper[:, kept:] = 0
+        concentration[kept:] = 0
+        n_kept[pattern] = kept
+        tapers.append(taper)
+        concentrations.append(concentration)
     if not tapers:
         return n_kept, np.zeros((0, n_time_samples, n_tapers)), np.zeros((0, n_tapers))
     return n_kept, np.stack(tapers), np.stack(concentrations)

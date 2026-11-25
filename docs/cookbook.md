@@ -440,12 +440,12 @@ and one 20-sample gap by 2.4%, a bandwidth or more above 0 Hz. In exchange
 the valid samples are used: with three of four trials gapped in every window, the variance of white-noise power is a third of
 that of `"drop"`. Building the transform finds the tapers of each distinct
 pattern of artifacts in a trial window, about 2 ms per pattern for 1000
-samples and 65 ms for 60000. With multithreaded OpenBLAS, as in the NumPy
-1.24 and SciPy 1.11 wheels, that eigensolver (ARPACK) can be hundreds of times
-slower per pattern (600 ms against 3.4 ms for 1000 samples at NW = 4, on 18
-threads). If threadpoolctl is installed, the solve is limited to one BLAS
-thread (3.2 ms there); otherwise, if building the transform is slow, set
-`OPENBLAS_NUM_THREADS=1`. Windows without artifacts are unchanged.
+samples and 65 ms for 60000. With multithreaded OpenBLAS on many cores, as in
+the NumPy 1.24 and SciPy 1.11-era wheels, that eigensolver (ARPACK) can be
+190-840 times slower per pattern (600 ms against 3.2 ms for 1000 samples at
+NW = 4, on 18 threads). If building the transform is slow, set
+`OPENBLAS_NUM_THREADS=1` before starting Python, or build it within
+`threadpoolctl.threadpool_limits(1)`. Windows without artifacts are unchanged.
 :::
 
 ## Group measures: canonical coherence between areas

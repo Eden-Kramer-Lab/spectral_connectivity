@@ -58,6 +58,10 @@ The migration guide for code written against 2.x is
   tapers (Bronez 1988; Chave 2019) instead of dropping it (`"drop"`, the
   default); a window keeping fewer than 2 tapers concentrated above 0.9 is
   still dropped. New `n_kept_tapers` property of both windowed transforms.
+  With the multithreaded OpenBLAS of NumPy 1.24 and SciPy 1.11-era wheels on
+  many cores, each window's taper solve can be 190-840 times slower; set
+  `OPENBLAS_NUM_THREADS=1`, or build the transform within
+  `threadpoolctl.threadpool_limits(1)`.
 - `Connectivity.n_valid_observations`: the observations each bin (time window
   and frequency, by default) averages; `n_observations` stays the raw count.
   Where zero observation weights drop observations, the debiased squared
