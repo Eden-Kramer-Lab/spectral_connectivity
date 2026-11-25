@@ -966,12 +966,15 @@ def coherence_significance_pvalue(
         first.
     n_observations : int or NDArray[int]
         Number of independent observations used to estimate the coherency
-        (n_tapers * n_trials), at least 2: one count for every estimate, or an
+        (n_tapers * n_trials): one count for every estimate, at least 2, or an
         array of counts that broadcasts against ``coherency``, one per estimate.
         Pass ``Connectivity.n_observations``, or, where observation weights drop
         observations (``Multitaper(artifact_samples=...)``),
         ``Connectivity.n_valid_observations[..., np.newaxis, np.newaxis]`` for
-        coherency shaped ``(..., n_frequencies, n_signals, n_signals)``.
+        coherency shaped ``(..., n_frequencies, n_signals, n_signals)``. An
+        estimate whose count in the array is 0 or 1 (a bin that keeps no
+        observation, or one) has no test, and its p-value is NaN; a single
+        count below 2 leaves no estimate testable and raises ``ValueError``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
         array broadcast against ``coherency``; see
@@ -1041,10 +1044,21 @@ def coherence_significance_pvalue(
     >>> connectivity.frequencies[significant.all(axis=0)].tolist()
     [16.0, 18.0, 20.0, 22.0, 24.0]
     """
+    # One count below 2 leaves nothing testable, so it is refused; an array of
+    # counts, one per estimate, may hold bins that keep fewer (NaN there).
+    is_one_count = np.ndim(n_observations) == 0
     counts = _validated_n_observations(
         n_observations,
-        2,
-        "The zero-coherence null, Beta(1, n_observations - 1), needs at least 2.",
+        2 if is_one_count else 0,
+        "The zero-coherence null, Beta(1, n_observations - 1), needs at least 2."
+        if is_one_count
+        else "",
+        how=(
+            "Pass the number of averaged observations (trials x tapers), "
+            "Connectivity.n_observations, or, where artifact_samples drops "
+            "observations, each bin's count, "
+            "Connectivity.n_valid_observations[..., np.newaxis, np.newaxis]."
+        ),
     )
     magnitude_squared_coherence: NDArray[np.floating] = np.clip(
         np.abs(coherency) ** 2, 0.0, 1.0
@@ -1059,16 +1073,20 @@ def coherence_significance_pvalue(
         "coherency shaped (..., n_frequencies, n_signals, n_signals).",
     )
     # One count keeps its Python scalar, as before arrays were accepted.
-    n_observations = counts.item() if counts.ndim == 0 else counts
+    # Untestable estimates take a stand-in count, made NaN below.
+    too_few = counts < 2
+    n_observations = counts.item() if counts.ndim == 0 else np.where(too_few, 2, counts)
     real_valued = _validated_real_valued(
         real_valued, magnitude_squared_coherence.shape, "coherency"
     )
     complex_null = (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
+    if np.any(too_few):
+        complex_null = np.where(too_few, np.nan, complex_null)
     if not np.any(real_valued):
         return complex_null
     # Only the real-valued entries (typically two bins) need the beta tail.
     shape = np.broadcast_shapes(real_valued.shape, np.shape(complex_null))
-    is_real = np.broadcast_to(real_valued, shape)
+    is_real = np.broadcast_to(real_valued, shape) & ~np.broadcast_to(too_few, shape)
     p_values: NDArray[np.floating] = np.array(
         np.broadcast_to(complex_null, shape), dtype=float, copy=True
     )
@@ -1087,17 +1105,21 @@ def _validated_n_observations(
     name: str = "n_observations",
     *,
     zero_is_one_sample: bool = False,
+    how: str = (
+        "Pass the number of averaged observations (trials x tapers), "
+        "Connectivity.n_observations."
+    ),
 ) -> NDArray[Any]:
     """Observation counts, a scalar or one per estimate, as a validated array.
 
     Raises ``TypeError`` unless every count is a real number (a boolean, a
     string, or None is not a count), and ``ValueError`` unless every count is
     a finite whole number of at least ``minimum``. ``why_below_minimum`` is
-    added to the message when a finite whole count lies below ``minimum``.
-    With ``zero_is_one_sample``, a count of 0 (no second sample, for a
-    one-sample test) is valid too.
+    added to the message when a finite whole count lies below ``minimum``,
+    and ``how``, the counts to pass, ends every message. With
+    ``zero_is_one_sample``, a count of 0 (no second sample, for a one-sample
+    test) is valid too.
     """
-    how = "Pass the number of averaged observations (trials x tapers), Connectivity.n_observations."
     counts = np.asarray(n_observations)
     if counts.dtype.kind not in "iuf":
         msg = (
@@ -1118,7 +1140,7 @@ def _validated_n_observations(
         )
         msg = (
             f"{name} must be a finite integer {accepted}, got {offending}. "
-            f"{why_below_minimum + ' ' if below_minimum else ''}{how}"
+            f"{why_below_minimum + ' ' if below_minimum and why_below_minimum else ''}{how}"
         )
         raise ValueError(msg)
     return counts

@@ -67,7 +67,8 @@ The migration guide for code written against 2.x is
 - `coherence_significance_pvalue` takes one count per estimate, an array
   that broadcasts against the coherency (such as
   `n_valid_observations[..., np.newaxis, np.newaxis]`); it used to reject an
-  array.
+  array. An estimate whose count is 0 or 1 (a bin that keeps no observation,
+  or one) has no test and its p-value is NaN; one count below 2 still raises.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working

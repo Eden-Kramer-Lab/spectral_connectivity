@@ -1393,7 +1393,8 @@ def test_every_count_argument_rejects_a_bad_count_alike(
         ValueError,
         match="^"
         + re.escape(f"{name} must be a finite integer {accepted}, got {bad_count!r}.")
-        + r".*Connectivity\.n_observations\.$",
+        # coherence_significance_pvalue also names n_valid_observations.
+        + r".*Connectivity\.n_observations\b",
     ):
         call(bad_count)
 
@@ -1446,6 +1447,23 @@ def test_coherence_significance_pvalue_takes_one_count_per_estimate(real_valued)
         for index, real in enumerate(is_real)
     ]
     np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("real_valued", [False, True])
+def test_coherence_significance_pvalue_is_nan_where_an_array_count_is_below_two(real_valued):
+    """A bin keeping 0 or 1 observations has no test: NaN there, as in the
+    measures, and the other bins are tested as on their own. One count below 2
+    still raises (test_coherence_significance_pvalue_rejects_small_n_observations)."""
+    coherency = np.array([0.6, 1.0, np.nan + 0j, 0.6])
+    counts = np.array([5, 1, 0, 2])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = coherence_significance_pvalue(coherency, counts, real_valued=real_valued)
+    assert np.isnan(result[[1, 2]]).all()
+    for index in (0, 3):
+        assert result[index] == coherence_significance_pvalue(
+            coherency[index], counts[index], real_valued=real_valued
+        )
 
 
 def test_coherence_significance_pvalue_rejects_counts_that_do_not_broadcast():

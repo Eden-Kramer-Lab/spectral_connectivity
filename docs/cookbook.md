@@ -362,6 +362,9 @@ frequency, for the statistics functions:
 
 ```
 
+A bin that keeps fewer than two observations, such as a window that keeps no
+trial, has no test, and its p-value is NaN.
+
 ## Group measures: canonical coherence between areas
 
 Group measures (`list_measures(category="group_pairwise")` and
