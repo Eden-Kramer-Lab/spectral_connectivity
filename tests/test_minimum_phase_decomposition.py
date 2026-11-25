@@ -1077,26 +1077,39 @@ def test_a_single_precision_signal_near_its_largest_value_is_scaled_by_its_power
 @pytest.mark.parametrize("n_fft", [64, 65])
 def test_an_all_pass_rotation_of_the_factor_winds_around_zero(n_fft):
     """``G U`` reproduces ``G Gᴴ`` for any unitary ``U(f)``. The all-pass
-    ``U = diag(b, 1)`` with ``b(z) = (z - a) / (1 - a z)`` makes the product
-    anticausal and its determinant wind once around zero, while the
+    ``U = diag(b, 1)`` with ``b = (z⁻¹ - a) / (1 - a z⁻¹)`` is causal with a
+    zero inside the unit circle (in ``z⁻¹``), so the product is causal but
+    not minimum phase and its determinant winds once around zero, while the
     determinants of ``G`` and of ``G`` times a constant unitary matrix do not
-    wind."""
+    wind.
+
+    The anticausal all-pass ``(z - a) / (1 - a z)`` also winds once on the
+    grid, but the recount reads a factor as a causal filter wrapped round the
+    grid (as the Wilson iteration builds it), which for that one is a
+    polynomial of degree ``n - 1`` whose count changes with every finer grid,
+    so it is not counted (NaN), as documented."""
     factor = _minimum_phase_ma1_factor(n_fft)
     spectrum = factor @ _conjugate_transpose(factor)
-    z = np.exp(2j * np.pi * np.arange(n_fft) / n_fft)
-    blaschke = (z - 0.5) / (1 - 0.5 * z)
-    all_pass = np.zeros((n_fft, 2, 2), dtype=complex)
-    all_pass[:, 0, 0] = blaschke
-    all_pass[:, 1, 1] = 1
+    delay = np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
+    all_pass = np.zeros((2, n_fft, 2, 2), dtype=complex)
+    all_pass[0, :, 0, 0] = (delay - 0.5) / (1 - 0.5 * delay)
+    all_pass[1, :, 0, 0] = (1 / delay - 0.5) / (1 - 0.5 / delay)
+    all_pass[..., 1, 1] = 1
     rotation = np.array([[np.cos(0.3), -np.sin(0.3)], [np.sin(0.3), np.cos(0.3)]])
     factors = np.concatenate([factor, factor @ rotation, factor @ all_pass])
-    spectra = np.concatenate([spectrum] * 3)
+    spectra = np.concatenate([spectrum] * 4)
     np.testing.assert_allclose(factors @ _conjugate_transpose(factors), spectra, atol=1e-12)
+    phase = mpd_module._determinant_phase(to_device(factors))
 
     winding = to_host(mpd_module._determinant_winding_number(to_device(factors)))
 
-    # det(G U) = b det G, and b(z) = (z - a) / (1 - a z) winds once round 0.
-    np.testing.assert_allclose(winding, [0, 0, 1], atol=1e-12)
+    # det(G U) = b det G, and the causal b winds once round 0, clockwise as
+    # ω increases; the anticausal one winds once anticlockwise on the grid.
+    np.testing.assert_allclose(
+        to_host(mpd_module._grid_winding_number(phase)), [0, 0, -1, 1], atol=1e-12
+    )
+    np.testing.assert_allclose(winding[:3], [0, 0, -1], atol=1e-12)
+    assert np.isnan(winding[3])
 
 
 @_BOTH_FACTORIZATION_PATHS
@@ -1130,6 +1143,30 @@ def test_a_winding_aliased_by_a_coarse_grid_is_not_reported(real_signals):
     assert _reconstruction_error(spectrum[np.newaxis], factor[np.newaxis])[0] < 1e-12
 
 
+def test_the_recount_keeps_the_winding_of_a_causal_factor_with_a_slow_tail():
+    """``g = (1 - z₀ z⁻¹) / ((1 - p₁ z⁻¹)(1 - p₂ z⁻¹))`` on 32 bins, with its
+    zero ``z₀`` outside the unit circle (``|z₀| = 1.12``): a causal factor
+    that is not minimum phase, winding once round zero clockwise. Its pole
+    at radius 0.91 leaves a tail of a tenth of its largest lag coefficient at
+    lag 16. The recount reads
+    the lags as causal, 0 to ``n - 1``, as the Wilson iteration builds them,
+    and keeps the count of -1.
+
+    Regression: the recount interpolated on lags -16 to 15, read that tail
+    as negative lags and counted 0, so the factor was not flagged."""
+    n_fft = 32
+    delay = np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
+    zero, pole_1, pole_2 = 1.112616 + 0.144738j, 0.8534 - 0.3145j, 0.2607 + 0.7289j
+    factor = (1 - zero * delay) / ((1 - pole_1 * delay) * (1 - pole_2 * delay))
+    factor = factor[np.newaxis, :, np.newaxis, np.newaxis]
+    phase = mpd_module._determinant_phase(to_device(factor[0]))
+
+    winding = to_host(mpd_module._determinant_winding_number(to_device(factor)))
+
+    assert float(mpd_module._grid_winding_number(phase)) == pytest.approx(-1)
+    assert winding[0] == pytest.approx(-1)
+
+
 def test_winding_number_of_a_determinant_too_small_to_multiply_is_counted():
     """The phase increments are taken from the unit phase of the determinant,
     so a factor whose determinant is about 8e-189 (64 signals correlated at
@@ -1154,7 +1191,8 @@ def test_winding_number_of_a_determinant_too_small_to_multiply_is_counted():
 def test_winding_number_is_not_counted_where_the_phase_jumps_between_bins():
     """A determinant whose phase turns by pi / 2 or more between bins cannot
     be counted reliably (an aliased count of 2 came with turns of 1.9-3.1), so
-    it is NaN, not tested, rather than a spurious winding."""
+    it is NaN, not tested, rather than a spurious winding, while one that
+    turns by pi / 4 per bin is counted and flagged."""
     n_fft = 8
     omega = 2 * np.pi * np.arange(n_fft) / n_fft
     slow = np.exp(1j * omega)[np.newaxis, :, np.newaxis, np.newaxis]
@@ -1162,7 +1200,13 @@ def test_winding_number_is_not_counted_where_the_phase_jumps_between_bins():
     winding = to_host(
         mpd_module._determinant_winding_number(to_device(np.concatenate([slow, fast])))
     )
-    assert winding[0] == pytest.approx(1)
+    # ``slow`` is the anticausal advance z (lag -1) and winds once on the
+    # grid. The recount reads a factor as a causal filter wrapped round the
+    # grid, as the Wilson iteration builds it, so it reads that lag as
+    # n - 1 and counts -7; either count flags it, which is what the check is
+    # for, so only that is asserted.
+    assert np.isfinite(winding[0])
+    assert abs(winding[0]) > 0.5
     assert np.isnan(winding[1])
 
 

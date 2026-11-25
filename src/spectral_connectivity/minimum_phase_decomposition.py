@@ -17,7 +17,7 @@ from spectral_connectivity._array_utils import (
     _conjugate_transpose,
     _divide_where,
 )
-from spectral_connectivity._backend import fft, fftfreq, ifft, irfft, rfft, xp
+from spectral_connectivity._backend import fft, ifft, irfft, rfft, xp
 from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
 logger = getLogger(__name__)
@@ -483,13 +483,16 @@ def _grid_winding_number(phase: NDArray[np.complexfloating]) -> NDArray[np.float
 def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
     """Winding number of ``det G`` on which two successive finer grids agree.
 
-    The grids of ``WINDING_REFINEMENTS`` interpolate the factor
-    trigonometrically: its lag coefficients ``c`` (the lag ``n / 2`` of an
-    even grid split between the positive and the negative side) give it a
+    The grids of ``WINDING_REFINEMENTS`` interpolate the factor as a causal
+    filter: its lag coefficients ``c`` on lags ``0`` to ``n - 1`` give it a
     fraction ``j / R`` of a bin off the grid as ``fft(c * exp(-2πi lag j /
-    (R n)))``. Each grid interleaves the shifts ``j`` it needs, and only their
-    determinant phases are kept, so no array larger than the factor is held
-    and each shift is transformed once for all the grids.
+    (R n)))``. A Wilson factor is a product of updates, each causal on lags
+    ``0`` to ``n / 2``, so its lags are those of a causal filter wrapped
+    round the grid; an interpolant on lags ``-n / 2`` to ``n / 2`` would read
+    the wrapped tail as negative lags and can lose a real winding. Each grid
+    interleaves the shifts ``j`` it needs, and only their determinant phases
+    are kept, so no array larger than the factor is held and each shift is
+    transformed once for all the grids.
 
     Parameters
     ----------
@@ -505,7 +508,7 @@ def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
     n_fft_samples = factor.shape[-3]
     finest = WINDING_REFINEMENTS[-1]
     coefficients = ifft(factor, axis=-3)
-    lags = fftfreq(n_fft_samples, 1 / n_fft_samples)
+    lags = xp.arange(n_fft_samples)
     phases = {0: _determinant_phase(factor)}
     previous = np.nan
     for refinement in WINDING_REFINEMENTS:
@@ -515,8 +518,6 @@ def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
                 ramp = xp.exp(-2j * np.pi * lags * shift / (finest * n_fft_samples)).astype(
                     coefficients.dtype, copy=False
                 )
-                if n_fft_samples % 2 == 0:
-                    ramp[n_fft_samples // 2] = np.cos(np.pi * shift / finest)
                 phases[shift] = _determinant_phase(
                     fft(coefficients * ramp[:, xp.newaxis, xp.newaxis], axis=-3)
                 )
@@ -914,8 +915,9 @@ def minimum_phase_decomposition(
     computed. The winding is counted where the phase turns by less than
     ``π / 2`` between bins, and since steps of more than ``π`` alias to
     small ones, a nonzero count is recounted on grids 2 to 16 times finer,
-    interpolating the factor's lag coefficients, and stands only if two of
-    them agree. The check is best effort. It cannot judge a determinant
+    interpolating the factor as a causal filter on lags ``0`` to
+    ``n_fft_samples - 1`` (the iteration's factor is a product of causal
+    updates, wrapped round the grid), and stands only if two of them agree. The check is best effort. It cannot judge a determinant
     whose phase turns by ``π / 2`` or more between bins, and on a grid too
     coarse for the spectrum the iteration can converge to a wrong factor
     whose determinant does not wind: four coincident resonators at radius
