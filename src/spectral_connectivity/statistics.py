@@ -765,7 +765,10 @@ def coherence_fisher_z_transform(
     n_obs2 : int or NDArray[int], default=0
         Number of observations for coherency2 (n_tapers * n_trials), 0 for no
         second sample, or an array of counts as for ``n_obs1``, in which 0
-        means no second sample at that entry and 1 gives NaN.
+        means no second sample at that entry and 1 gives NaN. Condition 2's
+        ``n_valid_observations`` is 0 in a bin that keeps no observation, so
+        such a bin would be read as a one-sample test: mask those bins
+        yourself (its ``coherency2`` is NaN there, which gives NaN).
 
     Returns
     -------
@@ -1815,7 +1818,10 @@ def power_fisher_z_transform(
     n_obs2 : int or NDArray[int], default=0
         Number of observations for spectrum2 (n_tapers * n_trials). If 0,
         performs a one-sample test of ``spectrum1`` against the fixed baseline
-        ``spectrum2``; in an array of counts, at that entry.
+        ``spectrum2``; in an array of counts, at that entry. Condition 2's
+        ``n_valid_observations`` is 0 in a bin that keeps no observation, so
+        such a bin is read as a one-sample test (and its NaN ``spectrum2``
+        raises): mask those bins yourself.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, broadcast
         against the spectra (see :func:`power_bias`); there the log power has
