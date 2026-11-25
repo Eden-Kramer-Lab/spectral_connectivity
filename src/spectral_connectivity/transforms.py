@@ -1260,7 +1260,7 @@ class _WindowedFourierTransform:
     - optionally, to estimate trial windows that contain artifact samples
       rather than drop them, :meth:`_kept_trial_windows` (which may set
       ``_n_kept_tapers``), :meth:`_detrend_gapped_windows`,
-      :meth:`_window_tapers_for_fft`, :meth:`_window_drop_rule`,
+      :meth:`_estimate_gapped_windows`, :meth:`_window_drop_rule`,
       :meth:`_dropped_window_notes`, and :meth:`_artifact_samples_details`.
     """
 
@@ -1805,13 +1805,14 @@ Frequency Analysis
             self._detrend_gapped_windows(time_series)
 
             coefficients = _multitaper_fft(
-                self._window_tapers_for_fft(),
+                self._tapers_for_fft(),
                 time_series,
                 self.n_fft_samples,
                 self.sampling_frequency,
                 workers=self.fft_workers,
-            ).swapaxes(2, -1)
-            return self._weight_taper_coefficients(coefficients, time_series)
+            )
+            self._estimate_gapped_windows(coefficients, time_series)
+            return self._weight_taper_coefficients(coefficients.swapaxes(2, -1), time_series)
 
     def _detrend_gapped_windows(self, windows: NDArray[np.floating]) -> None:
         """Detrend again, in place, the kept trial windows that contain
@@ -1821,11 +1822,19 @@ Frequency Analysis
         n_trials, n_signals, n_time_samples_per_window)``.
         """
 
-    def _window_tapers_for_fft(self) -> NDArray[np.floating]:
-        """The tapers of every window: by default :meth:`_tapers_for_fft`,
-        shared; a subclass may return a set per trial window,
-        ``(n_time_windows, n_trials, 1, n_time_samples_per_window, n_tapers)``."""
-        return self._tapers_for_fft()
+    def _estimate_gapped_windows(
+        self,
+        coefficients: NDArray[np.complexfloating],
+        windows: NDArray[np.floating],
+    ) -> None:
+        """Replace, in place, the coefficients of the kept trial windows that
+        contain artifact samples with those of their own tapers; none by
+        default (they are all dropped).
+
+        ``coefficients`` are every window's with :meth:`_tapers_for_fft`,
+        ``(n_time_windows, n_trials, n_signals, n_fft_samples, n_tapers)``, and
+        ``windows`` the detrended windows they were computed from.
+        """
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot, ``(n_time_samples_per_window, n_tapers)``."""
@@ -3188,16 +3197,30 @@ class Multitaper(_WindowedFourierTransform):
             windows[rescued], self._missing_data.valid_of_rescued(), self.detrend_type
         )
 
-    def _window_tapers_for_fft(self) -> NDArray[np.floating]:
-        """The DPSS tapers, or, when missing-data tapers estimate some window,
-        each trial window's from the table."""
+    def _estimate_gapped_windows(
+        self,
+        coefficients: NDArray[np.complexfloating],
+        windows: NDArray[np.floating],
+    ) -> None:
+        """Recompute the kept windows with artifacts with their own
+        missing-data tapers.
+
+        Only those windows' tapers are gathered, ``(n_rescued, 1,
+        n_time_samples_per_window, n_tapers)``, rather than a set for every
+        trial window: the DPSS coefficients of the others are already right.
+        """
         if not self._rescues_windows:
-            return self._tapers
+            return
         assert self._missing_data is not None
-        tapers: NDArray[np.floating] = self._missing_data.tapers[
-            self._missing_data.table_index
-        ][:, :, xp.newaxis]
-        return tapers
+        rescued = self._missing_data.windows
+        tapers = self._missing_data.tapers[self._missing_data.table_index[rescued]]
+        coefficients[rescued] = _multitaper_fft(
+            tapers[:, xp.newaxis],
+            windows[rescued],
+            self.n_fft_samples,
+            self.sampling_frequency,
+            workers=self.fft_workers,
+        )
 
     def _artifact_samples_details(self) -> str:
         """With missing-data tapers, the trial windows that had artifacts and
