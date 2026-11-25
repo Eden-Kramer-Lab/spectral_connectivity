@@ -70,9 +70,9 @@ def _multitaper(time_series, artifact_samples=None, **kwargs):
         "time_halfbandwidth_product": 2,
         **kwargs,
     }
-    if artifact_samples is not None:
-        kwargs["artifact_samples"] = artifact_samples
-    return Multitaper(time_series, SAMPLING_FREQUENCY, **kwargs)
+    return Multitaper(
+        time_series, SAMPLING_FREQUENCY, artifact_samples=artifact_samples, **kwargs
+    )
 
 
 def _call(connectivity, name):
@@ -217,6 +217,7 @@ def test_pooled_expectations_equal_the_kept_observations_stacked(
     # The output axes each expectation keeps, and the observations of one bin.
     if expectation_type == "time_trials_tapers":
         bins = {(): coefficients[valid]}
+        assert connectivity.n_valid_observations[0] == valid.sum() * n_tapers > 64
     elif expectation_type == "time_tapers":
         bins = {(trial,): coefficients[valid[:, trial], trial] for trial in range(n_trials)}
     elif expectation_type == "time_trials":
@@ -227,8 +228,6 @@ def test_pooled_expectations_equal_the_kept_observations_stacked(
             for trial in range(n_trials)
             for taper in range(n_tapers)
         }
-    if expectation_type == "time_trials_tapers":
-        assert connectivity.n_valid_observations[0] == valid.sum() * n_tapers > 64
     for index, observations in bins.items():
         stacked = observations.reshape(1, -1, 1, *coefficients.shape[3:])
         expected = quietly(getattr(Connectivity(stacked), measure))[0]
@@ -395,10 +394,10 @@ def test_a_bin_keeping_no_observation_is_nan(recording, measure):
             if part.ndim >= 4 and part.shape[-2:] == (N_SIGNALS, N_SIGNALS)
             else np.ones(part.shape[-1:], dtype=bool)
         )
-        assert np.isnan(values[..., off_diagonal]).all(), (
-            f"{measure}: {np.count_nonzero(~np.isnan(values[..., off_diagonal]))} "
-            f"finite values in dropped bins, e.g. "
-            f"{np.unique(values[..., off_diagonal][~np.isnan(values[..., off_diagonal])])[:3]}"
+        finite = values[..., off_diagonal][~np.isnan(values[..., off_diagonal])]
+        assert finite.size == 0, (
+            f"{measure}: {finite.size} finite values in dropped bins, e.g. "
+            f"{np.unique(finite)[:3]}"
         )
 
 
