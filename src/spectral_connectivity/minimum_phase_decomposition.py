@@ -118,7 +118,7 @@ def _to_two_sided(
 
 def _signal_scale(
     cross_spectral_matrix: NDArray[np.complexfloating],
-) -> tuple[NDArray[np.floating], NDArray[np.bool_]]:
+) -> tuple[NDArray[np.floating], NDArray[np.bool_], NDArray[np.bool_]]:
     """Root-mean-square amplitude of each signal of each sub-spectrum.
 
     The square root of the signal's power averaged over the frequency axis
@@ -144,6 +144,8 @@ def _signal_scale(
     white : NDArray[bool], shape (..., n_signals)
         Signals whose power is zero at every frequency, in sub-spectra where
         some signal has power.
+    no_power : NDArray[bool], shape (...)
+        Sub-spectra where no signal has finite, positive power.
     """
     # Accumulate in the wider dtype: a float32 mean of powers near 1e37
     # overflows to Inf.
@@ -154,9 +156,10 @@ def _signal_scale(
     )
     has_power = xp.isfinite(power) & (power > 0)
     scale = xp.sqrt(xp.where(has_power, power, 1))
-    white = (power == 0) & xp.any(has_power, axis=-1, keepdims=True)
+    no_power = ~xp.any(has_power, axis=-1)
+    white = (power == 0) & ~no_power[..., xp.newaxis]
     weakest = xp.min(xp.where(has_power, scale, xp.inf), axis=-1, keepdims=True)
-    return xp.where(white, xp.finfo(scale.dtype).eps * weakest, scale), white
+    return xp.where(white, xp.finfo(scale.dtype).eps * weakest, scale), white, no_power
 
 
 def _reverse_cholesky(matrices: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -1076,7 +1079,7 @@ def _minimum_phase_factor_and_flags(
     # D^-1 G for its factor G. The covariant start makes that the factor of S
     # up to rounding; the scaling preconditions the iteration for signals
     # whose powers differ by orders of magnitude (see Notes).
-    signal_scale, white = _signal_scale(cross_spectral_matrix)
+    signal_scale, white, no_power = _signal_scale(cross_spectral_matrix)
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # NumPy divides a complex Inf by the real scale as by a complex number,
     # which gives NaN and warns; such a sub-spectrum is non-finite either way
@@ -1095,8 +1098,8 @@ def _minimum_phase_factor_and_flags(
     # as an independent white signal of unit power instead; the factor is
     # then that of the other signals with a 1 for it, and its scale makes
     # that 1 a rounding-level power (see Notes of minimum_phase_decomposition).
-    # A window where no signal has power has nothing to factor: it stays
-    # singular and is returned as NaN.
+    # A window where no signal has power has nothing to factor; it starts at
+    # NaN below and is returned as singular.
     working_cross_spectral_matrix = (
         working_cross_spectral_matrix + white[..., xp.newaxis, xp.newaxis, :] * identity_matrix
     )
@@ -1111,6 +1114,14 @@ def _minimum_phase_factor_and_flags(
     initial = _get_initial_conditions(
         working_cross_spectral_matrix, half_spectrum_n_fft
     ).astype(working_dtype, copy=False)
+    # Its finite all-zero start would never converge and would hold the whole
+    # batch to max_iterations; a NaN start makes the loop count it as singular,
+    # and so finished, at once.
+    initial = xp.where(
+        no_power[..., xp.newaxis, xp.newaxis, xp.newaxis],
+        xp.asarray(xp.nan, dtype=initial.dtype),
+        initial,
+    )
     minimum_phase_factor = xp.broadcast_to(initial, working_cross_spectral_matrix.shape).copy()
     # Computed once: CuPy's tril_indices synchronizes the device.
     lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
