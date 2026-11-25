@@ -15,29 +15,26 @@ code path it checks.
   paired difference from the all-trial estimate has mean zero.
 - mne-connectivity 0.9 (recorded): masking extra, corrupted trials gives
   MNE's outputs for the recorded epochs.
-- Labeled masks and statistics recipes the docs give.
+- The statistics recipe the docs give for a window that keeps no trial.
 """
 
 import dataclasses
 import inspect
 import warnings
-from pathlib import Path
 
 import numpy as np
 import pytest
 import scipy.stats
-from scipy.signal.windows import dpss
 
 from spectral_connectivity import (
     Connectivity,
     Multitaper,
     list_measures,
-    multitaper_connectivity,
 )
-from spectral_connectivity.simulate import simulate_lagged_broadband
 from spectral_connectivity.statistics import coherence_significance_pvalue
 from tests._artifact_helpers import quietly, without_noisy_diagonal
 from tests._backend_helpers import ON_GPU, to_host
+from tests._mne_helpers import MNE_TRANSFORMS, mne_epochs, mne_tapers
 from tests.reference._mne_measures import MEASURES as MNE_MEASURES
 
 SAMPLING_FREQUENCY = 200.0
@@ -47,24 +44,12 @@ N_FFT = 64  # padded
 N_TRIALS = 7  # differs from the signal, taper and frequency counts
 N_SIGNALS = 3
 GROUPS = ["a", "a", "b"]
-# The Wilson factorization iterates to a tolerance, and canonical coherency's
-# component phase comes from an eigen-solver: both move by more than rounding.
+# The Wilson factorization (of the measures that need a two-sided spectrum)
+# iterates to a tolerance, and canonical coherency's component phase comes
+# from an eigen-solver: both move by more than rounding.
 LOOSE = frozenset(
-    {
-        "pairwise_spectral_granger_prediction",
-        "subset_pairwise_spectral_granger_prediction",
-        "conditional_spectral_granger_prediction",
-        "time_reversed_spectral_granger_prediction",
-        "time_reversed_conditional_spectral_granger_prediction",
-        "blockwise_spectral_granger_prediction",
-        "time_reversed_blockwise_spectral_granger_prediction",
-        "directed_transfer_function",
-        "directed_coherence",
-        "partial_directed_coherence",
-        "generalized_partial_directed_coherence",
-        "direct_directed_transfer_function",
-        "canonical_coherency",
-    }
+    {info.name for info in list_measures() if info.requires_two_sided}
+    | {"canonical_coherency"}
 )
 # global_coherence's components come from svds by default, iterative on CuPy.
 GPU_ITERATIVE = frozenset({"global_coherence"})
@@ -85,9 +70,9 @@ def _multitaper(time_series, artifact_samples=None, **kwargs):
         "time_halfbandwidth_product": 2,
         **kwargs,
     }
-    if artifact_samples is not None:
-        kwargs["artifact_samples"] = artifact_samples
-    return Multitaper(time_series, SAMPLING_FREQUENCY, **kwargs)
+    return Multitaper(
+        time_series, SAMPLING_FREQUENCY, artifact_samples=artifact_samples, **kwargs
+    )
 
 
 def _call(connectivity, name):
@@ -232,6 +217,7 @@ def test_pooled_expectations_equal_the_kept_observations_stacked(
     # The output axes each expectation keeps, and the observations of one bin.
     if expectation_type == "time_trials_tapers":
         bins = {(): coefficients[valid]}
+        assert connectivity.n_valid_observations[0] == valid.sum() * n_tapers > 64
     elif expectation_type == "time_tapers":
         bins = {(trial,): coefficients[valid[:, trial], trial] for trial in range(n_trials)}
     elif expectation_type == "time_trials":
@@ -242,8 +228,6 @@ def test_pooled_expectations_equal_the_kept_observations_stacked(
             for trial in range(n_trials)
             for taper in range(n_tapers)
         }
-    if expectation_type == "time_trials_tapers":
-        assert connectivity.n_valid_observations[0] == valid.sum() * n_tapers > 64
     for index, observations in bins.items():
         stacked = observations.reshape(1, -1, 1, *coefficients.shape[3:])
         expected = quietly(getattr(Connectivity(stacked), measure))[0]
@@ -410,10 +394,10 @@ def test_a_bin_keeping_no_observation_is_nan(recording, measure):
             if part.ndim >= 4 and part.shape[-2:] == (N_SIGNALS, N_SIGNALS)
             else np.ones(part.shape[-1:], dtype=bool)
         )
-        assert np.isnan(values[..., off_diagonal]).all(), (
-            f"{measure}: {np.count_nonzero(~np.isnan(values[..., off_diagonal]))} "
-            f"finite values in dropped bins, e.g. "
-            f"{np.unique(values[..., off_diagonal][~np.isnan(values[..., off_diagonal])])[:3]}"
+        finite = values[..., off_diagonal][~np.isnan(values[..., off_diagonal])]
+        assert finite.size == 0, (
+            f"{measure}: {finite.size} finite values in dropped bins, e.g. "
+            f"{np.unique(finite)[:3]}"
         )
 
 
@@ -542,30 +526,8 @@ def test_coherence_pvalues_follow_the_exact_null_at_each_kept_count(
     assert raw.mean() - alpha > 4 * limit
 
 
-_MNE_REFERENCE = Path(__file__).parent / "reference" / "mne_connectivity_reference.npz"
-_MNE_TRANSFORMS = {"identity": np.asarray, "sqrt": np.sqrt, "abs": np.abs}
 # Pairwise measures only; psi and cacoh take band or group arguments.
 _MNE_PAIRWISE = [name for name in MNE_MEASURES if name not in ("psi", "cacoh")]
-
-
-def _mne_tapers(n_time_samples, time_halfbandwidth_product):
-    """mne-connectivity's periodic, low-bias DPSS weighted by sqrt(eigenvalue)
-    (as in tests/test_cross_package.py)."""
-    tapers, eigenvalues = dpss(
-        n_time_samples,
-        time_halfbandwidth_product,
-        int(2 * time_halfbandwidth_product),
-        sym=False,
-        return_ratios=True,
-    )
-    keep = eigenvalues > 0.9
-    return (tapers[keep] * np.sqrt(eigenvalues[keep])[:, np.newaxis]).T
-
-
-@pytest.fixture(scope="module")
-def mne_reference():
-    with np.load(_MNE_REFERENCE) as reference:
-        return {key: reference[key] for key in reference.files}
 
 
 @pytest.fixture(scope="module")
@@ -575,13 +537,7 @@ def mne_epochs_with_corrupted_trials(mne_reference):
     sample; the second holds clean data in every trial, so the corrupted
     trials are dropped in the first window only."""
     n_time = int(mne_reference["n_time_samples"])
-    epochs = simulate_lagged_broadband(
-        mne_reference["lags"],
-        float(mne_reference["noise_level"]),
-        n_time,
-        n_trials=int(mne_reference["n_trials"]),
-        random_state=int(mne_reference["seed"]),
-    )  # (n_time, n_trials, n_signals)
+    epochs = mne_epochs(mne_reference)  # (n_time, n_trials, n_signals)
     rng = np.random.default_rng(40)
     n_recorded = epochs.shape[1]
     corrupted = [0, 7, 8, 20, n_recorded + 4]  # positions in the combined trials
@@ -613,7 +569,7 @@ def test_masking_corrupted_trials_gives_mne_connectivitys_outputs(
         time_series,
         sampling_frequency=float(mne_reference["sampling_frequency"]),
         time_halfbandwidth_product=time_halfbandwidth_product,
-        tapers=_mne_tapers(n_time, time_halfbandwidth_product),
+        tapers=mne_tapers(n_time, time_halfbandwidth_product),
         n_time_samples_per_window=n_time,
         artifact_samples=artifacts,
     )
@@ -626,37 +582,7 @@ def test_masking_corrupted_trials_gives_mne_connectivitys_outputs(
     seeds, targets = mne_reference["seeds"], mne_reference["targets"]
     ours = quietly(getattr(connectivity, method))[0][frequency_index][:, seeds, targets].T
     np.testing.assert_allclose(
-        _MNE_TRANSFORMS[transform_name](ours), mne_reference[measure], rtol=0, atol=atol
-    )
-
-
-def test_a_labeled_mask_without_a_trial_dimension_is_shared_by_every_trial():
-    """The wrapper aligns a DataArray mask with a labeled time series by
-    dimension name. A (time, channel) mask of a (time, trial, channel) series
-    names no trial dimension, so it must apply to every trial, even when the
-    series has as many trials as channels."""
-    xr = pytest.importorskip("xarray")
-    rng = np.random.default_rng(50)
-    time_series = rng.standard_normal((200, 3, 3))  # 3 trials, 3 channels
-    labeled = xr.DataArray(time_series, dims=("time", "trial", "channel"))
-    per_channel = np.zeros((200, 3), dtype=bool)
-    per_channel[60, 0] = True  # channel 0 at sample 60, in every trial
-    every_trial = np.broadcast_to(per_channel[:, np.newaxis, :], time_series.shape)
-    settings = {"n_time_samples_per_window": 50}
-
-    def power(artifact_samples):
-        return quietly(
-            multitaper_connectivity,
-            labeled,
-            SAMPLING_FREQUENCY,
-            method="power",
-            transform_kwargs={**settings, "artifact_samples": artifact_samples},
-        ).values
-
-    expected = power(every_trial.copy())
-    assert np.isnan(expected[1]).all()  # window 1 keeps no trial
-    np.testing.assert_array_equal(
-        power(xr.DataArray(per_channel, dims=("time", "channel"))), expected
+        MNE_TRANSFORMS[transform_name](ours), mne_reference[measure], rtol=0, atol=atol
     )
 
 

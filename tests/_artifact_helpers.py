@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+from spectral_connectivity import list_measures
+
 # The measures whose finite-sample corrections count observations.
 COUNTING_MEASURES = (
     "debiased_squared_phase_lag_index",
@@ -26,7 +28,10 @@ def quietly(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
 # is rounding noise amplified by the square root of its denominator, below
 # about sqrt(eps) of float64, as its docstring says: two computations agree
 # there only to that bound, not to rounding (9e-10 apart on CuPy, measured).
-NOISY_DIAGONAL_MEASURES = frozenset({"corrected_imaginary_phase_locking_value"})
+# The registry records it as the diagonal policy "rounding_noise".
+NOISY_DIAGONAL_MEASURES = frozenset(
+    info.name for info in list_measures() if info.diagonal_policy == "rounding_noise"
+)
 
 
 def without_noisy_diagonal(measure: str, *arrays: np.ndarray) -> tuple[np.ndarray, ...]:

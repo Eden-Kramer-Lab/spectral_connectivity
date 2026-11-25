@@ -385,26 +385,28 @@ def test_delay_significance_agrees_window_by_window(recording):
 
 
 @pytest.mark.parametrize(
-    ("dims", "index"),
+    ("dims", "index", "n_trials"),
     [
-        (("time",), (60,)),
-        (("time", "trial"), (60, 1)),
-        (("trial", "time"), (1, 60)),
-        (("channel", "time"), (2, 60)),
+        (("time",), (60,), 4),
+        (("time", "trial"), (60, 1), 4),
+        (("trial", "time"), (1, 60), 4),
+        (("channel", "time"), (2, 60), 4),
+        # As many trials as channels: the channel axis is not read as trials.
+        (("time", "channel"), (60, 0), 3),
     ],
 )
-def test_the_wrapper_shares_a_labeled_mask_over_the_dims_it_lacks(dims, index):
+def test_the_wrapper_shares_a_labeled_mask_over_the_dims_it_lacks(dims, index, n_trials):
     """A DataArray mask of a (time, trial, channel) series that lacks the
     trial or channel dimension is shared by every trial or channel, whatever
-    order its dimensions are in. (The oracles test (time, channel) where the
-    trial and channel counts are equal.)"""
+    order its dimensions are in."""
     xr = pytest.importorskip("xarray")
-    time_series = np.random.default_rng(13).standard_normal((200, 4, 3))
+    time_series = np.random.default_rng(13).standard_normal((200, n_trials, 3))
     labeled = xr.DataArray(time_series, dims=("time", "trial", "channel"))
-    mask = np.zeros([{"time": 200, "trial": 4, "channel": 3}[dim] for dim in dims], bool)
+    sizes = {"time": 200, "trial": n_trials, "channel": 3}
+    mask = np.zeros([sizes[dim] for dim in dims], bool)
     mask[index] = True
     # The same artifacts as a (time, trial) mask: trial 1, or every trial.
-    expected = np.zeros((200, 4), bool)
+    expected = np.zeros((200, n_trials), bool)
     expected[60, 1 if "trial" in dims else slice(None)] = True
     transform_kwargs = {"n_time_samples_per_window": WINDOW}
 
@@ -417,7 +419,10 @@ def test_the_wrapper_shares_a_labeled_mask_over_the_dims_it_lacks(dims, index):
             transform_kwargs={**transform_kwargs, "artifact_samples": artifact_samples},
         ).values
 
-    np.testing.assert_array_equal(power(xr.DataArray(mask, dims=dims)), power(expected))
+    expected_power = power(expected)
+    if "trial" not in dims:
+        assert np.isnan(expected_power[1]).all()  # window 1 keeps no trial
+    np.testing.assert_array_equal(power(xr.DataArray(mask, dims=dims)), expected_power)
 
 
 @pytest.mark.parametrize(

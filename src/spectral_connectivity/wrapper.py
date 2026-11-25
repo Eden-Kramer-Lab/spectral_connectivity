@@ -1903,7 +1903,7 @@ def _require_core_layout_of_labeled_input(
             f"xr.DataArray(artifact_samples, dims={own_dims!r}) to have it transposed "
             "like time_series."
         )
-    elif len(mask_shape) == 2 and mask_shape[::-1] == accepted[1]:
+    elif mask_shape[::-1] == accepted[1]:
         hint = " Did you transpose it? Pass artifact_samples.T."
     msg = (
         f"artifact_samples has shape {mask_shape}; for time_series with dimensions "

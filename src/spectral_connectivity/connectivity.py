@@ -3467,9 +3467,9 @@ class Connectivity:
         # Coherency is nan + 0j both where a signal has zero power (0 here, as
         # documented) and where its power is NaN, such as a bin that keeps no
         # observation, which must stay NaN.
-        imaginary = xp.where(
-            xp.isnan(self._nonnegative_pairwise_power_scale()), xp.nan, imaginary
-        )
+        n_nonnegative = self._nonnegative_frequency_count(self._power.shape[-2])
+        nan_power = xp.isnan(self._power[..., :n_nonnegative, :])
+        imaginary[nan_power[..., :, xp.newaxis] | nan_power[..., xp.newaxis, :]] = xp.nan
         diagonal = xp.arange(self.n_signals)
         imaginary[..., diagonal, diagonal] = xp.nan
         return imaginary
