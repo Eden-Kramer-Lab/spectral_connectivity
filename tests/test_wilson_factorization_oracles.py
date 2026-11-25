@@ -30,14 +30,18 @@ import warnings
 
 import numpy as np
 import pytest
-from scipy.linalg import solve_discrete_are
 
 from spectral_connectivity import Connectivity, DirectedOrientationWarning, Multitaper
 from spectral_connectivity import minimum_phase_decomposition as mpd_module
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 from spectral_connectivity.simulate import simulate_MVAR
 from tests._backend_helpers import to_device, to_host, xp
-from tests._var_oracle import _analytic_directed_measures, _analytic_var, _dense_stable_var
+from tests._var_oracle import (
+    _analytic_directed_measures,
+    _analytic_var,
+    _dense_stable_var,
+    _prediction_error_covariance,
+)
 
 
 def _reverse_cholesky(matrix):
@@ -65,13 +69,15 @@ def _riccati_minimum_phase_factor(spectrum, max_lag):
     ``C = [R_1, ..., R_q]``. The minimal solution ``P`` of
     ``P = A P Aᴴ + (Ḡ - A P Cᴴ)(R_0 - C P Cᴴ)⁻¹(Ḡ - A P Cᴴ)ᴴ`` gives the
     innovation covariance ``Σ = R_0 - C P Cᴴ`` and gain ``K``, and the factor
-    is ``W(e^{iω}) U`` with ``U Uᴴ = Σ`` upper triangular. In SciPy's form the
-    equation is ``solve_discrete_are(Aᴴ, Cᴴ, 0, R_0, s=Ḡ)`` for ``-P``.
+    is ``W(e^{iω}) U`` with ``U Uᴴ = Σ`` upper triangular. For ``-P`` the
+    equation is the Kalman filter's with state noise 0, observation noise
+    ``R_0`` and cross-covariance ``Ḡ``, solved by
+    ``_prediction_error_covariance``.
 
     The minimum-phase factor of ``D S D`` is ``D G`` for a positive diagonal
     ``D`` (``D U`` is again upper triangular), so the equation is solved for
-    signals scaled to unit power, which SciPy's QZ solver needs when their
-    powers differ by orders of magnitude.
+    signals scaled to unit power, where the iteration's tolerance, relative to
+    the largest entry, holds for every signal.
     """
     n_fft, n_signals, _ = spectrum.shape
     scale = np.sqrt(np.mean(np.diagonal(spectrum, axis1=-2, axis2=-1).real, axis=0))
@@ -86,12 +92,12 @@ def _riccati_minimum_phase_factor(spectrum, max_lag):
     input_matrix = np.zeros((n_states, n_signals), dtype=complex)
     input_matrix[:n_signals] = np.eye(n_signals)
     zero_lag = (autocovariance[0] + autocovariance[0].conj().T) / 2
-    state = -solve_discrete_are(
-        shift.conj().T,
-        observation.conj().T,
-        np.zeros((n_states, n_states)),
+    state = -_prediction_error_covariance(
+        shift,
+        observation,
+        np.zeros((n_states, n_states), dtype=complex),
         zero_lag,
-        s=input_matrix,
+        input_matrix,
     )
     innovation = zero_lag - observation @ state @ observation.conj().T
     innovation = (innovation + innovation.conj().T) / 2
