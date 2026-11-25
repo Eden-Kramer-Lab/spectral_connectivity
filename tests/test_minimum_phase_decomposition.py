@@ -1069,6 +1069,37 @@ def test_an_all_pass_rotation_of_the_factor_winds_around_zero(n_fft):
     np.testing.assert_allclose(winding, [0, 0, 1], atol=1e-12)
 
 
+@_BOTH_FACTORIZATION_PATHS
+def test_a_winding_aliased_by_a_coarse_grid_is_not_reported(real_signals):
+    """Eight independent MA(1) signals with factor ``h = 1 - c z⁻¹``,
+    ``|c| = 0.7``, on 16 bins: the factor is diagonal and minimum phase,
+    within 0.7^16 (the wrap-around of ``1 / h`` on the grid) of ``h``, but
+    ``det G ≈ h⁸`` turns by up to 7.3 radians between bins, each step
+    aliased to under ``π / 2``, so the grid counts a winding of -2. A nonzero
+    count is recounted on finer grids, interpolating the factor's
+    coefficients, where it is 0, so no warning is given. A complex ``c``
+    makes the spectrum asymmetric, for the two-sided iteration."""
+    n_fft, n_signals = 16, 8
+    coefficient = 0.7 if real_signals else 0.7 * np.exp(0.3j)
+    filter_response = 1 - coefficient * np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
+    power = np.abs(filter_response) ** 2
+    if real_signals:  # exactly symmetric, not only to rounding
+        power[n_fft // 2 + 1 :] = power[1 : n_fft // 2][::-1]
+    diagonal = (slice(None), np.arange(n_signals), np.arange(n_signals))
+    spectrum = np.zeros((n_fft, n_signals, n_signals), dtype=complex)
+    spectrum[diagonal] = power[:, np.newaxis]
+    assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        factor = to_host(minimum_phase_decomposition(to_device(spectrum[np.newaxis])))[0]
+
+    expected = np.zeros_like(spectrum)
+    expected[diagonal] = filter_response[:, np.newaxis]
+    np.testing.assert_allclose(factor, expected, rtol=0, atol=2 * 0.7**n_fft)
+    assert _reconstruction_error(spectrum[np.newaxis], factor[np.newaxis])[0] < 1e-12
+
+
 def test_winding_number_of_a_determinant_too_small_to_multiply_is_counted():
     """The phase increments are taken from the unit phase of the determinant,
     so a factor whose determinant is about 8e-189 (64 signals correlated at
