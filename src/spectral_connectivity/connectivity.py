@@ -3542,11 +3542,13 @@ class Connectivity:
                 "for independent signals with one trial (1 s, 7 tapers, 99 "
                 "surrogates, nominal 5%) it rejected 57% (phase rotation) and 28% "
                 "(conjugation) of tests around a narrow spectral peak, and 19% and "
-                "10% just past the half bandwidth of a steep 1/f**2 spectrum. Average over time windows (an expectation_type that "
-                "includes 'time', e.g. 'time_tapers' for one recording, with "
-                "windows that do not overlap by more than half), record more "
-                "trials, or, with 2 or more trials, use an expectation that "
-                "averages them (kind='trial_shuffle' then works too)."
+                "10% just past the half bandwidth of a steep 1/f**2 spectrum. "
+                "Average over time windows (an expectation_type that includes "
+                "'time', e.g. 'time_tapers' for one recording, with windows that "
+                "do not overlap and are longer than the signals' memory, which a "
+                "narrow spectral peak makes long), record more trials, or, with 2 "
+                "or more trials, use an expectation that averages them "
+                "(kind='trial_shuffle' then works too)."
             )
             raise ValueError(msg)
         if kind == "conjugation" and n_units - 1 < math.log2(n_surrogates):
