@@ -125,6 +125,12 @@ jobs:
     # whatever pip resolves (usually the latest), not with the stated minimums.
     name: Test minimum dependencies (Python 3.10)
     runs-on: ubuntu-latest
+    env:
+      # The floors' OpenBLAS (NumPy < 2, SciPy < 1.13) runs the missing-data
+      # tapers' small per-pattern eigensolves hundreds of times slower with
+      # multiple threads; threadpoolctl, which would limit them, is not
+      # installed here.
+      OPENBLAS_NUM_THREADS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
