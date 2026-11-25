@@ -202,7 +202,8 @@ def test_nan_outside_the_artifacts_still_warns(recording):
     time_series = time_series.copy()
     time_series[120, 0, 1] = np.nan  # in window 2, which every trial keeps
     with pytest.warns(
-        UserWarning, match="1 NaN or infinite value at samples artifact_samples does not mark"
+        UserWarning,
+        match="1 NaN or infinite value in the trial windows artifact_samples keeps",
     ):
         _multitaper(time_series, artifacts)
 
@@ -213,6 +214,20 @@ def test_nan_covered_by_the_mask_does_not_warn(recording):
         warnings.simplefilter("error")
         multitaper = _multitaper(time_series, artifacts)
         Connectivity.from_transform(multitaper).magnitude_squared_coherence()
+
+
+def test_nan_only_in_dropped_trial_windows_does_not_warn(recording):
+    """An unmarked NaN in a trial window the mask drops reaches no estimate."""
+    time_series, artifacts = recording
+    with_nan = time_series.copy()
+    with_nan[20, 0, 1] = np.nan  # window 0 drops trial 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        coherence = Connectivity.from_transform(
+            _multitaper(with_nan, artifacts)
+        ).magnitude_squared_coherence()
+    clean = Connectivity.from_transform(_multitaper(time_series, artifacts))
+    np.testing.assert_array_equal(coherence, clean.magnitude_squared_coherence())
 
 
 def test_unmasked_nan_warning_suggests_artifact_samples():
