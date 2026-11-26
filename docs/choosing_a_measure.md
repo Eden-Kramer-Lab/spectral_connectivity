@@ -53,7 +53,9 @@ True
 
 - **Small samples bias the estimates.** Coherence and the phase-locking value
   are biased upward when trials x tapers is small: for unrelated signals
-  coherence averages about `1 / n_observations`, not 0. The debiased measures
+  coherence averages about `1 / n_observations`, not 0. With
+  `artifact_samples`, `attrs["n_observations"]` stays the raw count; the
+  observations each window keeps are `Connectivity.n_valid_observations`. The debiased measures
   (`pairwise_phase_consistency`, `debiased_squared_*`) are unbiased, so they
   can be slightly negative; that is noise, not negative coupling:
 
