@@ -226,6 +226,39 @@ True
 
 ```
 
+When trials may differ from one another, leave out whole trials instead, so the
+interval includes the variability between trials:
+
+```python
+>>> by_trial = connectivity.jackknife("magnitude_squared_coherence", leave_out="trial")
+>>> by_trial.n_observations  # one replicate per trial
+20
+
+```
+
+For significance, `Connectivity.surrogate_test(method, kind=...)` compares the
+measure with its values on surrogate data. `kind` sets the null hypothesis:
+
+| Question | `kind` | Needs | A shared stimulus-locked response |
+| --- | --- | --- | --- |
+| Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
+| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged non-overlapping time windows), the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged non-overlapping time windows) | is rejected if lagged |
+
+Report `fwer_p_value` (family-wise over every frequency and pair by default);
+`p_value` is uncorrected:
+
+```python
+>>> tested = connectivity.surrogate_test(
+...     "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=99, random_state=0
+... )
+>>> tested.fwer_p_value.shape == tested.estimate.shape
+True
+>>> tested.alternative  # "auto" resolved for this measure
+'greater'
+
+```
+
 ## Where to look next
 
 - `help(spectral_connectivity.multitaper_connectivity)` for every wrapper

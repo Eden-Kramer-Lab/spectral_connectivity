@@ -105,6 +105,38 @@ The migration guide for code written against 2.x is
   `group_labels="region"`, whose values then label the signals. A string
   given with a plain array, or to `connectivity_to_xarray`, now raises
   `TypeError` saying so, where it raised a shape `ValueError`.
+- `Connectivity.surrogate_test(method, kind=...)` tests a real pairwise measure
+  against surrogate data and returns a `SurrogateTestResult` (exported from
+  `spectral_connectivity`) with uncorrected Monte Carlo p-values and p-values
+  adjusted for the family-wise error rate by the maximum statistic over
+  `fwer_axis` (Nichols and Holmes, 2002). `kind` chooses the null:
+  `"trial_shuffle"` (signals independent from trial to trial),
+  `"phase_rotation"` (signals independent), or `"conjugation"` (real
+  coherency, as for zero-lag mixing). Rotation and conjugation randomize
+  whole trials (and averaged non-overlapping time windows), never single
+  tapers or overlapping windows, so they need 2 or more of them and refuse a
+  single independent unit (one trial with no averaged non-overlapping
+  windows).
+- `Connectivity` takes and exposes `half_bandwidth`, which
+  `Connectivity.from_transform` reads from a transform's optional
+  `half_bandwidth` attribute; `Multitaper.half_bandwidth` is
+  `frequency_resolution / 2`. `surrogate_test(kind="phase_rotation")` uses it.
+- `Connectivity` takes and exposes `time_bins_are_disjoint`, whether successive
+  time windows share no samples, which `Connectivity.from_transform` reads
+  from a transform's optional attribute of that name:
+  `Multitaper.time_bins_are_disjoint` and
+  `ShortTimeFourierTransform.time_bins_are_disjoint` are `True` when the step
+  is at least the window length. `surrogate_test` randomizes averaged time
+  windows separately only when it and `time_bins_are_independent` are both
+  `True`; it is `False` for coefficients passed directly unless stated (and
+  after reassigning coefficients with another number of windows), so their
+  trials are the units.
+- `Connectivity.jackknife(method, leave_out="trial")` leaves out whole trials
+  (all their tapers) instead of single trial-taper observations, so the
+  interval includes the variability between trials; the default interval is
+  too narrow when coupling varies across trials. It needs an expectation that
+  averages trials and at least 3 trials, and is allowed when the tapers within
+  a trial are correlated. The default (`"observation"`) is unchanged.
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided
@@ -890,6 +922,11 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* `Connectivity.jackknife` of a measure defined on a
+  `Connectivity` subclass failed with `AttributeError` after computing the
+  estimate (the replicates were rebuilt as plain `Connectivity`), and a
+  subclass override of an existing measure was used for the estimate but not
+  the replicates. The replicates now keep the instance's class.
 - *Unreleased:* `power_bias` and `power_variance` accept an array of counts
   with a scalar `real_valued` (the default), returning one value per count as
   2.0.1 did; once `real_valued` was added they raised converting the array to
@@ -1241,6 +1278,61 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   by 1e-4 to 0.1 for data at 1e-6 of unit variance (microvolt signals stored
   in volts) in the cases run, and by more below that. Recompute directed
   results from small-amplitude data.
+- The Wilson factorization behind every directed measure starts from a
+  factor covariant under rescaling the signals (`U` with `U Uᵀ = R0`, not
+  `chol(R0)ᵀ`, for the zero-lag matrix `R0`), so the factor of `D S D` is
+  `D G`. From the old start it could converge, without a warning and with
+  `G Gᴴ` within 1e-9 of `S`, to a factor that is not minimum phase, and every
+  directed measure was then wrong: DTF and PDC were 0.3-0.8 off for 9 of 400
+  random VARs of comparable-power signals (now none; at most 5e-9), and
+  pairwise Granger 6.5 off for a chain of nearly integrating signals (now
+  3e-7). 2.x has the same start and defect. Recompute directed results.
+- As preconditioning, every signal is scaled to unit mean power for the
+  factorization and the factor unscaled afterwards. Pairwise Granger of raw
+  and standardized multitaper estimates of that chain differed by 2.7-5.8 at
+  their largest in five simulations (3.7-5.9 in 2.x) and now agree to within
+  the convergence tolerance (at most 7e-7). Signals of comparable power move by
+  much less than their estimation error: at most 7e-3 in the regression
+  examples, under a sixth of their RMS error against the generating models,
+  which is unchanged to 0.1%. A signal with no power, in a window where
+  another signal has power, is factored as an independent white signal at
+  rounding-level power, so its window needs no fallback start; on CuPy, whose
+  Cholesky returns NaN rather than raising, a window with a dead channel was
+  NaN and now factors as on NumPy. On NumPy, the other signals' values in
+  such a window changed: conditional Granger, DTF, DC, PDC and gPDC differed
+  from those of the same signals without the dead channel by up to 3.7e-2
+  (dDTF by 5.1e-4), and now match them to 3e-15. A window where no signal
+  has power is still NaN with a warning, which now reports it as singular:
+  it started from a finite factor that never converged, so one such window
+  held every other window to `max_iterations` (about 20 times the time, for
+  one of 50 windows) and the warning blamed the iteration budget.
+- The inverses behind the directed measures (of the factor's lag-0
+  coefficient, the transfer function, the reduced transfer function, and
+  the noise covariance or its target block) load each diagonal entry by
+  1e-12 of its own size instead of 1e-12 of the matrix's RMS entry, which
+  perturbed a signal far weaker than the others by far more (PDC 0.9 off for
+  signal powers from 5e-5 to 3e12). The spectral Granger family, directed
+  coherence, and gPDC are now invariant under rescaling the signals, and
+  DTF, PDC, and dDTF covariant.
+- The factorization warns, as a best-effort check, when a converged factor's
+  determinant winds around zero (so the factor is not minimum phase); the
+  spectral Granger measures warn once per call, naming the signal pairs. The
+  winding is counted from the determinant's unit phase where it turns by less
+  than `π/2` between bins, and a nonzero count is recounted on grids 2 to 16
+  times finer, interpolating the factor as a causal filter, so that steps a
+  coarse grid aliases do not warn. It catches most wrong factors but not all:
+  in sweeps of 800 random dense VARs factored from the old start it caught 41
+  of the 44 that converged to a wrong factor (the three it missed were off by
+  2e-4 to 3e-2), and it flagged none of the 800 factors from the new start,
+  nothing in the test suite, and none of 1440 windows of zero-padded
+  multitaper estimates. It cannot judge a determinant whose phase turns by
+  more than `π/2` between bins. A count of 0 is not recounted, so a real
+  winding that the grid aliases to 0 is missed (a factor of 8 signals
+  winding -4 times counted 0 on 8 bins). A factor that fails to be minimum
+  phase without its determinant winding countably is not caught either; that
+  includes a grid too coarse for the spectrum, where four coincident
+  resonators at radius 0.995 factor 0.8 off with no warning on 4096 bins (and
+  correctly on 16384).
 - The Wilson iteration builds each update from a square root of the
   cross-spectrum, so it is Hermitian positive semidefinite by construction.
   Sub-spectra with near-duplicate channels (condition numbers from about 1e10)

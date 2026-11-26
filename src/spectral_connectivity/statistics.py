@@ -33,6 +33,7 @@ __all__ = [
     "Benjamini_Hochberg_procedure",
     "Bonferroni_correction",
     "JackknifeResult",
+    "SurrogateTestResult",
     "adjust_for_multiple_comparisons",
     "coherence_bias",
     "coherence_fisher_z_transform",
@@ -75,8 +76,13 @@ class JackknifeResult:
         ``(-pi, pi)``.
     n_observations : int or array of int
         Number of leave-one-out replicates; the interval's critical value has
-        ``n_observations - 1`` degrees of freedom. Where observation weights
-        drop different observations in different bins (see
+        ``n_observations - 1`` degrees of freedom. From
+        :meth:`Connectivity.jackknife` it is the number of averaged
+        observations (``n_trials * n_tapers`` for ``trials_tapers``) with
+        ``leave_out="observation"`` and the number of trials with
+        ``leave_out="trial"``, so it is not always
+        ``Connectivity.n_observations``. Where observation weights drop
+        different observations in different bins (see
         ``Connectivity.n_valid_observations``), one count per bin, an array
         that broadcasts against the estimate.
     transformation : str
@@ -89,6 +95,190 @@ class JackknifeResult:
     confidence_interval: tuple[NDArray[np.floating], NDArray[np.floating]]
     n_observations: int | NDArray[np.integer]
     transformation: str
+
+
+@dataclass(frozen=True)
+class SurrogateTestResult:
+    """Monte Carlo surrogate test of a connectivity measure.
+
+    Returned by :meth:`Connectivity.surrogate_test`. ``estimate``,
+    ``p_value`` and ``fwer_p_value`` have the shape of the measure, e.g.
+    ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)`` for a
+    pairwise connectivity measure. An element is tested unless it is on the
+    diagonal (a signal with itself), its estimate is not finite, or its
+    frequency is within ``half_bandwidth`` of 0 Hz or Nyquist (for
+    ``kind="phase_rotation"``) or its coefficients are real, which
+    conjugation leaves unchanged (for ``kind="conjugation"``: the
+    frequencies of :attr:`Connectivity.real_valued_frequencies
+    <spectral_connectivity.Connectivity.real_valued_frequencies>`, and 0 Hz
+    and Nyquist of a real signal); both p-values are NaN where it is not, and
+    it is in no family's maximum.
+
+    Attributes
+    ----------
+    estimate : array
+        The measure of the original coefficients.
+    p_value : array
+        Uncorrected Monte Carlo p-value of each element, ``(1 + b) /
+        (n_surrogates + 1)``, where ``b`` counts the surrogates whose
+        statistic at that element is at least the observed one (see
+        ``alternative``). It is the test of one element chosen in advance (one
+        pair at one frequency); to say where among many elements the measure
+        is significant, report ``fwer_p_value``, or correct ``p_value`` with
+        :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`
+        for a false discovery rate.
+    fwer_p_value : array
+        Family-wise adjusted p-value from the maximum statistic (Nichols and
+        Holmes [1]_): ``(1 + m) / (n_surrogates + 1)``, where ``m`` counts the
+        surrogates whose largest statistic over the element's family (the
+        tested elements along ``fwer_axis``) is at least the observed
+        statistic. Rejecting every element with ``fwer_p_value <= alpha``
+        rejects a true null anywhere in the family with probability at most
+        ``alpha``. This is the p-value to report for where an effect is.
+    null_maxima : array, shape (n_surrogates, ...)
+        The largest statistic of each surrogate in each family: the axes of
+        ``estimate`` not in ``fwer_axis``, in order, follow the surrogate
+        axis (``(n_surrogates,)`` when every element is one family). Its
+        ``1 - alpha`` quantile along axis 0 is the family's critical value at
+        level ``alpha``, on the scale of the statistic (the value for
+        ``"greater"``, its negative for ``"less"``, its magnitude for
+        ``"two-sided"``). A family with no tested element holds ``-inf``.
+    n_surrogates : int
+        Number of surrogate datasets.
+    kind : str
+        The surrogate construction, which sets the null hypothesis (see
+        :meth:`Connectivity.surrogate_test`).
+    alternative : str
+        ``"greater"``, ``"less"``, or ``"two-sided"``: the alternative used,
+        with ``"auto"`` resolved.
+    fwer_axis : tuple of int
+        The axes of ``estimate`` whose tested elements form one family for
+        ``fwer_p_value``, normalized: non-negative, in the order given, and
+        every axis when ``fwer_axis=None`` was passed.
+
+    References
+    ----------
+    .. [1] Nichols, T. E., and Holmes, A. P. (2002). Nonparametric permutation
+           tests for functional neuroimaging: a primer with examples. Human
+           Brain Mapping 15, 1-25.
+    """
+
+    estimate: NDArray[np.floating]
+    p_value: NDArray[np.floating]
+    fwer_p_value: NDArray[np.floating]
+    null_maxima: NDArray[np.floating]
+    n_surrogates: int
+    kind: str
+    alternative: str
+    fwer_axis: tuple[int, ...]
+
+
+# A surrogate's statistic counts as at least the observed one when it is no
+# more than this far below it. Surrogates equal to the data in exact arithmetic
+# (the identity permutation, a conjugation that flips nothing) reproduce the
+# observed value only to rounding, and the directed measures only to the
+# minimum-phase factorization's tolerance (up to 6e-8 relative for pairwise
+# spectral Granger computed alone or among surrogates); a tie must count.
+_TIE_RELATIVE_TOLERANCE = 1e-6
+_TIE_ABSOLUTE_TOLERANCE = 1e-12
+# Elements compared at once when counting surrogate family maxima.
+_FAMILY_COMPARISON_CHUNK_ELEMENTS = 2**22
+
+
+def _surrogate_statistic(
+    values: NDArray[np.floating], alternative: str
+) -> NDArray[np.floating]:
+    """The test statistic of ``values``: large values are evidence against the null."""
+    if alternative == "greater":
+        return values
+    if alternative == "less":
+        return -values
+    return np.abs(values)
+
+
+class _SurrogateTally:
+    """Exceedance counts and family maxima of surrogate statistics.
+
+    Keeps memory at the size of one result plus ``n_surrogates`` family
+    maxima, rather than every surrogate's result.
+
+    Parameters
+    ----------
+    statistic : array
+        Observed statistic (see :func:`_surrogate_statistic`).
+    tested : array of bool, shape like ``statistic``
+        The elements tested; the others get NaN p-values and are left out of
+        the family maxima.
+    family_axes : tuple of int
+        Non-negative axes of ``statistic`` whose elements form one family.
+    n_surrogates : int
+        Number of surrogate statistics :meth:`add` will receive in total.
+    """
+
+    def __init__(
+        self,
+        statistic: NDArray[np.floating],
+        tested: NDArray[np.bool_],
+        family_axes: tuple[int, ...],
+        n_surrogates: int,
+    ) -> None:
+        self._tested = tested
+        self._threshold = statistic - (
+            _TIE_RELATIVE_TOLERANCE * np.abs(statistic) + _TIE_ABSOLUTE_TOLERANCE
+        )
+        other_axes = tuple(axis for axis in range(statistic.ndim) if axis not in family_axes)
+        # Each family's elements last, flattened: (*other_shape, n_family_elements).
+        self._order = (*other_axes, *family_axes)
+        self._other_shape = tuple(statistic.shape[axis] for axis in other_axes)
+        self._counts = np.zeros(statistic.shape, dtype=np.int64)
+        self.null_maxima = np.empty((n_surrogates, *self._other_shape))
+        self._n_added = 0
+        # Surrogates with a NaN at a tested element, and how many such values.
+        self.n_surrogates_with_nan = 0
+        self.n_nan_values = 0
+
+    def add(self, null_statistic: NDArray[np.floating]) -> None:
+        """Count one surrogate's statistic, shaped like the observed one.
+
+        A NaN surrogate value at a tested element counts as exceeding the
+        observed statistic (and makes its family maximum ``inf``): a surrogate
+        the measure could not evaluate is not evidence against the null.
+        """
+        is_nan = np.isnan(null_statistic)
+        n_nan = int(np.count_nonzero(is_nan & self._tested))
+        if n_nan:
+            self.n_surrogates_with_nan += 1
+            self.n_nan_values += n_nan
+        self._counts += (null_statistic >= self._threshold) | is_nan
+        family_values = np.where(
+            self._tested, np.where(is_nan, np.inf, null_statistic), -np.inf
+        )
+        self.null_maxima[self._n_added] = (
+            np.transpose(family_values, self._order)
+            .reshape(*self._other_shape, -1)
+            .max(axis=-1, initial=-np.inf)
+        )
+        self._n_added += 1
+
+    def p_values(self) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+        """Element-wise and family-wise adjusted p-values, NaN where untested."""
+        n_surrogates = self.null_maxima.shape[0]
+        p_value = (1 + self._counts) / (n_surrogates + 1)
+        threshold = np.transpose(self._threshold, self._order)
+        flat_threshold = threshold.reshape(*self._other_shape, -1)
+        family_counts = np.zeros(flat_threshold.shape, dtype=np.int64)
+        chunk = max(1, _FAMILY_COMPARISON_CHUNK_ELEMENTS // max(flat_threshold.size, 1))
+        for start in range(0, n_surrogates, chunk):
+            maxima = self.null_maxima[start : start + chunk, ..., np.newaxis]
+            family_counts += np.count_nonzero(maxima >= flat_threshold, axis=0)
+        fwer_p_value = np.transpose(
+            ((1 + family_counts) / (n_surrogates + 1)).reshape(threshold.shape),
+            np.argsort(self._order),
+        )
+        return (
+            np.where(self._tested, p_value, np.nan),
+            np.where(self._tested, fwer_p_value, np.nan),
+        )
 
 
 def _identity(value: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -715,20 +905,36 @@ def adjust_for_multiple_comparisons(
     return np.transpose(is_significant.reshape(moved.shape), np.argsort(order))
 
 
-def _normalized_axes(axis: int | tuple[int, ...], ndim: int) -> tuple[int, ...]:
-    """``axis`` as distinct non-negative axes of an ``ndim``-dimensional array."""
+def _normalized_axes(
+    axis: int | tuple[int, ...],
+    ndim: int,
+    name: str = "axis",
+    *,
+    array_description: str | None = None,
+) -> tuple[int, ...]:
+    """``axis`` as distinct non-negative axes of an ``ndim``-dimensional array.
+
+    ``name`` is the argument's name in the error messages, and
+    ``array_description`` names the array in the out-of-bounds message
+    (``p_values`` when not given).
+    """
     axes = (axis,) if not isinstance(axis, tuple) else axis
     normalized = []
     for value in axes:
         if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
-            msg = f"axis must be an int, a tuple of ints, or None, got {axis!r}."
+            msg = f"{name} must be an int, a tuple of ints, or None, got {axis!r}."
             raise TypeError(msg)
         if not -ndim <= value < ndim:
-            msg = f"axis {value} is out of bounds for p_values with {ndim} dimension(s)."
+            described = (
+                f"p_values with {ndim} dimension(s)"
+                if array_description is None
+                else f"{array_description} ({ndim} dimension(s))"
+            )
+            msg = f"{name} {value} is out of bounds for {described}."
             raise ValueError(msg)
         normalized.append(int(value) % ndim)
     if len(set(normalized)) != len(normalized):
-        msg = f"axis {axis!r} names the same axis more than once."
+        msg = f"{name} {axis!r} names the same axis more than once."
         raise ValueError(msg)
     return tuple(normalized)
 
