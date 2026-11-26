@@ -2729,8 +2729,9 @@ class Connectivity:
         observation the bin does not have gives no replicate there, and the
         degrees of freedom are its count of kept observations less one
         (:attr:`n_valid_observations`; ``JackknifeResult.n_observations`` is
-        then one count per bin). A bin keeping fewer than 3 is NaN, with a
-        warning.
+        then one count per bin). With ``leave_out="trial"`` the units are
+        trials, a trial counting in a bin if any of its tapers is kept there.
+        A bin keeping fewer than 3 is NaN, with a warning.
 
         Circular confidence bounds are wrapped to ``(-pi, pi]``, so when the
         interval crosses ``+/-pi`` the lower bound exceeds the upper bound;
@@ -2950,6 +2951,10 @@ class Connectivity:
         unit_is_valid = None
         if observation_weights is not None:
             positive = observation_weights[..., 0] > 0
+            if leave_out == "trial" and self.expectation_type == "trials_tapers":
+                # The unit is a whole trial, kept in a bin if any of its
+                # tapers is.
+                positive = xp.any(positive, axis=2, keepdims=True)
             present = xp.any(positive, axis=-1)
             # A frequency keeping only some of a bin's units would need its own
             # replicates and count; one keeping none is NaN there anyway.
@@ -2974,14 +2979,16 @@ class Connectivity:
             present = to_numpy(xp.moveaxis(present, observation_axis, 0))
             if not present.all():
                 unit_is_valid = present
-        n_valid = n_observations if unit_is_valid is None else int(unit_is_valid.sum(0).max())
-        if n_valid < 3:
+        units = "trials" if leave_out == "trial" else "observations"
+        # The raw count was checked above; these are the units kept anywhere.
+        if unit_is_valid is not None and (n_valid := int(unit_is_valid.sum(0).max())) < 3:
+            caller = "jackknife(leave_out='trial')" if leave_out == "trial" else "jackknife"
             msg = (
-                f"jackknife requires at least 3 observations, got {n_valid}"
-                f"{'' if unit_is_valid is None else ' with nonzero weight in any bin'}. "
-                "With two, each leave-one-out replicate has a single observation, "
-                "which forces magnitude-normalized measures to 1 and makes the "
-                "interval degenerate (a zero standard error, or NaN under a "
+                f"{caller} requires at least 3 {units}, got {n_valid} with "
+                "nonzero weight in any bin. With two, "
+                "each leave-one-out replicate has a single one, which forces "
+                "magnitude-normalized measures to 1 and makes the interval "
+                "degenerate (a zero standard error, or NaN under a "
                 "variance-stabilizing transform such as the coherence default)."
             )
             raise ValueError(msg)
@@ -3063,7 +3070,7 @@ class Connectivity:
             too_few = unit_is_valid.sum(axis=0) < 3
             if too_few.any():
                 warnings.warn(
-                    f"jackknife: observation_weights leave fewer than 3 observations "
+                    f"jackknife: observation_weights leave fewer than 3 {units} "
                     f"in {int(too_few.sum())} of {too_few.size} bins (see "
                     "n_valid_observations), too few for a leave-one-out interval, so "
                     "the bias-corrected estimate, standard error and bounds are NaN "
