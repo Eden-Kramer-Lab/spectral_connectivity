@@ -153,4 +153,9 @@ def test_granger_of_correlated_signals_is_unchanged_by_rescaling_them(measure):
         rescaled = to_host(compute(Connectivity(to_device(coefficients * scales))))
 
     assert np.isfinite(as_drawn).any()
-    np.testing.assert_allclose(rescaled, as_drawn, rtol=0, atol=1e-9, equal_nan=True)
+    # The factorization stops at a relative change of minimum_phase_tolerance
+    # (1e-8), so the two runs may stop at iterates that differ by about that
+    # much; CI's Python 3.10 macOS and Windows wheels differed by 1.05e-9 at a
+    # value of 2e-5. The defect guarded against moved values by 0.47 to 1.1
+    # and added NaN, which equal_nan catches at any atol.
+    np.testing.assert_allclose(rescaled, as_drawn, rtol=0, atol=1e-7, equal_nan=True)
