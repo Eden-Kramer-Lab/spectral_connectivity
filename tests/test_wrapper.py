@@ -5006,7 +5006,8 @@ def test_connectivity_to_xarray_lists_morlet_measures_with_their_validity(morlet
     frequency-resolved ones of the range, phase_slope_index every bin it sums."""
     band = (11.0, 25.0)
     validity = to_host(morlet.valid_time_frequency)
-    in_band = (morlet.frequencies >= band[0]) & (morlet.frequencies <= band[1])
+    frequencies = to_host(morlet.frequencies)
+    in_band = (frequencies >= band[0]) & (frequencies <= band[1])
     combined = connectivity_to_xarray(
         morlet,
         ["magnitude_squared_coherence", "delay", "phase_slope_index"],
