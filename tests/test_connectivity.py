@@ -2830,21 +2830,6 @@ _GRANGER_MEASURES = {
 }
 
 
-# On CuPy the batched Cholesky of a rank-deficient zero-lag matrix returns NaN
-# instead of raising, so no deterministic fallback start is used and the whole
-# pair with a dead channel is NaN, not only the influences on the dead channel
-# (see ``minimum_phase_decomposition._get_initial_conditions``).
-_GPU_DEAD_CHANNEL_NAMED_PAIRS = {
-    "pairwise_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
-    "time_reversed_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
-    "subset_pairwise_spectral_granger_prediction": "0 -> 2, 2 -> 0",
-    "blockwise_spectral_granger_prediction": "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'",
-    "time_reversed_blockwise_spectral_granger_prediction": (
-        "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'"
-    ),
-}
-
-
 @pytest.mark.parametrize(
     ("measure", "defect", "named_pairs"),
     [
@@ -2891,8 +2876,6 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     for a dead channel) without naming the pair, and the advice mentioned a
     regularization parameter no Granger method has.
     """
-    if ON_GPU and defect == "dead":
-        named_pairs = _GPU_DEAD_CHANNEL_NAMED_PAIRS[measure]
     connectivity = _granger_connectivity(defect)
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
@@ -2947,6 +2930,100 @@ def test_batched_granger_factorization_matches_one_pair_at_a_time(
 
     _assert_batched_granger_matches(compute, monkeypatch)
     assert named_per_run[1] == named_per_run[0]
+
+
+_DIRECTED_MEASURES = {
+    **_GRANGER_MEASURES,
+    "directed_transfer_function": lambda c: c.directed_transfer_function(),
+    "directed_coherence": lambda c: c.directed_coherence(),
+    "partial_directed_coherence": lambda c: c.partial_directed_coherence(),
+    "generalized_partial_directed_coherence": (
+        lambda c: c.generalized_partial_directed_coherence()
+    ),
+    "direct_directed_transfer_function": lambda c: c.direct_directed_transfer_function(),
+}
+
+
+@pytest.mark.parametrize("measure", list(_DIRECTED_MEASURES))
+def test_a_window_where_no_signal_has_power_is_nan_with_a_warning(measure):
+    """In a time window where every signal is zero (an artifact blanked on
+    every channel) every directed measure is NaN, with a warning, and the
+    other window is as computed on its own.
+
+    Regression: each zero-power signal was factored as an independent white
+    signal also where no signal had power, so that window's factor was a
+    rounding-level identity and conditional Granger, DTF, DC, PDC, gPDC and
+    dDTF were a finite 0 there without a warning."""
+    from spectral_connectivity import Multitaper
+
+    signals = np.random.default_rng(0).standard_normal((1024, 10, 3))
+    signals[1:, :, 1] += 0.8 * signals[:-1, :, 0]
+    signals[512:] = 0.0
+
+    def compute(signals):
+        return to_host(
+            _DIRECTED_MEASURES[measure](
+                Connectivity.from_transform(
+                    Multitaper(
+                        signals,
+                        sampling_frequency=256,
+                        time_halfbandwidth_product=2,
+                        time_window_duration=2.0,
+                        time_window_step=2.0,
+                    )
+                )
+            )
+        )
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = compute(signals)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        live_window = compute(signals[:512])
+
+    messages = [str(w.message) for w in record]
+    assert any(re.search("did not converge|NaN at every frequency", m) for m in messages)
+    assert result.shape[0] == 2
+    assert np.isnan(result[1]).all()
+    assert np.isfinite(live_window).any()
+    np.testing.assert_allclose(result[:1], live_window, rtol=0, atol=1e-12, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "conditional_spectral_granger_prediction",
+        "time_reversed_conditional_spectral_granger_prediction",
+    ],
+)
+def test_conditional_granger_with_one_live_signal(measure):
+    """Signal 0 has power and signals 1 and 2 none. Conditional Granger from
+    the live signal to a dead one is NaN, with a warning naming those pairs:
+    the reduced model without that source has no power. Between the dead
+    signals, and from a dead signal to the live one, the reduced model keeps
+    the live signal and the influence is 0. These are the values before the
+    zero-power signals were factored as white signals.
+
+    Regression: the reduced model without the live source, with no power,
+    was factored as two white signals, so the influences from the live
+    signal were a finite 0 without a warning."""
+    coefficients = np.zeros((1, 10, 1, 32, 3), dtype=complex)
+    coefficients[0, :, 0, :, 0] = np.fft.fft(
+        np.random.default_rng(0).standard_normal((10, 32)), axis=-1
+    )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = to_host(getattr(Connectivity(to_device(coefficients)), measure)())[0]
+
+    named = [str(w.message) for w in record if "source -> target" in str(w.message)]
+    assert len(named) == 1, named
+    assert ": 0 -> 1, 0 -> 2 (" in named[0]
+    nan_everywhere = np.isnan(result).all(axis=0)
+    np.testing.assert_array_equal(
+        nan_everywhere, [[True, True, True], [False, True, False], [False, False, True]]
+    )
+    np.testing.assert_allclose(result[:, [1, 2, 2, 1], [0, 0, 1, 2]], 0, atol=1e-14)
 
 
 def _assert_batched_granger_matches(compute, monkeypatch):

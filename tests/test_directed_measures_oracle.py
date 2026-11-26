@@ -1032,6 +1032,55 @@ def test_blockwise_granger_of_blocks_of_signals_of_very_different_power_matches_
     )
 
 
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "pairwise_spectral_granger_prediction",
+        "conditional_spectral_granger_prediction",
+        "directed_coherence",
+        "generalized_partial_directed_coherence",
+        "blockwise",
+    ],
+)
+def test_scale_invariant_measures_of_estimates_do_not_change_when_the_signals_are_standardized(
+    measure,
+):
+    """Spectral Granger, directed coherence and gPDC are unchanged by
+    rescaling the signals. On 20 windows of a multitaper estimate on the
+    default grid, the values for the raw signals and for the signals divided
+    by their standard deviations (7, 1e2 and 2e3) agree to 1e-9 (observed at
+    most 7e-14; from ``chol(R0)ᵀ`` with the RMS-loaded inverses, before
+    the covariant start, they differed by 0.5 to 1.1)."""
+    data = simulate_MVAR(
+        _INTEGRATING_CHAIN_COEFFICIENTS,
+        noise_covariance=np.eye(3),
+        n_time_samples=20 * 256,
+        n_trials=4,
+        random_state=0,
+    )
+    standardized = data / data.std(axis=(0, 1))
+
+    def compute(signals):
+        connectivity = Connectivity.from_transform(
+            Multitaper(
+                signals,
+                sampling_frequency=1.0,
+                time_halfbandwidth_product=3,
+                time_window_duration=256,
+            )
+        )
+        if measure == "blockwise":
+            return connectivity.blockwise_spectral_granger_prediction([0, 1, 1])[0]
+        return getattr(connectivity, measure)()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        warnings.filterwarnings("ignore", message="directed_coherence assumes uncorrelated")
+        raw, rescaled = to_host(compute(data)), to_host(compute(standardized))
+    np.testing.assert_allclose(raw, rescaled, atol=1e-9, rtol=0)
+
+
 # Dense VARs of signals of comparable power that a start which is not
 # covariant under rescaling the signals factored to a factor that is not
 # minimum phase (the second only once the signals were scaled to unit power).
