@@ -60,19 +60,24 @@ def recording():
     return time_series, artifacts
 
 
-def test_jackknife_equals_that_of_the_kept_trial_windows(recording):
+@pytest.mark.parametrize("leave_out", ["observation", "trial"])
+def test_jackknife_equals_that_of_the_kept_trial_windows(recording, leave_out):
     time_series, artifacts = recording
     connectivity = Connectivity.from_transform(
         _multitaper(time_series, artifacts, time_halfbandwidth_product=2)
     )
     for method in JACKKNIFED:
-        masked = quietly(connectivity.jackknife, method)
+        masked = quietly(connectivity.jackknife, method, leave_out=leave_out)
+        if leave_out == "trial":
+            # One count per window: the trials it keeps.
+            np.testing.assert_array_equal(np.ravel(masked.n_observations), [3, 4, 5, 4])
         for window in range(4):
             kept = quietly(
                 _kept_window(
                     time_series, artifacts, window * WINDOW, time_halfbandwidth_product=2
                 ).jackknife,
                 method,
+                leave_out=leave_out,
             )
             for field in ("bias_corrected", "standard_error"):
                 np.testing.assert_allclose(

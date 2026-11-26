@@ -175,11 +175,12 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `DeprecationWarning`.
 - **Artifacts and NaN.** Do not let NaN reach the transform: pass
   `transform_kwargs={"artifact_samples": "nonfinite"}`, or a boolean mask that
-  is `True` at the artifacts, the samples to leave out (invert a mask of
-  valid samples with `~`). A trial's
-  window touching an artifact is dropped whole, so use windows that fit
-  between artifacts. The outputs mark what is kept: `Multitaper.valid_windows`,
-  and `Connectivity.n_valid_observations`, the per-bin counts to give the
+  is `True` at the artifacts, the samples to leave out (invert a mask of valid
+  samples with `~`). A trial's window touching an artifact is dropped whole,
+  so use windows that fit between artifacts, or see the recipe for
+  `"artifact_handling": "missing_data_tapers"`. The outputs mark what is kept:
+  `Multitaper.valid_windows`, `Multitaper.n_kept_tapers`, and
+  `Connectivity.n_valid_observations`, the per-bin counts to give the
   statistics functions instead of `n_observations`; a bin keeping too few
   (fewer than 2 for coherence, none for power) is NaN in their results. See
   the [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
@@ -226,6 +227,39 @@ error, and confidence interval by leaving out one trial or taper at a time:
 >>> result = connectivity.jackknife("magnitude_squared_coherence")
 >>> result.estimate.shape == result.standard_error.shape
 True
+
+```
+
+When trials may differ from one another, leave out whole trials instead, so the
+interval includes the variability between trials:
+
+```python
+>>> by_trial = connectivity.jackknife("magnitude_squared_coherence", leave_out="trial")
+>>> by_trial.n_observations  # one replicate per trial
+20
+
+```
+
+For significance, `Connectivity.surrogate_test(method, kind=...)` compares the
+measure with its values on surrogate data. `kind` sets the null hypothesis:
+
+| Question | `kind` | Needs | A shared stimulus-locked response |
+| --- | --- | --- | --- |
+| Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
+| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged non-overlapping time windows), the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged non-overlapping time windows) | is rejected if lagged |
+
+Report `fwer_p_value` (family-wise over every frequency and pair by default);
+`p_value` is uncorrected:
+
+```python
+>>> tested = connectivity.surrogate_test(
+...     "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=99, random_state=0
+... )
+>>> tested.fwer_p_value.shape == tested.estimate.shape
+True
+>>> tested.alternative  # "auto" resolved for this measure
+'greater'
 
 ```
 

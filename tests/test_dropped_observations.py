@@ -267,6 +267,51 @@ def test_jackknife_leaves_out_only_kept_observations(dropped_trials, method):
             np.testing.assert_allclose(bound[window], kept_bound[0], rtol=1e-9, atol=1e-13)
 
 
+@pytest.mark.parametrize("method", ["magnitude_squared_coherence", "power"])
+def test_trial_jackknife_leaves_out_only_kept_trials(dropped_trials, method):
+    """With ``leave_out="trial"`` each window's interval is the trial
+    jackknife of its kept trials alone: a trial counts in a window if any of
+    its tapers is kept there, a dropped trial is no replicate there, and the
+    degrees of freedom count the kept trials."""
+    coefficients, valid, weights = dropped_trials
+    # Drop the first taper of a trial the window keeps: the trial still counts.
+    weights = np.array(weights)
+    weights[1, 0, 0] = 0
+    masked = Connectivity(coefficients, observation_weights=weights).jackknife(
+        method, leave_out="trial"
+    )
+    expected_counts = valid.sum(axis=1)
+    np.testing.assert_array_equal(np.ravel(masked.n_observations), expected_counts)
+    for window in range(coefficients.shape[0]):
+        kept = Connectivity(
+            coefficients[[window]][:, valid[window]],
+            observation_weights=weights[[window]][:, valid[window]],
+        ).jackknife(method, leave_out="trial")
+        assert kept.n_observations == expected_counts[window]
+        for field in ("estimate", "bias_corrected", "standard_error"):
+            np.testing.assert_allclose(
+                getattr(masked, field)[window],
+                getattr(kept, field)[0],
+                rtol=1e-9,
+                atol=1e-13,
+                err_msg=field,
+            )
+        for bound, kept_bound in zip(
+            masked.confidence_interval, kept.confidence_interval, strict=True
+        ):
+            np.testing.assert_allclose(bound[window], kept_bound[0], rtol=1e-9, atol=1e-13)
+
+
+def test_trial_jackknife_counts_trials_when_weights_leave_too_few():
+    rng = np.random.default_rng(11)
+    coefficients = _coefficients(rng, (1, 4, 3, 8, 2))
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    weights[0, 1:3] = 0  # two of the four trials are dropped
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    with pytest.raises(ValueError, match="at least 3 trials, got 2 with nonzero weight"):
+        connectivity.jackknife("magnitude_squared_coherence", leave_out="trial")
+
+
 def test_jackknife_skips_a_unit_dropped_everywhere():
     rng = np.random.default_rng(8)
     coefficients = _coefficients(rng, (2, 5, 1, 8, 2))

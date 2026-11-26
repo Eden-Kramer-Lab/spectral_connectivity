@@ -434,6 +434,46 @@ def test_artifact_samples_run_on_the_device(xp, monkeypatch):
         np.testing.assert_allclose(value, host[name], rtol=1e-12, equal_nan=True, err_msg=name)
 
 
+@pytest.mark.parametrize("taper_weighting", ["uniform", "eigen", "adaptive"])
+def test_missing_data_tapers_run_on_the_device(xp, monkeypatch, taper_weighting):
+    """The missing-data tapers (computed on the host), their coefficients,
+    weights, and taper counts reach the device and match the host."""
+    from spectral_connectivity import Multitaper
+
+    rng = np.random.default_rng(12)
+    time_series = rng.standard_normal((200, 4, 2))
+    time_series[60:64, 1, 0] = np.nan
+    time_series[[110, 112, 130], 2, 1] = np.nan
+
+    def compute():
+        multitaper = Multitaper(
+            time_series,
+            200,
+            n_time_samples_per_window=50,
+            artifact_samples="nonfinite",
+            artifact_handling="missing_data_tapers",
+            taper_weighting=taper_weighting,
+            detrend_type="linear",
+        )
+        connectivity = Connectivity.from_transform(multitaper)
+        return multitaper, {
+            "fft": multitaper.fft(),
+            "pairwise_phase_consistency": connectivity.pairwise_phase_consistency(),
+            "n_valid_observations": connectivity.n_valid_observations,
+        }
+
+    multitaper, on_device = compute()
+    assert isinstance(on_device.pop("fft"), _DeviceArray)
+    assert isinstance(multitaper.observation_weights, _DeviceArray)
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    _, host = compute()
+    host.pop("fft")
+    for name, value in on_device.items():
+        assert isinstance(value, np.ndarray), name
+        np.testing.assert_allclose(value, host[name], rtol=1e-12, equal_nan=True, err_msg=name)
+    assert (host["n_valid_observations"][1:3, 0] < 20).all()  # tapers were dropped
+
+
 def test_phase_lag_family_runs_on_the_device(xp, monkeypatch):
     """The phase-lag tile loop (ufunc ``out=``, ``count_nonzero`` over an axis
     tuple, ``einsum``) runs on device arrays and matches the host result."""
@@ -547,3 +587,34 @@ def test_minimum_phase_decomposition_accepts_host_arrays(xp, monkeypatch):
         minimum_phase_decomposition.minimum_phase_decomposition(cross_spectrum),
         rtol=1e-12,
     )
+
+
+@pytest.mark.parametrize(
+    ("kind", "measure"),
+    [
+        ("trial_shuffle", "magnitude_squared_coherence"),
+        ("phase_rotation", "magnitude_squared_coherence"),
+        ("conjugation", "magnitude_squared_coherence"),
+        ("phase_rotation", "pairwise_spectral_granger_prediction"),
+    ],
+)
+def test_surrogate_test_runs_on_the_device(xp, monkeypatch, kind, measure):
+    """Surrogates are drawn on the host and applied to device coefficients;
+    the p-values match the host computation exactly (same random numbers),
+    including a Wilson-factorized directed measure on rotated real signals."""
+    rng = np.random.default_rng(13)
+    if "granger" in measure:
+        # Coefficients of real signals, whose rotated surrogates stay
+        # conjugate-symmetric and keep the factorization's real-FFT path.
+        coefficients = scipy.fft.fft(rng.standard_normal((2, 6, 3, 16, 3)), axis=-2)
+    else:
+        coefficients = _coefficients(rng, shape=(2, 6, 3, 16, 3))
+    extra = {"half_bandwidth": 0.07} if kind == "phase_rotation" else {}
+    kwargs = {"kind": kind, "n_surrogates": 9, "random_state": 0, **extra}
+    on_device = Connectivity(xp.asarray(coefficients)).surrogate_test(measure, **kwargs)
+
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    host = Connectivity(coefficients).surrogate_test(measure, **kwargs)
+    assert isinstance(on_device.p_value, np.ndarray)
+    np.testing.assert_array_equal(on_device.p_value, host.p_value)
+    np.testing.assert_array_equal(on_device.fwer_p_value, host.fwer_p_value)
