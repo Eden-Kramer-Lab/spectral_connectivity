@@ -96,6 +96,32 @@ The migration guide for code written against 2.x is
   `group_labels="region"`, whose values then label the signals. A string
   given with a plain array, or to `connectivity_to_xarray`, now raises
   `TypeError` saying so, where it raised a shape `ValueError`.
+- `Connectivity.surrogate_test(method, kind=...)` tests a real pairwise measure
+  against surrogate data and returns a `SurrogateTestResult` (exported from
+  `spectral_connectivity`) with uncorrected Monte Carlo p-values and p-values
+  adjusted for the family-wise error rate by the maximum statistic over
+  `fwer_axis` (Nichols and Holmes, 2002). `kind` chooses the null:
+  `"trial_shuffle"` (signals independent from trial to trial),
+  `"phase_rotation"` (signals independent), or `"conjugation"` (real
+  coherency, as for zero-lag mixing). Rotation and conjugation randomize
+  whole trials (and averaged non-overlapping time windows), never single
+  tapers or overlapping windows, so they need 2 or more of them and refuse a
+  single independent unit (one trial with no averaged non-overlapping
+  windows).
+- `Connectivity` takes and exposes `half_bandwidth`, which
+  `Connectivity.from_transform` reads from a transform's optional
+  `half_bandwidth` attribute; `Multitaper.half_bandwidth` is
+  `frequency_resolution / 2`. `surrogate_test(kind="phase_rotation")` uses it.
+- `Connectivity` takes and exposes `time_bins_are_disjoint`, whether successive
+  time windows share no samples, which `Connectivity.from_transform` reads
+  from a transform's optional attribute of that name:
+  `Multitaper.time_bins_are_disjoint` and
+  `ShortTimeFourierTransform.time_bins_are_disjoint` are `True` when the step
+  is at least the window length. `surrogate_test` randomizes averaged time
+  windows separately only when it and `time_bins_are_independent` are both
+  `True`; it is `False` for coefficients passed directly unless stated (and
+  after reassigning coefficients with another number of windows), so their
+  trials are the units.
 - `Connectivity.jackknife(method, leave_out="trial")` leaves out whole trials
   (all their tapers) instead of single trial-taper observations, so the
   interval includes the variability between trials; the default interval is
@@ -887,6 +913,11 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* `Connectivity.jackknife` of a measure defined on a
+  `Connectivity` subclass failed with `AttributeError` after computing the
+  estimate (the replicates were rebuilt as plain `Connectivity`), and a
+  subclass override of an existing measure was used for the estimate but not
+  the replicates. The replicates now keep the instance's class.
 - *Unreleased:* `power_bias` and `power_variance` accept an array of counts
   with a scalar `real_valued` (the default), returning one value per count as
   2.0.1 did; once `real_valued` was added they raised converting the array to

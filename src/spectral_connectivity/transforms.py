@@ -668,6 +668,22 @@ class SpectralTransform(Protocol):
         Whether successive time windows are independent (e.g. ``False`` for
         windows overlapping by more than half). It affects only expectations that
         average over time.
+    ``time_bins_are_disjoint`` : bool, default False
+        Whether successive time windows share no samples, as
+        :class:`Multitaper` and :class:`ShortTimeFourierTransform` report
+        for a step of at least the window length. Unlike the flags above,
+        the default is the cautious one, since a transform that does not say
+        may overlap its windows: :meth:`Connectivity.surrogate_test` then
+        randomizes whole trials, never single time windows.
+        :class:`MorletWavelet`, whose wavelets at successive samples always
+        overlap, and :class:`Welch`, which has one time bin, do not define it.
+    ``half_bandwidth`` : float, default None
+        Half-width of the transform's spectral smoothing, in Hz (the units of
+        ``frequencies``): within it of 0 Hz and Nyquist the coefficients of a
+        real signal are not circular. :class:`Multitaper` defines it as
+        ``frequency_resolution / 2``. ``None`` means unknown;
+        :meth:`Connectivity.surrogate_test` with ``kind="phase_rotation"``
+        then needs it passed explicitly.
 
     ``isinstance`` checks only that ``fft``, ``frequencies``, and ``time``
     exist (on Python 3.11 and earlier it also evaluates the two properties).
@@ -1673,6 +1689,25 @@ Frequency Analysis
         """
         return 2 * self.n_time_samples_per_step >= self.n_time_samples_per_window
 
+    @property
+    def time_bins_are_disjoint(self) -> bool:
+        """Whether successive time windows share no samples.
+
+        Stricter than :attr:`time_bins_are_independent`: windows overlapping
+        by half are close enough to independent for counting observations,
+        but their coefficients are still correlated, so
+        :meth:`Connectivity.surrogate_test
+        <spectral_connectivity.Connectivity.surrogate_test>` randomizes
+        averaged windows as separate units only when they do not overlap.
+
+        Returns
+        -------
+        bool
+            ``True`` when ``n_time_samples_per_step`` is at least
+            ``n_time_samples_per_window``.
+        """
+        return self.n_time_samples_per_step >= self.n_time_samples_per_window
+
     def fft(self) -> NDArray[np.complexfloating]:
         """Compute the tapered Fourier coefficients of every time window.
 
@@ -2670,6 +2705,23 @@ class Multitaper(_WindowedFourierTransform):
         return estimate_frequency_resolution(
             self.sampling_frequency, self.time_window_duration, self.time_halfbandwidth_product
         )
+
+    @property
+    def half_bandwidth(self) -> float:
+        """Return the half bandwidth W, ``frequency_resolution / 2``, in Hz.
+
+        ``time_halfbandwidth_product / time_window_duration``. Within W of 0 Hz
+        and of Nyquist the eigencoefficients of a real signal are not circular
+        (they mix the spectrum at ``f`` and ``-f``), which
+        :meth:`Connectivity.surrogate_test` reads to leave those frequencies
+        untested with ``kind="phase_rotation"``.
+
+        Returns
+        -------
+        float
+            Half bandwidth in Hz.
+        """
+        return self.frequency_resolution / 2
 
     @property
     def observations_are_independent(self) -> bool:

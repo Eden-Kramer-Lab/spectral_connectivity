@@ -36,6 +36,7 @@ from spectral_connectivity.connectivity import (
 )
 from spectral_connectivity.statistics import (
     JackknifeResult,
+    SurrogateTestResult,
     jackknife_confidence_interval,
 )
 from spectral_connectivity.transforms import (
@@ -83,6 +84,7 @@ __all__ = [
     "ShortTimeFourierTransform",
     "SidednessWarning",
     "SpectralTransform",
+    "SurrogateTestResult",
     "Welch",
     "estimate_frequency_resolution",
     "estimate_n_tapers",

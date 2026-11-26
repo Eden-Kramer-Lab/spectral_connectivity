@@ -472,6 +472,102 @@ max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * (b^H S_tt b)),
 
 ```
 
+## Test against surrogate data
+
+`Connectivity.surrogate_test` recomputes a measure on surrogate coefficients
+built to satisfy a null hypothesis and returns Monte Carlo p-values. `kind`
+sets the null, so choose it for the question:
+
+| Question | `kind` | Needs | A shared stimulus-locked response |
+| --- | --- | --- | --- |
+| Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
+| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged non-overlapping time windows), the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged non-overlapping time windows) | is rejected if lagged |
+
+- `"trial_shuffle"` shuffles each signal's trials, keeping each trial whole.
+  The expectation must average trials.
+- `"phase_rotation"` rotates each trial (every taper alike) by a random
+  phase. The frequencies within the transform's half bandwidth of 0 Hz and
+  Nyquist are not tested; `Connectivity.from_transform` records it for a `Multitaper`
+  (`frequency_resolution / 2`), and `half_bandwidth=` overrides it. A common
+  stimulus-locked response is rejected too; to ask about interaction beyond
+  it, use `"trial_shuffle"`. Subtracting each signal's mean across trials
+  first leaves p-values too small unless there are many trials (5.5-7.0% of
+  tests rejected at nominal 5% with 10 trials, about 5% with 40).
+- `"conjugation"` conjugates (time-reverses) random trials. 0 Hz and Nyquist
+  of a real signal, which it leaves unchanged, are not tested. Instantaneous mixing of
+  independent sources is in its null, so pair it with
+  a measure of lagged interaction: `imaginary_coherence`, the phase-lag
+  indices, `phase_slope_index`, or pairwise spectral Granger. With
+  `magnitude_squared_coherence` it asks only whether the coupling exceeds what
+  a real coherency gives.
+- `"phase_rotation"` and `"conjugation"` randomize whole trials, so each needs
+  2 or more: a trial's tapers are correlated wherever the spectrum is not flat
+  across the half bandwidth (near a peak, or on a steep 1/f spectrum), and
+  randomizing them separately would reject independent signals far too
+  often. With one recording, average non-overlapping time windows instead
+  (`expectation_type="time_tapers"`, with `time_window_step` at least
+  `time_window_duration`), which makes each window a unit; that holds only for
+  windows longer than the signals' memory, which a narrow spectral peak makes
+  long. Windows that overlap, even by half, have correlated coefficients, so
+  every window of a trial shares its draw, and one recording in overlapping
+  windows is refused. `Connectivity.from_transform` records whether the
+  windows overlap; for coefficients passed directly, pass
+  `time_bins_are_disjoint=True` if they do not.
+
+Here signal 1 is signal 0 delayed by 3 samples (6 ms) and signal 2 is
+independent:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> rng = np.random.default_rng(1)
+>>> leader = rng.standard_normal((503, 10))
+>>> lagged = np.stack([leader[3:], leader[:-3], rng.standard_normal((500, 10))], axis=-1)
+>>> lagged += 0.5 * rng.standard_normal(lagged.shape)
+>>> multitaper = Multitaper(lagged, sampling_frequency=500, time_halfbandwidth_product=2)
+>>> connectivity = Connectivity.from_transform(multitaper)
+>>> result = connectivity.surrogate_test(
+...     "imaginary_coherence", kind="conjugation", n_surrogates=199, random_state=0
+... )
+>>> result.p_value.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+(1, 251, 3, 3)
+>>> significant = result.fwer_p_value <= 0.05  # family-wise over every frequency and pair
+>>> bool(significant[0, 40, 0, 1]), bool(significant[..., [0, 1], [2, 2]].any())
+(True, False)
+
+```
+
+Report `fwer_p_value` to say *where* the measure is significant: it adjusts
+for testing every element of a family. `p_value` is uncorrected, the test of
+one element (one pair at one frequency) chosen before looking. The diagonal is
+not tested and its p-values are NaN. By default every element is one family;
+`fwer_axis` names the axes of one family, e.g. `(1, 2, 3)` for frequencies and
+pairs within each time window, and the result stores the axes it used:
+
+```python
+>>> per_window = connectivity.surrogate_test(
+...     "magnitude_squared_coherence",
+...     kind="trial_shuffle",
+...     fwer_axis=(1, 2, 3),
+...     n_surrogates=199,
+...     random_state=0,
+... )
+>>> per_window.fwer_axis, per_window.alternative
+((1, 2, 3), 'greater')
+>>> per_window.null_maxima.shape  # (n_surrogates, n_time_windows): one maximum per family
+(199, 1)
+>>> bool(per_window.fwer_p_value[0, 40, 0, 1] <= 0.05)
+True
+>>> rotated = connectivity.surrogate_test(
+...     "magnitude_squared_coherence", kind="phase_rotation", n_surrogates=199, random_state=0
+... )
+>>> connectivity.half_bandwidth  # recorded from the Multitaper: 2 Hz
+2.0
+>>> bool(np.isnan(rotated.p_value[0, :2, 0, 1]).all())  # 0 and 1 Hz are within it of 0 Hz
+True
+
+```
+
 ## Global coherence pooled over time windows
 
 `method="global_coherence"` decomposes each time window's trials and tapers

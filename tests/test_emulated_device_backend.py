@@ -520,3 +520,34 @@ def test_minimum_phase_decomposition_accepts_host_arrays(xp, monkeypatch):
         minimum_phase_decomposition.minimum_phase_decomposition(cross_spectrum),
         rtol=1e-12,
     )
+
+
+@pytest.mark.parametrize(
+    ("kind", "measure"),
+    [
+        ("trial_shuffle", "magnitude_squared_coherence"),
+        ("phase_rotation", "magnitude_squared_coherence"),
+        ("conjugation", "magnitude_squared_coherence"),
+        ("phase_rotation", "pairwise_spectral_granger_prediction"),
+    ],
+)
+def test_surrogate_test_runs_on_the_device(xp, monkeypatch, kind, measure):
+    """Surrogates are drawn on the host and applied to device coefficients;
+    the p-values match the host computation exactly (same random numbers),
+    including a Wilson-factorized directed measure on rotated real signals."""
+    rng = np.random.default_rng(13)
+    if "granger" in measure:
+        # Coefficients of real signals, whose rotated surrogates stay
+        # conjugate-symmetric and keep the factorization's real-FFT path.
+        coefficients = scipy.fft.fft(rng.standard_normal((2, 6, 3, 16, 3)), axis=-2)
+    else:
+        coefficients = _coefficients(rng, shape=(2, 6, 3, 16, 3))
+    extra = {"half_bandwidth": 0.07} if kind == "phase_rotation" else {}
+    kwargs = {"kind": kind, "n_surrogates": 9, "random_state": 0, **extra}
+    on_device = Connectivity(xp.asarray(coefficients)).surrogate_test(measure, **kwargs)
+
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    host = Connectivity(coefficients).surrogate_test(measure, **kwargs)
+    assert isinstance(on_device.p_value, np.ndarray)
+    np.testing.assert_array_equal(on_device.p_value, host.p_value)
+    np.testing.assert_array_equal(on_device.fwer_p_value, host.fwer_p_value)
