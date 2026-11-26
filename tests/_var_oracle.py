@@ -41,6 +41,12 @@ def _observed_subsystem(C, K, noise_covariance, members):
     )
 
 
+# A Riccati iteration stalled at its rounding floor: the change has not shrunk
+# for this many iterations and is within this factor of the tolerance.
+_STALLED_ITERATIONS = 50
+_FLOOR_FACTOR = 100
+
+
 def _prediction_error_covariance(A, C, Q, R, S, max_iterations=100_000):
     """Steady-state state prediction-error covariance ``P`` of a Kalman filter.
 
@@ -51,8 +57,17 @@ def _prediction_error_covariance(A, C, Q, R, S, max_iterations=100_000):
     for a stable ``A`` (Anderson & Moore 1979, ch. 4). The iteration takes
     conjugate transposes, so it holds for complex systems, for which SciPy's
     ``solve_discrete_are`` can fail its QZ step.
+
+    The change shrinks geometrically until it reaches the rounding floor of
+    the update, which depends on the BLAS (about 4e-14 of ``P``'s scale for a
+    badly scaled system on macOS's Accelerate). So the iteration also stops
+    once the change has not shrunk for ``_STALLED_ITERATIONS`` iterations
+    while within ``_FLOOR_FACTOR`` times the tolerance: a fluctuation at the
+    floor, not a failure to converge.
     """
     P = np.zeros_like(Q)
+    smallest_change = np.inf
+    stalled = 0
     for _ in range(max_iterations):
         cross = A @ P @ C.conj().T + S
         gain = cross @ np.linalg.inv(C @ P @ C.conj().T + R)
@@ -64,6 +79,12 @@ def _prediction_error_covariance(A, C, Q, R, S, max_iterations=100_000):
         tolerance = 1e-14 * (np.abs(Q).max() + np.abs(updated).max())
         P = updated
         if change <= tolerance:
+            return P
+        if change < smallest_change:
+            smallest_change, stalled = change, 0
+        else:
+            stalled += 1
+        if stalled >= _STALLED_ITERATIONS and smallest_change <= _FLOOR_FACTOR * tolerance:
             return P
     msg = (
         f"Riccati iteration did not converge: last change {change:.2e}, "
