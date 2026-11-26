@@ -96,8 +96,9 @@ The migration guide for code written against 2.x is
 - `is_exact_spectrum`, an optional `SpectralTransform` attribute and a
   keyword-only `Connectivity` argument and property, for coefficients that
   are one factorization of a cross-spectral matrix rather than samples. The
-  measures that need samples, and `jackknife` and `observation_weights`, are
-  then refused. Labeled results record `is_exact_spectrum`.
+  measures that need samples, `jackknife`, `surrogate_test`,
+  `partial_coherence(shrinkage="auto")`, and `observation_weights` are then
+  refused. Labeled results record `is_exact_spectrum`.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working

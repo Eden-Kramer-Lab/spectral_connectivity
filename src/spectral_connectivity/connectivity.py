@@ -474,7 +474,9 @@ def _source_first(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
 
 
 # Why a measure that needs samples is refused for an exact spectrum.
-_ExactSpectrumRefusal = Literal["per_observation", "significance_gate", "sampling_error"]
+_ExactSpectrumRefusal = Literal[
+    "per_observation", "significance_gate", "sampling_error", "surrogate_null", "shrinkage"
+]
 _SIMULATE_INSTEAD = (
     "simulate data from the model (spectral_connectivity.simulate.simulate_MVAR) "
     "and estimate it with Multitaper"
@@ -494,6 +496,21 @@ def _exact_spectrum_refusal_message(method: str, reason: _ExactSpectrumRefusal) 
             "observation at a time, and an exact spectrum has no sampling error "
             f"to estimate. For the spread of an estimate, {_SIMULATE_INSTEAD}, and "
             f"apply {method} to that."
+        )
+    if reason == "surrogate_null":
+        return (
+            f"{intro} {method} compares an estimate with surrogates of the "
+            "samples, and an exact spectrum has no sampling error for a null "
+            f"distribution to describe. To test a VAR model's connectivity, "
+            f"{_SIMULATE_INSTEAD}, and apply {method} to that."
+        )
+    if reason == "shrinkage":
+        return (
+            f"{intro} {method} estimates each coherency's sampling variance "
+            "across the observations, and an exact spectrum has none to shrink "
+            "against. Its partial coherence is exact without shrinkage; use "
+            "partial_coherence() or a fixed shrinkage between 0 and 1, or "
+            f"{_SIMULATE_INSTEAD}."
         )
     if reason == "significance_gate":
         return (
@@ -520,7 +537,8 @@ def _refused_for_exact_spectrum(
     """Make a method raise, for ``reason``, on a ``Connectivity`` of an exact spectrum.
 
     For the measures that use each trial/taper observation or count them, and
-    for ``jackknife``, which leaves observations out. Apply it outermost, so
+    for ``jackknife`` and ``surrogate_test``, which resample observations.
+    Apply it outermost, so
     nothing is computed before the refusal; the measure registry's
     ``defined_for_exact_spectrum`` records which measures carry it.
     """
@@ -1142,7 +1160,8 @@ class Connectivity:
         :class:`~spectral_connectivity.transforms.VARSpectrum`. The measures
         that use each observation or count them (the phase-locking and
         phase-lag families, pairwise phase consistency, ``delay``,
-        ``group_delay``) and ``jackknife`` then raise ``ValueError``, and the
+        ``group_delay``), ``jackknife``, ``surrogate_test`` and
+        ``partial_coherence(shrinkage="auto")`` then raise ``ValueError``, and the
         expectation must average the tapers.
 
         .. versionadded:: 3.0
@@ -3037,8 +3056,9 @@ class Connectivity:
         the taper-mean outer product of its coefficients is the model's
         cross-spectral matrix, and the individual observations are only one
         factorization of it. Every measure that is a function of that matrix
-        is then exact; those that use each observation or count them, and
-        :meth:`jackknife`, raise ``ValueError``.
+        is then exact; those that use each observation or count them,
+        :meth:`jackknife`, :meth:`surrogate_test` and ``shrinkage="auto"`` of
+        :meth:`partial_coherence`, raise ``ValueError``.
 
         .. versionadded:: 3.0
         """
@@ -3503,6 +3523,7 @@ class Connectivity:
             )
         return result
 
+    @_refused_for_exact_spectrum("surrogate_null")
     def surrogate_test(
         self,
         method: str,
@@ -3893,21 +3914,6 @@ class Connectivity:
         :meth:`from_transform` recorded (here 2 Hz); the cookbook recipe "Test
         against surrogate data" shows more.
         """
-        # An exact spectrum (Connectivity.from_var / VARSpectrum) has
-        # pseudo-observations, not samples: there is no sampling error for a
-        # surrogate null to describe. The attribute exists only where exact
-        # spectra are supported, so this is a no-op elsewhere.
-        if getattr(self, "_is_exact_spectrum", False):
-            msg = (
-                "surrogate_test needs observed data, but this Connectivity holds "
-                "an exact spectrum (is_exact_spectrum is True, e.g. from "
-                "Connectivity.from_var): its coefficients are one factorization of "
-                "the model's spectrum, not samples, so it has no sampling error "
-                "to test against. To test a VAR model's connectivity, simulate data "
-                "from it (spectral_connectivity.simulate.simulate_MVAR) and run "
-                "surrogate_test on a Multitaper estimate of those data."
-            )
-            raise ValueError(msg)
         if kind not in _SURROGATE_KINDS:
             msg = (
                 f"kind must be one of {', '.join(map(repr, _SURROGATE_KINDS))}, got "
@@ -5314,6 +5320,8 @@ class Connectivity:
         that counts its observations. ``caller`` names the call in their
         errors and warning; ``other_remedy`` is offered besides more trials or
         tapers."""
+        if self._is_exact_spectrum:
+            raise ValueError(_exact_spectrum_refusal_message(caller, "shrinkage"))
         alternative = "" if other_remedy is None else f", or {other_remedy}"
         self._validate_counted_observations(
             caller,

@@ -707,8 +707,9 @@ class SpectralTransform(Protocol):
         Whether the taper-mean outer product of the coefficients is an exact
         (population) cross-spectral matrix, the observations being only one
         factorization of it rather than samples (as for :class:`VARSpectrum`).
-        The measures that use each observation or count them, and the
-        jackknife, then raise, and the expectation must average the tapers.
+        The measures that use each observation or count them, the jackknife,
+        the surrogate test, and ``"auto"`` partial-coherence shrinkage then
+        raise, and the expectation must average the tapers.
 
     ``isinstance`` checks only that ``fft``, ``frequencies``, and ``time``
     exist (on Python 3.11 and earlier it also evaluates the two properties).
@@ -4645,7 +4646,9 @@ class VARSpectrum:
     debiased_squared_phase_lag_index,
     debiased_squared_weighted_phase_lag_index, pairwise_phase_consistency,
     delay and group_delay (whose coherence significance test counts the
-    observations), as does :meth:`Connectivity.jackknife`
+    observations), as do :meth:`Connectivity.jackknife`,
+    :meth:`Connectivity.surrogate_test` and ``shrinkage="auto"`` of
+    :meth:`Connectivity.partial_coherence`, which estimate sampling error
     (``is_exact_spectrum`` is ``True``). For those, simulate data from the
     model and estimate them. ``Connectivity.n_observations`` counts these
     pseudo-observations, ``n_signals`` per window, and means nothing for a

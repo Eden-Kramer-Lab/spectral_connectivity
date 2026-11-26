@@ -2,8 +2,8 @@
 
 Their taper-mean outer product is a population spectrum and the observations
 are not samples, so only the measures the registry marks
-``defined_for_exact_spectrum`` are computed; every other one, and the
-jackknife, raises.
+``defined_for_exact_spectrum`` are computed; every other one, the jackknife,
+the surrogate test and "auto" partial-coherence shrinkage raise.
 """
 
 import warnings
@@ -121,6 +121,27 @@ def test_jackknife_refuses_an_exact_spectrum(coefficients):
     connectivity = Connectivity(coefficients, is_exact_spectrum=True)
     with pytest.raises(ValueError, match=r"^jackknife is not defined.*no sampling error"):
         connectivity.jackknife("magnitude_squared_coherence")
+
+
+def test_auto_shrinkage_refuses_an_exact_spectrum(coefficients):
+    """ "auto" estimates sampling variance; a fixed intensity is a function of
+    the spectrum and is computed."""
+    connectivity = Connectivity(coefficients, is_exact_spectrum=True)
+    for call, name in [
+        (lambda: connectivity.partial_coherence(shrinkage="auto"), "partial_coherence"),
+        (connectivity.partial_coherence_shrinkage, "partial_coherence_shrinkage"),
+    ]:
+        with pytest.raises(
+            ValueError, match=rf"^{name}\(.*is not defined for an exact spectrum"
+        ) as info:
+            call()
+        assert "sampling variance" in str(info.value)
+    np.testing.assert_allclose(
+        connectivity.partial_coherence(shrinkage=0.3),
+        Connectivity(coefficients).partial_coherence(shrinkage=0.3),
+        rtol=1e-12,
+        atol=1e-15,
+    )
 
 
 def test_observation_weights_are_refused_on_an_exact_spectrum(coefficients):

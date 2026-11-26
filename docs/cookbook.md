@@ -1033,8 +1033,9 @@ True
 The coefficients that `VARSpectrum.fft()` returns are one factorization of the
 model's spectrum, not samples, so the measures computed from each trial and
 taper or from their count (the phase-locking and phase-lag families, pairwise
-phase consistency, `delay`, `group_delay`) and `jackknife` raise rather than
-return values that depend on that choice. Estimate those from simulated data.
+phase consistency, `delay`, `group_delay`) raise rather than return values that
+depend on that choice, as do `jackknife`, `surrogate_test`, and
+`partial_coherence(shrinkage="auto")`, which estimate sampling error. Estimate those from simulated data.
 
 ```python
 >>> Connectivity.from_var(coefficients, sampling_frequency=500).phase_locking_value()
