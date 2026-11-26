@@ -1141,13 +1141,13 @@ def test_wilson_factorization_sees_the_full_two_sided_spectrum(monkeypatch):
     import spectral_connectivity._granger as granger
 
     factorized = []
-    original = granger.minimum_phase_decomposition
+    original = granger._minimum_phase_factor_and_flags
 
     def recording_decomposition(cross_spectral_matrix, *args, **kwargs):
         factorized.append(to_host(cross_spectral_matrix).copy())
         return original(cross_spectral_matrix, *args, **kwargs)
 
-    monkeypatch.setattr(granger, "minimum_phase_decomposition", recording_decomposition)
+    monkeypatch.setattr(granger, "_minimum_phase_factor_and_flags", recording_decomposition)
     time_series = np.random.default_rng(5).standard_normal((512, 10, 2))
     kwargs = {
         "sampling_frequency": 128,

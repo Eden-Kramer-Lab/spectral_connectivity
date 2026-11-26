@@ -21,7 +21,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
 )
 from tests._backend_helpers import ON_GPU, to_device, to_host, xp
-from tests._var_oracle import _analytic_var
+from tests._var_oracle import _analytic_var, _dense_stable_var, _mirrored
 
 
 def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
@@ -60,6 +60,13 @@ def _real_signal_spectrum(n_fft=16, seed=0, n_signals=3):
     )
 
 
+# Spectra of real-valued signals are exactly conjugate-symmetric and take the
+# half-spectrum iteration; those of complex-valued signals the two-sided one.
+_BOTH_FACTORIZATION_PATHS = pytest.mark.parametrize(
+    "real_signals", [False, True], ids=["two_sided", "half_spectrum"]
+)
+
+
 # A VAR(1) whose autocovariance has decayed to 3% by lag 32 and to 1e-12 by
 # lag 256. With real coefficients its spectrum is conjugate-symmetric and is
 # factored on the non-negative frequencies; the complex rotation makes it not
@@ -84,7 +91,7 @@ def test_factor_reproduces_the_spectrum_on_even_and_odd_grids(n_fft, rotation):
     assert _reconstruction_error(spectrum, factor)[0] < 1e-7
 
 
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+@_BOTH_FACTORIZATION_PATHS
 def test_minimum_phase_decomposition_non_convergence_warns_and_nans(real_signals):
     """Only the unconverged sub-spectra are NaN (entirely), with a counted warning.
 
@@ -381,7 +388,7 @@ def _ignoring_cholesky_start_warning():
         yield
 
 
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+@_BOTH_FACTORIZATION_PATHS
 def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_signals):
     """One rank-deficient sub-spectrum must not NaN-poison the whole batch.
 
@@ -389,8 +396,9 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_sign
     Wilson iteration for the entire batch (all sub-spectra returned NaN, with a
     warning implying the whole dataset was rank-deficient). The healthy windows
     must now converge to the factors they get on their own; only the bad window
-    is NaN, and the warning reports the correct count. ``_warn_on_failure=False``
-    (used by spectral Granger) returns the same factor without the warning.
+    is NaN, and the warning reports the correct count. The core the spectral
+    Granger measures use returns the same factor without the warning, and
+    marks the window unconverged and singular.
     """
     cross_spectral_matrix = to_device(_spectra_with_one_duplicated_channel(real_signals))
     assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
@@ -398,14 +406,63 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_sign
     with _ignoring_cholesky_start_warning():
         with pytest.warns(UserWarning, match="did not converge for 1 of 3"):
             factor = to_host(minimum_phase_decomposition(cross_spectral_matrix))
-        silent = to_host(
-            minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False)
+        warnings.simplefilter("error", UserWarning)
+        warnings.filterwarnings("ignore", message=mpd_module.CHOLESKY_FALLBACK_WARNING_START)
+        factorization = mpd_module._minimum_phase_factor_and_flags(
+            cross_spectral_matrix, 1e-8, 500
         )
+    silent = to_host(factorization.factor)
+    np.testing.assert_array_equal(to_host(factorization.unconverged), [False, True, False])
+    np.testing.assert_array_equal(to_host(factorization.singular), [False, True, False])
     assert factor.shape == cross_spectral_matrix.shape
     assert np.isnan(factor[1]).all()  # rank-deficient window isolated
     healthy = to_host(minimum_phase_decomposition(cross_spectral_matrix[[0, 2]]))
     np.testing.assert_allclose(factor[[0, 2]], healthy, rtol=1e-12)
     np.testing.assert_array_equal(silent, factor)
+
+
+@_BOTH_FACTORIZATION_PATHS
+def test_a_window_with_no_power_does_not_hold_the_batch_to_max_iterations(
+    real_signals, caplog
+):
+    """A window where every signal is zero is returned as NaN and reported as
+    singular, and the other windows stop when they converge: the batch takes
+    the iterations they take on their own.
+
+    Regression: the window's finite all-zero start never converged, so the
+    whole batch ran to ``max_iterations``, and the warning blamed the
+    iteration budget ("within 500 iterations") rather than the window."""
+    import logging
+
+    rng = np.random.default_rng(0)
+    live = _cross_spectrum_of(
+        _lagged_signals(16, rng, dtype=float if real_signals else complex, n_windows=2)
+    )
+    spectrum = np.concatenate([live[:1], np.zeros_like(live[:1]), live[1:]])
+    assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
+
+    def factor_and_iterations(cross_spectral_matrix):
+        caplog.clear()
+        with caplog.at_level(
+            logging.DEBUG, logger="spectral_connectivity.minimum_phase_decomposition"
+        ):
+            factor = minimum_phase_decomposition(to_device(cross_spectral_matrix))
+        n_iterations = sum(message.startswith("iteration: ") for message in caplog.messages)
+        return to_host(factor), n_iterations
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        live_factor, live_iterations = factor_and_iterations(live)
+    with (
+        _ignoring_cholesky_start_warning(),
+        pytest.warns(UserWarning, match=r"for 1 of 3 .*\(a sub-spectrum became singular"),
+    ):
+        factor, iterations = factor_and_iterations(spectrum)
+
+    assert live_iterations < 500
+    assert iterations == live_iterations
+    assert np.isnan(factor[1]).all()
+    np.testing.assert_allclose(factor[[0, 2]], live_factor, rtol=1e-12)
 
 
 def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
@@ -613,12 +670,14 @@ def test__check_convergence_tracks_extra_batch_dims():
 
 
 def test__get_initial_conditions():
-    """The start is the upper-triangular Cholesky factor of the zero-lag matrix.
+    """The start is the upper-triangular square root ``U`` of the zero-lag
+    matrix with ``U U^T = S0``, and the start for ``D S D`` is ``D U``.
 
     Each window's spectrum is ``S(f) = S0 + B e^{-iw} + B^T e^{iw}`` (Hermitian),
     whose inverse-FFT zero lag is exactly the positive-definite ``S0`` with
-    non-zero off-diagonals. The returned factor is ``R = cholesky(S0).T``: upper
-    triangular with a positive diagonal and ``R^T R = S0``.
+    non-zero off-diagonals. ``cholesky(S0).T`` is also upper triangular but has
+    ``U^T U = S0``, and its start for ``D S D`` is ``U D``, which is not the
+    start of the rescaled factor ``D G``.
     """
     n_time_samples, n_fft_samples, n_signals = 3, 11, 2
     omega = 2 * np.pi * np.arange(n_fft_samples) / n_fft_samples
@@ -638,14 +697,19 @@ def test__get_initial_conditions():
     minimum_phase_factor = to_host(_get_initial_conditions(to_device(cross_spectral_matrix)))
 
     assert minimum_phase_factor.shape == (n_time_samples, 1, n_signals, n_signals)
-    expected = np.linalg.cholesky(zero_lag).swapaxes(-1, -2)[:, np.newaxis]
-    np.testing.assert_allclose(minimum_phase_factor, expected, rtol=1e-12)
-    # Upper triangular with a positive diagonal, and R^T R reproduces S0.
+    # Upper triangular with a positive diagonal, and U U^T reproduces S0.
     np.testing.assert_array_equal(minimum_phase_factor[..., 1, 0], 0.0)
     assert np.all(np.diagonal(minimum_phase_factor, axis1=-2, axis2=-1) > 0)
     np.testing.assert_allclose(
-        minimum_phase_factor.swapaxes(-1, -2) @ minimum_phase_factor,
+        minimum_phase_factor @ minimum_phase_factor.swapaxes(-1, -2),
         zero_lag[:, np.newaxis],
+        rtol=1e-12,
+    )
+    scale = np.array([1e-3, 1e3])
+    rescaled = scale[:, np.newaxis] * cross_spectral_matrix * scale[np.newaxis, :]
+    np.testing.assert_allclose(
+        to_host(_get_initial_conditions(to_device(rescaled))),
+        scale[:, np.newaxis] * minimum_phase_factor,
         rtol=1e-12,
     )
 
@@ -719,6 +783,17 @@ def test_minimum_phase_decomposition():
     assert np.allclose(cross_spectral_matrix, expected_cross_spectral_matrix)
 
 
+# A 2x2 minimum-phase MA(1) factor G(z) = G0 + G1 z^-1.
+_MA1_COEFFICIENTS = (np.array([[1.5, 0.4], [0.0, 0.8]]), np.array([[0.3, -0.2], [0.5, 0.1]]))
+
+
+def _minimum_phase_ma1_factor(n_fft):
+    """The minimum-phase MA(1) factor on an ``n_fft`` grid, one window."""
+    g0, g1 = _MA1_COEFFICIENTS
+    omega = 2 * np.pi * np.arange(n_fft) / n_fft
+    return (g0 + g1 * np.exp(-1j * omega)[:, np.newaxis, np.newaxis])[np.newaxis]
+
+
 def test_minimum_phase_decomposition_recovers_matrix_factor():
     """A 2x2 minimum-phase MA(1) factor is recovered, not just its product.
 
@@ -727,9 +802,7 @@ def test_minimum_phase_decomposition_recovers_matrix_factor():
     outside the unit circle, so ``G`` is the unique minimum-phase factor of
     ``S = G G^H``. A transposed or elementwise (non-matmul) factor would fail.
     """
-    n_fft = 64
-    g0 = np.array([[1.5, 0.4], [0.0, 0.8]])
-    g1 = np.array([[0.3, -0.2], [0.5, 0.1]])
+    g0, g1 = _MA1_COEFFICIENTS
     # det(G0 + G1 w) has its roots at |w| ~ 3.04 > 1 (w = z^-1): minimum phase.
     determinant_coefficients = [
         np.linalg.det(g1),
@@ -738,8 +811,7 @@ def test_minimum_phase_decomposition_recovers_matrix_factor():
     ]
     assert np.all(np.abs(np.roots(determinant_coefficients)) > 1)
 
-    omega = 2 * np.pi * np.arange(n_fft) / n_fft
-    expected_factor = (g0 + g1 * np.exp(-1j * omega)[:, np.newaxis, np.newaxis])[np.newaxis]
+    expected_factor = _minimum_phase_ma1_factor(n_fft=64)
     cross_spectral_matrix = np.matmul(expected_factor, _conjugate_transpose(expected_factor))
 
     factor = to_host(minimum_phase_decomposition(to_device(cross_spectral_matrix)))
@@ -900,3 +972,331 @@ def test_real_signal_factorization_matches_full_spectrum_iteration(monkeypatch, 
     )
     mirrored = half_spectrum_factor[..., (-np.arange(n_fft)) % n_fft, :, :]
     np.testing.assert_array_equal(half_spectrum_factor, mirrored.conj())
+
+
+@_BOTH_FACTORIZATION_PATHS
+def test_rescaling_the_signals_rescales_the_factor(real_signals):
+    """Each signal is scaled to unit mean power before the iteration, so the
+    factor of ``D S D`` is ``D G`` to rounding for any positive diagonal ``D``,
+    in every window: the iterates do not see the signals' units."""
+    signals = _lagged_signals(
+        16, np.random.default_rng(0), dtype=float if real_signals else complex
+    )
+    spectrum = _cross_spectrum_of(signals)
+    scale = np.array([[1e-4, 1.0, 1e4], [3.0, 1e-6, 1.0]])  # (window, signal)
+    rescaled = (
+        scale[:, np.newaxis, :, np.newaxis] * spectrum * scale[:, np.newaxis, np.newaxis, :]
+    )
+    assert _is_conjugate_symmetric(to_device(rescaled)) == real_signals
+
+    factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+    rescaled_factor = to_host(minimum_phase_decomposition(to_device(rescaled)))
+
+    np.testing.assert_allclose(
+        rescaled_factor / scale[:, np.newaxis, :, np.newaxis],
+        factor,
+        rtol=0,
+        atol=1e-12 * np.abs(factor).max(),
+    )
+
+
+def _cholesky_returning_nan(matrices):
+    """``_reverse_cholesky`` as CuPy computes it: a matrix that is not
+    positive definite gives NaN instead of raising."""
+    flipped = to_host(matrices)[..., ::-1, ::-1]
+    factor = np.full_like(flipped, np.nan)
+    for index in np.ndindex(flipped.shape[:-2]):
+        with contextlib.suppress(np.linalg.LinAlgError):
+            factor[index] = np.linalg.cholesky(flipped[index])
+    return to_device(factor[..., ::-1, ::-1])
+
+
+@_BOTH_FACTORIZATION_PATHS
+@pytest.mark.parametrize("cholesky", ["raises", "returns_nan"])
+def test_a_zero_power_signal_is_factored_as_a_rounding_level_white_signal(
+    real_signals, cholesky, monkeypatch
+):
+    """A signal with no power is factored as an independent white signal and
+    unscaled by ``eps`` times the weakest other signal's scale. Its row of
+    the factor is then ``eps`` of that scale, its column rounding, it
+    reconstructs a power ``eps²`` of the weakest signal's, the other signals
+    get the factor of their own spectrum whatever their power (here 1e-20),
+    and no Cholesky fallback is needed, also where the Cholesky returns NaN
+    instead of raising (CuPy).
+
+    Regression: the dead signal kept a scale of 1 while the others were
+    scaled to unit power, so its row, of the iteration's absolute residual
+    (about 1e-8), reconstructed a power of 3e-17 against 1e-20 for the live
+    signals; with a NaN-returning Cholesky its window started from NaN and
+    was returned as NaN."""
+    signals = _lagged_signals(
+        32, np.random.default_rng(2), dtype=float if real_signals else complex, n_signals=3
+    )
+    spectrum = 1e-20 * _cross_spectrum_of(signals)
+    spectrum[0, :, 1, :] = 0
+    spectrum[0, :, :, 1] = 0
+    assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
+    if cholesky == "returns_nan":
+        monkeypatch.setattr(mpd_module, "_reverse_cholesky", _cholesky_returning_nan)
+    live = [0, 2]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+        live_factor = to_host(
+            minimum_phase_decomposition(to_device(spectrum[:1][..., live, :][..., live]))
+        )[0]
+
+    assert np.isfinite(factor).all()
+    weakest_power = spectrum[0, :, live, live].real.mean(axis=-1).min()
+    eps = np.finfo(float).eps
+    assert np.abs(factor[0, :, 1, :]).max() <= 1.01 * eps * np.sqrt(weakest_power)
+    # The other signals' entries in its column are rounding of their own size.
+    row_size = np.abs(factor[0][..., live, :]).max(axis=(0, 2))
+    assert (np.abs(factor[0][..., live, 1]) < 1e-14 * row_size).all()
+    reconstructed = factor[0] @ factor[0].conj().swapaxes(-1, -2)
+    assert np.abs(reconstructed[:, 1, 1]).max() <= 1.1 * eps**2 * weakest_power
+    np.testing.assert_allclose(
+        factor[0][..., live, :][..., live],
+        live_factor,
+        rtol=0,
+        atol=1e-9 * np.abs(live_factor).max(),
+    )
+    assert _reconstruction_error(spectrum, factor).max() < 1e-7
+
+
+@_BOTH_FACTORIZATION_PATHS
+@pytest.mark.parametrize("cholesky", ["raises", "returns_nan"])
+def test_a_window_where_no_signal_has_power_is_nan(real_signals, cholesky, monkeypatch):
+    """A window whose spectrum is zero has nothing to factor: it is NaN with
+    the non-convergence warning, also where the Cholesky returns NaN instead
+    of raising (CuPy), and the other window is factored as on its own.
+
+    Regression: every signal of that window was factored as a white signal,
+    so its factor was a rounding-level identity without a warning."""
+    signals = _lagged_signals(
+        32, np.random.default_rng(2), dtype=float if real_signals else complex, n_signals=3
+    )
+    spectrum = _cross_spectrum_of(signals)
+    spectrum[1] = 0
+    assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
+    if cholesky == "returns_nan":
+        monkeypatch.setattr(mpd_module, "_reverse_cholesky", _cholesky_returning_nan)
+    live_factor = to_host(minimum_phase_decomposition(to_device(spectrum[:1])))
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+
+    assert any("did not converge for 1 of 2" in str(w.message) for w in record)
+    assert np.isnan(factor[1]).all()
+    np.testing.assert_allclose(
+        factor[:1], live_factor, rtol=0, atol=1e-12 * np.abs(live_factor).max()
+    )
+
+
+def test_a_single_precision_signal_near_its_largest_value_is_scaled_by_its_power():
+    """The mean power of a complex64 spectrum is accumulated in float64, so a
+    signal whose power sums past float32's largest value (here 1.6e37 at each
+    of 64 bins) gets the square root of its power as its scale, not the
+    fallback of 1 after an overflow (with a NumPy RuntimeWarning), and its
+    factor is that of the same spectrum in complex128."""
+    spectrum = _cross_spectrum_of(_lagged_signals(64, np.random.default_rng(0), n_windows=1))
+    scale = np.array([5e17, 1.0, 1e-3])
+    rescaled = scale[:, np.newaxis] * spectrum * scale[np.newaxis, :]
+    single = rescaled.astype(np.complex64)
+    power = np.diagonal(single, axis1=-2, axis2=-1).real.mean(axis=-2, dtype=float)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        signal_scale, _, _ = mpd_module._signal_scale(to_device(single))
+        factor = to_host(minimum_phase_decomposition(to_device(single)))
+    double_factor = to_host(minimum_phase_decomposition(to_device(single.astype(complex))))
+
+    np.testing.assert_allclose(to_host(signal_scale), np.sqrt(power), rtol=1e-12)
+    row_size = np.abs(double_factor).max(axis=(-3, -1), keepdims=True)
+    np.testing.assert_allclose(factor / row_size, double_factor / row_size, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("n_fft", [64, 65])
+def test_an_all_pass_rotation_of_the_factor_winds_around_zero(n_fft):
+    """``G U`` reproduces ``G Gᴴ`` for any unitary ``U(f)``. The all-pass
+    ``U = diag(b, 1)`` with ``b = (z⁻¹ - a) / (1 - a z⁻¹)`` is causal with a
+    zero inside the unit circle (in ``z⁻¹``), so the product is causal but
+    not minimum phase and its determinant winds once around zero, while the
+    determinants of ``G`` and of ``G`` times a constant unitary matrix do not
+    wind.
+
+    The anticausal all-pass ``(z - a) / (1 - a z)`` also winds once on the
+    grid, but the recount reads a factor as a causal filter wrapped round the
+    grid (as the Wilson iteration builds it), which for that one is a
+    polynomial of degree ``n - 1`` whose count changes with every finer grid,
+    so it is not counted (NaN), as documented."""
+    factor = _minimum_phase_ma1_factor(n_fft)
+    spectrum = factor @ _conjugate_transpose(factor)
+    delay = np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
+    all_pass = np.zeros((2, n_fft, 2, 2), dtype=complex)
+    all_pass[0, :, 0, 0] = (delay - 0.5) / (1 - 0.5 * delay)
+    all_pass[1, :, 0, 0] = (1 / delay - 0.5) / (1 - 0.5 / delay)
+    all_pass[..., 1, 1] = 1
+    rotation = np.array([[np.cos(0.3), -np.sin(0.3)], [np.sin(0.3), np.cos(0.3)]])
+    factors = np.concatenate([factor, factor @ rotation, factor @ all_pass])
+    spectra = np.concatenate([spectrum] * 4)
+    np.testing.assert_allclose(factors @ _conjugate_transpose(factors), spectra, atol=1e-12)
+    phase = mpd_module._determinant_phase(to_device(factors))
+
+    winding = to_host(mpd_module._determinant_winding_number(to_device(factors)))
+
+    # det(G U) = b det G, and the causal b winds once round 0, clockwise as
+    # ω increases; the anticausal one winds once anticlockwise on the grid.
+    np.testing.assert_allclose(
+        to_host(mpd_module._grid_winding_number(phase)), [0, 0, -1, 1], atol=1e-12
+    )
+    np.testing.assert_allclose(winding[:3], [0, 0, -1], atol=1e-12)
+    # Not counted (NaN), or counted as winding; never a false 0.
+    assert np.isnan(winding[3]) or abs(winding[3]) > 0.5
+
+
+@_BOTH_FACTORIZATION_PATHS
+def test_a_winding_aliased_by_a_coarse_grid_is_not_reported(real_signals):
+    """Eight independent MA(1) signals with factor ``h = 1 - c z⁻¹``,
+    ``|c| = 0.7``, on 16 bins: the factor is diagonal and minimum phase,
+    within 0.7^16 (the wrap-around of ``1 / h`` on the grid) of ``h``, but
+    ``det G ≈ h⁸`` turns by up to 7.3 radians between bins, each step
+    aliased to under ``π / 2``, so the grid counts a winding of -2. A nonzero
+    count is recounted on finer grids, interpolating the factor's
+    coefficients, where it is 0, so no warning is given. An imaginary ``c``
+    makes the spectrum asymmetric, for the two-sided iteration, and keeps
+    the count of -2 (``c = 0.7 e^{0.3i}`` turns by 2.07 radians in a step, so
+    the grid does not count it and the recount is never reached)."""
+    n_fft, n_signals = 16, 8
+    coefficient = 0.7 if real_signals else 0.7j
+    filter_response = 1 - coefficient * np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
+    power = np.abs(filter_response) ** 2
+    if real_signals:  # exactly symmetric, not only to rounding
+        power = _mirrored(power)
+    diagonal = (slice(None), np.arange(n_signals), np.arange(n_signals))
+    spectrum = np.zeros((n_fft, n_signals, n_signals), dtype=complex)
+    spectrum[diagonal] = power[:, np.newaxis]
+    assert _is_conjugate_symmetric(to_device(spectrum)) == real_signals
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        factor = to_host(minimum_phase_decomposition(to_device(spectrum[np.newaxis])))[0]
+
+    phase = mpd_module._determinant_phase(to_device(factor))
+    assert float(mpd_module._grid_winding_number(phase)) == pytest.approx(-2)
+    expected = np.zeros_like(spectrum)
+    expected[diagonal] = filter_response[:, np.newaxis]
+    np.testing.assert_allclose(factor, expected, rtol=0, atol=2 * 0.7**n_fft)
+    assert _reconstruction_error(spectrum[np.newaxis], factor[np.newaxis])[0] < 1e-12
+
+
+def test_the_recount_keeps_the_winding_of_a_causal_factor_with_a_slow_tail():
+    """``g = (1 - z₀ z⁻¹) / ((1 - p₁ z⁻¹)(1 - p₂ z⁻¹))`` on 32 bins, with its
+    zero ``z₀`` outside the unit circle (``|z₀| = 1.12``): a causal factor
+    that is not minimum phase, winding once round zero clockwise. Its pole
+    at radius 0.91 leaves a tail of a tenth of its largest lag coefficient at
+    lag 16. The recount reads the lags as causal, 0 to ``n - 1``, as the
+    Wilson iteration builds them, and keeps the count of -1.
+
+    Regression: the recount interpolated on lags -16 to 15, read that tail
+    as negative lags and counted 0, so the factor was not flagged."""
+    n_fft = 32
+    delay = np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
+    zero, pole_1, pole_2 = 1.112616 + 0.144738j, 0.8534 - 0.3145j, 0.2607 + 0.7289j
+    factor = (1 - zero * delay) / ((1 - pole_1 * delay) * (1 - pole_2 * delay))
+    factor = factor[np.newaxis, :, np.newaxis, np.newaxis]
+    phase = mpd_module._determinant_phase(to_device(factor[0]))
+
+    winding = to_host(mpd_module._determinant_winding_number(to_device(factor)))
+
+    assert float(mpd_module._grid_winding_number(phase)) == pytest.approx(-1)
+    assert winding[0] == pytest.approx(-1)
+
+
+def test_winding_number_of_a_determinant_too_small_to_multiply_is_counted():
+    """The phase increments are taken from the unit phase of the determinant,
+    so a factor whose determinant is about 8e-189 (64 signals correlated at
+    0.999999) still counts the winding of a one-sample delay on one signal,
+    where the product of neighbouring determinants underflows to zero."""
+    n_fft, n_signals, correlation = 64, 64, 0.999999
+    covariance = np.full((n_signals, n_signals), correlation) + (1 - correlation) * np.eye(
+        n_signals
+    )
+    delay = np.exp(-2j * np.pi * np.arange(n_fft) / n_fft)
+    factor = np.tile(np.linalg.cholesky(covariance), (n_fft, 1, 1)).astype(complex)
+    factor[..., -1] *= delay[:, np.newaxis]
+    with np.errstate(all="ignore"):  # NumPy's det and slogdet warn here
+        assert abs(np.linalg.det(factor[0])) < 1e-180
+        winding = to_host(
+            mpd_module._determinant_winding_number(to_device(factor[np.newaxis]))
+        )
+
+    assert winding[0] == pytest.approx(-1)
+
+
+def test_winding_number_is_not_counted_where_the_phase_jumps_between_bins():
+    """A determinant whose phase turns by pi / 2 or more between bins cannot
+    be counted reliably (an aliased count of 2 came with turns of 1.9-3.1), so
+    it is NaN, not tested, rather than a spurious winding, while one that
+    turns by pi / 4 per bin is counted and flagged."""
+    n_fft = 8
+    omega = 2 * np.pi * np.arange(n_fft) / n_fft
+    slow = np.exp(1j * omega)[np.newaxis, :, np.newaxis, np.newaxis]
+    fast = np.exp(3j * omega)[np.newaxis, :, np.newaxis, np.newaxis]
+    winding = to_host(
+        mpd_module._determinant_winding_number(to_device(np.concatenate([slow, fast])))
+    )
+    # ``slow`` is the anticausal advance z (lag -1) and winds once on the
+    # grid. The recount reads a factor as a causal filter wrapped round the
+    # grid, as the Wilson iteration builds it, so it reads that lag as
+    # n - 1 and counts -7; either count flags it, which is what the check is
+    # for, so only that is asserted.
+    assert np.isfinite(winding[0])
+    assert abs(winding[0]) > 0.5
+    assert np.isnan(winding[1])
+
+
+@_BOTH_FACTORIZATION_PATHS
+def test_a_factor_that_is_not_minimum_phase_warns_on_both_paths(real_signals, monkeypatch):
+    """From the start ``chol(R0)ᵀ``, the exact spectrum of this dense VAR
+    of signals of comparable power converges to a factor whose determinant
+    winds once around zero, on the two-sided path and on the half-spectrum
+    one that real signals take, where the determinant on the negative
+    frequencies is mirrored from the others before its winding is counted.
+    From the covariant start (``U Uᵀ = R0``) it factors without a
+    warning."""
+    coefficients, noise_covariance = _dense_stable_var(3, 1, 0.99, seed=857449258)
+    spectrum = _analytic_var(coefficients, noise_covariance, 4096)[2]
+    spectrum = to_device(_mirrored(spectrum) if real_signals else spectrum)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        minimum_phase_decomposition(spectrum[np.newaxis])
+    monkeypatch.setattr(
+        mpd_module,
+        "_reverse_cholesky",
+        lambda matrices: xp.linalg.cholesky(matrices).swapaxes(-1, -2),
+    )
+    with pytest.warns(UserWarning, match="not minimum phase for 1 of 1 sub-spectrum"):
+        factor = minimum_phase_decomposition(spectrum[np.newaxis])
+    assert to_host(mpd_module._determinant_winding_number(factor))[0] == pytest.approx(-1)
+
+
+def test_an_infinite_power_window_is_unconverged_without_a_runtime_warning():
+    """A window with an infinite power is non-finite: it is NaN with the
+    non-convergence warning, and scaling its signals emits no NumPy
+    ``RuntimeWarning`` on the way."""
+    spectrum = _cross_spectrum_of(
+        _lagged_signals(32, np.random.default_rng(2), dtype=complex, n_windows=2)
+    )
+    spectrum[1, :, 2, :] = 0
+    spectrum[1, :, :, 2] = 0
+    spectrum[1, :, 2, 2] = np.inf
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        with pytest.warns(UserWarning, match="did not converge for 1 of 2"):
+            factor = to_host(minimum_phase_decomposition(to_device(spectrum)))
+    assert np.isnan(factor[1]).all()
+    assert np.isfinite(factor[0]).all()
