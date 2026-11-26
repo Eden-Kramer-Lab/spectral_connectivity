@@ -4096,9 +4096,12 @@ class VARSpectrum:
         factor = xp.matmul(transfer_function, innovation_factor[:, xp.newaxis])
         del transfer_function
         # Real at 0 Hz and Nyquist, as the lag polynomial is up to rounding.
-        factor[:, 0] = factor[:, 0].real
+        # Zero it through the ``imag`` view: CuPy 14 drops
+        # ``x[:, k] = x[:, k].real`` for more than one window (the source
+        # aliases the destination).
+        factor[:, 0].imag[...] = 0
         if n_fft_samples % 2 == 0:
-            factor[:, -1] = factor[:, -1].real
+            factor[:, -1].imag[...] = 0
         factor *= np.sqrt(n_signals / self.sampling_frequency)
         n_nonnegative = factor.shape[1]
         # (window, frequency, signal, taper) -> (window, taper, frequency, signal),
