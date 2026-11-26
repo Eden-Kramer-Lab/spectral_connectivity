@@ -269,6 +269,194 @@ Before 3.0, advanced settings were passed as plain keyword arguments, e.g.
 through 3.x, with the same result and a `DeprecationWarning` naming the
 mapping to use, and is removed in 4.0.
 
+## Leave out artifacts and missing samples
+
+Mark the samples to leave out with `artifact_samples`, a `Multitaper` (and
+`ShortTimeFourierTransform`) setting, so in `transform_kwargs` for the wrapper. `True` marks an **artifact**, a
+sample to leave out, as MNE's `BAD_` annotations, FieldTrip's artifact
+definitions, and NumPy masked arrays do; a mask that marks the valid samples
+as `True` must be inverted (`~mask`). `"nonfinite"` leaves out every NaN or
+infinite sample:
+
+```python
+>>> with_gap = time_series.copy()
+>>> with_gap[600:650, 1, :] = np.nan  # a gap in trial 1, 1.2-1.3 s
+>>> ppc = multitaper_connectivity(
+...     with_gap,
+...     sampling_frequency=500,
+...     time_window_duration=0.5,
+...     method="pairwise_phase_consistency",
+...     transform_kwargs={"artifact_samples": "nonfinite"},
+... )
+>>> bool(np.isfinite(ppc.isel(source=0, target=1)).all())
+True
+
+```
+
+A trial's window is used only if none of its samples is an artifact, so choose
+windows that fit between artifacts: here the 50-sample gap drops all 250
+samples of trial 1's third 0.5 s window, a quarter of that window's data, and a
+1 s window would drop half the recording of trial 1. Each time window averages
+the trials it keeps, a window keeping none is NaN in every measure, and
+dropping more than half of the trial windows warns. The outputs mark what is
+kept: `Multitaper.valid_windows` is `True` at the kept trial windows, and the
+result's `transform_parameters_json` records the kind of mask and the numbers
+of artifact samples and dropped trial windows (`n_observations` stays the raw
+count).
+
+Artifact intervals given in seconds, such as an MNE `BAD_` annotation's onset
+and duration, become a mask that is `True` from each onset for its duration,
+with the time series' `(n_time_samples, n_trials)` layout:
+
+```python
+>>> sampling_frequency = 500
+>>> times = np.arange(time_series.shape[0]) / sampling_frequency
+>>> artifact_samples = np.zeros(time_series.shape[:2], dtype=bool)
+>>> for trial, start, stop in [(1, 1.2, 1.3), (3, 0.1, 0.15)]:  # (trial, s, s)
+...     artifact_samples[(times >= start) & (times < stop), trial] = True
+>>> coherence = multitaper_connectivity(
+...     time_series,
+...     sampling_frequency=sampling_frequency,
+...     time_window_duration=0.5,
+...     method="magnitude_squared_coherence",
+...     transform_kwargs={"artifact_samples": artifact_samples},
+... )
+>>> coherence.sizes["time"]
+4
+
+```
+
+A FieldTrip artifact definition (`cfg.artfctdef.<type>.artifact`) gives each
+interval as a row `[begsample, endsample]` of 1-based sample numbers that
+include both ends: FieldTrip marks `begsample:endsample`
+([`trl2boolvec`](https://github.com/fieldtrip/fieldtrip/blob/00ecb6e750c6e0d22e087be1874834e689a475d8/private/trl2boolvec.m)).
+In Python that is the slice `begsample - 1:endsample`. The numbers count from
+the start of the recording, so in an epoch that starts at recording sample
+`trl_begsample` (the first column of FieldTrip's `trl`) the slice is
+`begsample - trl_begsample:endsample - trl_begsample + 1`:
+
+```python
+>>> artifact = np.array([[601, 650]])  # one row, samples 601 to 650 of the recording
+>>> recording_mask = np.zeros(1000, dtype=bool)
+>>> for begsample, endsample in artifact:
+...     recording_mask[begsample - 1 : endsample] = True
+>>> int(recording_mask.sum()), int(np.flatnonzero(recording_mask)[0])  # 50 samples from index 600
+(50, 600)
+
+```
+
+A `(n_time_samples,)` mask is shared by every trial. A mask may also mark each
+channel, with the time series' own `(n_time_samples, n_trials, n_signals)`
+shape: an artifact in one channel then leaves the sample out of every channel,
+since every cross-spectrum needs both channels at the same samples. For a 2-D
+`(n_time_samples, n_channels)` time series give the wrapper a
+`(n_time_samples,)` or `(n_time_samples, n_channels)` mask. For an
+`xarray.DataArray` time series, a `DataArray` mask is aligned by dimension
+name: it needs the time dimension, and is shared by every trial or channel
+when it lacks that dimension. An unlabeled mask is read in the time, trial,
+channel order.
+
+The measures that count observations (listed under
+`Connectivity.n_valid_observations`) count each bin's kept observations.
+`n_valid_observations` gives those counts, one per time window and
+frequency, for the statistics functions:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> from spectral_connectivity.statistics import coherence_significance_pvalue
+>>> multitaper = Multitaper(
+...     time_series,
+...     sampling_frequency=sampling_frequency,
+...     time_window_duration=0.5,
+...     artifact_samples=artifact_samples,
+... )
+>>> connectivity = Connectivity.from_transform(multitaper)
+>>> connectivity.n_valid_observations[:, 0].tolist()  # of 4 trials x 5 tapers
+[15, 20, 15, 20]
+>>> p_values = coherence_significance_pvalue(
+...     connectivity.coherency(),
+...     connectivity.n_valid_observations[..., np.newaxis, np.newaxis],
+... )
+
+```
+
+A bin that keeps fewer than two observations, such as a window that keeps no
+trial, has no test, and its p-value is NaN. Every statistics function that
+takes a count reads such an array the same way: an entry below the fewest
+observations the statistic needs (two for the coherence statistics, one for
+the power statistics) gives NaN there, while a single count below it raises.
+
+Dropping a window throws away its valid samples too. With
+`artifact_handling="missing_data_tapers"` (a `Multitaper` setting; for the
+wrapper, in `transform_kwargs` beside `artifact_samples`) a trial window
+containing artifacts is estimated from its valid samples instead, with
+missing-data Slepian tapers: the sequences that are zero at its artifacts and
+most concentrated in the bandwidth, the DPSS of a window with gaps (Bronez
+1988; Chave 2019). It keeps those with over 90% of their energy in the band,
+so it can keep fewer tapers than a clean window. A window keeping fewer than
+2 is still dropped, with a warning: one with too few valid samples, or one
+whose artifacts recur more often than every `1 / frequency_resolution`
+seconds (here 1 / 12 Hz, 83 ms). `Multitaper.n_kept_tapers` says what each
+trial window keeps; here the two windows with artifacts keep 4 and 3 of
+their 5 tapers:
+
+```python
+>>> multitaper = Multitaper(
+...     time_series,
+...     sampling_frequency=sampling_frequency,
+...     time_window_duration=0.5,
+...     artifact_samples=artifact_samples,
+...     artifact_handling="missing_data_tapers",
+... )
+>>> multitaper.n_kept_tapers.tolist()  # (n_time_windows, n_trials)
+[[5, 5, 5, 4], [5, 5, 5, 5], [5, 3, 5, 5], [5, 5, 5, 5]]
+
+```
+
+Which to choose:
+
+- `"drop"` when few windows have artifacts, or when the spectrum spans more
+  than about 1000 in power (strong peaks over a low floor, or steep 1/f
+  power), where the gapped windows' extra leakage matters. A spectrum's span
+  is its largest true power over its smallest at every frequency from 0 Hz to
+  Nyquist, those below the band of interest included, since leakage brings
+  power from any of them;
+- `"missing_data_tapers"` when `"drop"` would lose much of the data, the
+  artifacts are short, and the spectrum spans less than about 100;
+- in between, compute both on your data and compare.
+
+:::{note}
+The gapped windows' tapers are less concentrated than the DPSS (down to 0.9
+rather than about 0.95), and fewer of them smooth less, so their expected
+spectrum differs from that without gaps. For 64-sample windows (NW = 3) and
+the gap patterns tested (a 4-, a 12-, and two 3-sample gaps), away from 0 Hz
+and Nyquist, it differs by about 5% for a spectrum spanning about 120 (an
+AR(2) with poles of radius 0.77) and by up to 37% for one spanning 2400
+(poles of radius 0.95 at 0.1 cycles per sample, two 3-sample gaps), each
+span taken over the window's 64 FFT frequencies. Other gap positions gave
+1-13% (a single 4- to 12-sample gap at 165 positions, under 6% for 68% of
+them) and 7-70% (two 3-sample gaps at 325, median 34%), and the difference
+grows toward Nyquist. Several short gaps can leak far more than one long one,
+depending on how far apart they are. For 500-sample windows (NW = 4) of an
+AR(1) with coefficient 0.99 (spanning about 40000), a bandwidth or more above
+0 Hz, one 20-sample gap at the window's center (samples 240-259) changed the
+expected spectrum by 2.4% (1.5-10.3% over its positions, above 5% only within
+25 samples of either end), and two 5-sample gaps at samples 200 and 300 by 52%.
+Over a grid of positions two 5-sample gaps changed it by 6-70% (median 41%)
+when 30 or more samples apart, but by 3-36% (median 8%) when closer, as they
+then act much like one gap (4.9% at samples 240 and 255). In exchange the
+valid samples are used: with three of four trials gapped in every window, the
+variance of white-noise power is a third of that of `"drop"`. Building the
+transform finds the tapers of each distinct pattern of artifacts in a trial
+window, about 2 ms per pattern for 1000 samples and 65 ms for 60000. With
+multithreaded OpenBLAS on many cores, as in the NumPy 1.24 and SciPy
+1.11-era wheels, that eigensolver (ARPACK) can be 190-840 times slower per
+pattern (600 ms against 3.2 ms for 1000 samples at NW = 4, on 18 threads). If
+building the transform is slow, set `OPENBLAS_NUM_THREADS=1` before starting
+Python, or build it within `threadpoolctl.threadpool_limits(1)`. Windows
+without artifacts are unchanged.
+:::
+
 ## Group measures: canonical coherence between areas
 
 Group measures (`list_measures(category="group_pairwise")` and
@@ -355,6 +543,102 @@ max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * (b^H S_tt b)),
 
 ```
 
+## Test against surrogate data
+
+`Connectivity.surrogate_test` recomputes a measure on surrogate coefficients
+built to satisfy a null hypothesis and returns Monte Carlo p-values. `kind`
+sets the null, so choose it for the question:
+
+| Question | `kind` | Needs | A shared stimulus-locked response |
+| --- | --- | --- | --- |
+| Do the signals covary from trial to trial? | `"trial_shuffle"` | 2+ trials | stays in the null |
+| Are the signals independent at all? | `"phase_rotation"` | 2+ trials (or averaged non-overlapping time windows), the half bandwidth | is rejected |
+| Is there more than zero-lag mixing? | `"conjugation"` | 2+ trials (or averaged non-overlapping time windows) | is rejected if lagged |
+
+- `"trial_shuffle"` shuffles each signal's trials, keeping each trial whole.
+  The expectation must average trials.
+- `"phase_rotation"` rotates each trial (every taper alike) by a random
+  phase. The frequencies within the transform's half bandwidth of 0 Hz and
+  Nyquist are not tested; `Connectivity.from_transform` records it for a `Multitaper`
+  (`frequency_resolution / 2`), and `half_bandwidth=` overrides it. A common
+  stimulus-locked response is rejected too; to ask about interaction beyond
+  it, use `"trial_shuffle"`. Subtracting each signal's mean across trials
+  first leaves p-values too small unless there are many trials (5.5-7.0% of
+  tests rejected at nominal 5% with 10 trials, about 5% with 40).
+- `"conjugation"` conjugates (time-reverses) random trials. 0 Hz and Nyquist
+  of a real signal, which it leaves unchanged, are not tested. Instantaneous mixing of
+  independent sources is in its null, so pair it with
+  a measure of lagged interaction: `imaginary_coherence`, the phase-lag
+  indices, `phase_slope_index`, or pairwise spectral Granger. With
+  `magnitude_squared_coherence` it asks only whether the coupling exceeds what
+  a real coherency gives.
+- `"phase_rotation"` and `"conjugation"` randomize whole trials, so each needs
+  2 or more: a trial's tapers are correlated wherever the spectrum is not flat
+  across the half bandwidth (near a peak, or on a steep 1/f spectrum), and
+  randomizing them separately would reject independent signals far too
+  often. With one recording, average non-overlapping time windows instead
+  (`expectation_type="time_tapers"`, with `time_window_step` at least
+  `time_window_duration`), which makes each window a unit; that holds only for
+  windows longer than the signals' memory, which a narrow spectral peak makes
+  long. Windows that overlap, even by half, have correlated coefficients, so
+  every window of a trial shares its draw, and one recording in overlapping
+  windows is refused. `Connectivity.from_transform` records whether the
+  windows overlap; for coefficients passed directly, pass
+  `time_bins_are_disjoint=True` if they do not.
+
+Here signal 1 is signal 0 delayed by 3 samples (6 ms) and signal 2 is
+independent:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> rng = np.random.default_rng(1)
+>>> leader = rng.standard_normal((503, 10))
+>>> lagged = np.stack([leader[3:], leader[:-3], rng.standard_normal((500, 10))], axis=-1)
+>>> lagged += 0.5 * rng.standard_normal(lagged.shape)
+>>> multitaper = Multitaper(lagged, sampling_frequency=500, time_halfbandwidth_product=2)
+>>> connectivity = Connectivity.from_transform(multitaper)
+>>> result = connectivity.surrogate_test(
+...     "imaginary_coherence", kind="conjugation", n_surrogates=199, random_state=0
+... )
+>>> result.p_value.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+(1, 251, 3, 3)
+>>> significant = result.fwer_p_value <= 0.05  # family-wise over every frequency and pair
+>>> bool(significant[0, 40, 0, 1]), bool(significant[..., [0, 1], [2, 2]].any())
+(True, False)
+
+```
+
+Report `fwer_p_value` to say *where* the measure is significant: it adjusts
+for testing every element of a family. `p_value` is uncorrected, the test of
+one element (one pair at one frequency) chosen before looking. The diagonal is
+not tested and its p-values are NaN. By default every element is one family;
+`fwer_axis` names the axes of one family, e.g. `(1, 2, 3)` for frequencies and
+pairs within each time window, and the result stores the axes it used:
+
+```python
+>>> per_window = connectivity.surrogate_test(
+...     "magnitude_squared_coherence",
+...     kind="trial_shuffle",
+...     fwer_axis=(1, 2, 3),
+...     n_surrogates=199,
+...     random_state=0,
+... )
+>>> per_window.fwer_axis, per_window.alternative
+((1, 2, 3), 'greater')
+>>> per_window.null_maxima.shape  # (n_surrogates, n_time_windows): one maximum per family
+(199, 1)
+>>> bool(per_window.fwer_p_value[0, 40, 0, 1] <= 0.05)
+True
+>>> rotated = connectivity.surrogate_test(
+...     "magnitude_squared_coherence", kind="phase_rotation", n_surrogates=199, random_state=0
+... )
+>>> connectivity.half_bandwidth  # recorded from the Multitaper: 2 Hz
+2.0
+>>> bool(np.isnan(rotated.p_value[0, :2, 0, 1]).all())  # 0 and 1 Hz are within it of 0 Hz
+True
+
+```
+
 ## Global coherence pooled over time windows
 
 `method="global_coherence"` decomposes each time window's trials and tapers
@@ -394,6 +678,41 @@ above `1 / n_signals`, so compare values only at matched counts. This is not
 the estimator of Purdon et al. (2013): it takes the mean over windows, not the
 median; it decomposes the raw cross-spectrum, with no Laplacian unless you
 re-reference the signals first; and it returns no significance test.
+
+## Partial coherence with many signals and few trials
+
+Partial coherence conditions each pair on every other signal, so it needs
+several times as many observations (trials x tapers) as signals. With at most
+about 2.5 per signal, shrink toward the diagonal: `"auto"` estimates the
+intensity for each time window and frequency. The result records the setting,
+not the intensities; compute those from the same transform to report them.
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> rng = np.random.default_rng(1)
+>>> recording = rng.standard_normal((1000, 4, 16))  # (time, trials, signals)
+>>> recording[..., 1:] += 0.5 * recording[..., :-1]  # neighbors share a source
+>>> partial = multitaper_connectivity(
+...     recording,
+...     sampling_frequency=500,
+...     time_halfbandwidth_product=3,
+...     method="partial_coherence",
+...     connectivity_kwargs={"shrinkage": "auto"},
+... )
+>>> partial.attrs["n_observations"], partial.attrs["arg_shrinkage"]  # 4 trials x 5 tapers
+(20, 'auto')
+>>> transform = Multitaper(recording, sampling_frequency=500, time_halfbandwidth_product=3)
+>>> intensity = Connectivity.from_transform(transform).partial_coherence_shrinkage()
+>>> intensity.shape  # (n_time_windows, n_frequencies)
+(1, 501)
+>>> bool(0 < intensity.min() <= np.median(intensity) <= intensity.max() < 1)
+True
+
+```
+
+Report the median and range of `intensity` with the result. Shrinkage biases
+partial coherence toward 0, and `"auto"` shrinks less with more trials, so
+compare conditions at matched trial counts or with one fixed `shrinkage`.
 
 ## Collapse into frequency bands
 
@@ -689,6 +1008,122 @@ True
 
 ```
 
+## Exact connectivity of a VAR model
+
+`VARSpectrum` is a transform whose spectrum is that of a vector autoregressive
+(VAR) model, `x(t) = sum_k A_k x(t - k) + e(t)`, so every measure of the
+cross-spectral matrix it gives is the model's population value, with no
+estimation error: what an estimate of data simulated from the model should
+find, or the connectivity of a model fitted elsewhere. Label its results with
+`connectivity_to_xarray(transform, method)`, one measure per call
+(`multitaper_connectivity` estimates from a time series and does not take a
+transform); `Connectivity.from_var(...)`, the shortcut for
+`Connectivity.from_transform(VARSpectrum(...))`, gives the arrays.
+`coefficients[k - 1]` is `A_k`, with the lag on the first axis (for MVGC's
+MATLAB layout `A(:, :, k)`, pass `np.moveaxis(A, -1, 0)`), and its entry
+`[i, j]` is the effect of signal `j` on signal `i`, as in `simulate_MVAR`: it
+appears in the results as `source=j`, `target=i`. `noise_covariance` is the
+covariance of `e(t)` (the identity by default).
+
+```python
+>>> from spectral_connectivity import Connectivity, VARSpectrum
+>>> from spectral_connectivity.simulate import simulate_MVAR
+>>> from spectral_connectivity.wrapper import connectivity_to_xarray
+>>> coefficients = np.array(
+...     [[[0.5, 0.0], [0.4, 0.5]], [[-0.6, 0.0], [0.0, -0.6]]]
+... )  # (n_lags, n_signals, n_signals): signal "a" drives "b", never the reverse
+>>> var = VARSpectrum(coefficients, sampling_frequency=500)
+>>> granger = connectivity_to_xarray(
+...     var, "pairwise_spectral_granger_prediction", signal_names=["a", "b"]
+... )
+>>> bool(granger.sel(source="a", target="b").max() > 0.1)
+True
+>>> bool(granger.sel(source="b", target="a").max() < 1e-9)  # exactly 0 up to rounding
+True
+
+```
+
+`power` is the model's one-sided power spectral density, in the units a
+multitaper estimate of the simulated process converges to. Give the model the
+estimate's frequency grid (an `n_fft_samples` equal to the estimate's, or a
+multiple of it), and, without detrending (which removes 0 Hz), 200 trials of
+one-second windows agree with it to within their sampling error, 3% per bin:
+
+```python
+>>> simulated = simulate_MVAR(coefficients, n_time_samples=500, n_trials=200, random_state=0)
+>>> estimate = multitaper_connectivity(
+...     simulated, sampling_frequency=500, method="power", detrend_type=None
+... ).isel(time=0)
+>>> on_its_grid = VARSpectrum(coefficients, sampling_frequency=500, n_fft_samples=500)
+>>> true_power = connectivity_to_xarray(on_its_grid, "power").isel(time=0)
+>>> ratio = estimate / true_power
+>>> bool(abs(float(ratio.mean()) - 1) < 0.02), bool(abs(ratio - 1).max() < 0.15)
+(True, True)
+
+```
+
+The same comparison for spectral Granger prediction shows how far an estimate
+of these 200 trials lies from the model's value (0.75 at its peak):
+
+```python
+>>> granger_estimate = multitaper_connectivity(
+...     simulated,
+...     sampling_frequency=500,
+...     method="pairwise_spectral_granger_prediction",
+...     detrend_type=None,
+...     signal_names=["a", "b"],
+... ).isel(time=0)
+>>> true_granger = connectivity_to_xarray(
+...     on_its_grid, "pairwise_spectral_granger_prediction", signal_names=["a", "b"]
+... ).isel(time=0)
+>>> error = abs(granger_estimate - true_granger)
+>>> bool(error.sel(source="a", target="b").max() < 0.1)
+True
+>>> bool(error.sel(source="b", target="a").max() < 0.01)
+True
+
+```
+
+The coefficients that `VARSpectrum.fft()` returns are one factorization of the
+model's spectrum, not samples, so the measures computed from each trial and
+taper or from their count (the phase-locking and phase-lag families, pairwise
+phase consistency, `delay`, `group_delay`) raise rather than return values that
+depend on that choice, as do `jackknife`, `surrogate_test`, and
+`partial_coherence(shrinkage="auto")`, which estimate sampling error. Estimate those from simulated data.
+
+```python
+>>> Connectivity.from_var(coefficients, sampling_frequency=500).phase_locking_value()
+Traceback (most recent call last):
+...
+ValueError: phase_locking_value is not defined for an exact spectrum ...
+
+```
+
+A model fitted by statsmodels (not a dependency of this package) has the same
+convention. `fitted.coefs` is `(n_lags, n_signals, n_signals)` and
+`fitted.sigma_u` the innovation covariance. The fitted intercept is ignored
+(it sets the mean, not the spectrum), and `VARSpectrum` refuses an unstable
+fit, which `fitted.is_stable()` reports beforehand:
+
+```python
+from statsmodels.tsa.api import VAR
+
+fitted = VAR(simulated[:, 0, :]).fit(maxlags=2)  # one trial: (n_time_samples, n_signals)
+assert fitted.is_stable()
+connectivity = Connectivity.from_var(fitted.coefs, fitted.sigma_u, sampling_frequency=500)
+```
+
+Give `coefficients` a leading `n_time_windows` axis for a time-varying model
+(one model per window, with `noise_covariance` shared or per window, and
+`time=` the window times in seconds). The frequency grid defaults to the
+shortest one that does not limit the directed measures' accuracy
+(`VARSpectrum.minimum_n_fft_samples`), which grows as the model's poles near
+the unit circle. A shorter `n_fft_samples` warns: power and the coherence
+family stay exact on any grid, the directed measures do not. On the default
+grid the directed measures are exact to the Wilson factorization's tolerance
+(`minimum_phase_tolerance`, 1e-8 by default), and to float64 rounding where
+the spectrum is nearly singular.
+
 ## Result schema and transform bandwidth
 
 The xarray interfaces share `output_schema_version=1`. Common provenance is on
@@ -700,12 +1135,13 @@ facts needed to interpret it. Settings use one JSON record:
 | `output_schema_version` | `1`: the version of the layout this table describes. |
 | `package`, `package_version` | `spectral_connectivity` and the installed version that computed the result. |
 | `input_attrs_json` | The attributes of an input `xarray.DataArray` (e.g. subject or session metadata), as one canonical JSON record, so arbitrary keys keep their names; an array value of more than 100 elements is recorded as its shape and dtype. Present only when the input had attributes. |
-| `transform` | `multitaper`, `stft`, `welch`, `morlet`, or `external_fourier`. |
+| `transform` | `multitaper`, `stft`, `welch`, `morlet`, `var_spectrum`, or `external_fourier`. |
 | `sampling_frequency` | Physical sampling rate in Hz, included only when known. |
 | `n_trials`, `n_signals` | Known trial and signal counts; an arbitrary external observation axis is not labeled as trials. |
-| `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. |
+| `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. Not recorded for an exact spectrum. |
 | `expectation_type` | Axes averaged to form each spectral estimate. |
-| `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. |
+| `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. `observations_are_independent` is not recorded for an exact spectrum. |
+| `is_exact_spectrum` | 1 when the coefficients are one factor of an exact cross-spectral matrix rather than samples (`VARSpectrum`): the values are a model's population values, and the result records no observation count or independence. 0 otherwise. |
 | `backend` | `cpu` or `gpu`, reflecting the imported backend. |
 | `transform_parameters_json` | Remaining settings in `estimator` and `execution` records; optional settings use JSON `null`. |
 | `spectral_bandwidth`, `spectral_bandwidth_definition`, `spectral_bandwidth_units` | Qualified estimator bandwidth, when defined. |

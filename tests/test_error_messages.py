@@ -32,7 +32,7 @@ from spectral_connectivity.transforms import (
     suggest_parameters,
 )
 from spectral_connectivity.wrapper import connectivity_to_xarray, fourier_connectivity
-from tests._backend_helpers import to_host
+from tests._backend_helpers import ON_GPU, to_host
 
 
 class TestDetrendErrorMessages:
@@ -942,6 +942,16 @@ def test_directed_measures_on_finite_collinear_input_still_warn():
     )
 
 
+def _assert_chains_the_backend_error(error):
+    """NumPy's decomposition raises LinAlgError on NaN or Inf, and the
+    ValueError chains it; CuPy's returns NaN instead, which
+    ``Connectivity._require_finite_decomposition`` reports with no cause."""
+    if ON_GPU:
+        assert error.__cause__ is None
+    else:
+        assert isinstance(error.__cause__, np.linalg.LinAlgError)
+
+
 @pytest.mark.parametrize(
     ("measure", "kwargs"),
     [
@@ -973,7 +983,7 @@ def test_decompositions_name_nonfinite_coefficients(measure, kwargs, route):
             "NaN or Inf.*Interpolate or remove the NaN or Inf samples",
         ) as excinfo:
             compute(**kwargs)
-    assert isinstance(excinfo.value.__cause__, np.linalg.LinAlgError)
+    _assert_chains_the_backend_error(excinfo.value)
 
 
 def test_global_coherence_raises_before_numpy_warns_on_nonfinite_coefficients():
@@ -1010,7 +1020,7 @@ def test_global_coherence_names_nonfinite_coefficients_for_every_expectation(
         )
     with pytest.raises(ValueError, match=r"^global_coherence cannot be computed") as excinfo:
         connectivity.global_coherence()
-    assert isinstance(excinfo.value.__cause__, np.linalg.LinAlgError)
+    _assert_chains_the_backend_error(excinfo.value)
 
 
 @pytest.mark.cpu_only(reason="ARPACK and LAPACK's messages are those of the NumPy backend")
@@ -1095,7 +1105,11 @@ def test_global_coherence_of_weighted_nan_still_raises():
         connectivity = Connectivity(
             coefficients, expectation_type="tapers", observation_weights=weights
         )
-    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+    # That bin keeps a single observation, which the floor warning reports.
+    with (
+        pytest.warns(UserWarning, match="single observation in some bins"),
+        pytest.raises(ValueError, match=r"^global_coherence cannot be computed"),
+    ):
         connectivity.global_coherence()
 
 

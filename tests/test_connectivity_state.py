@@ -460,7 +460,13 @@ def test_fft_order_check_allows_for_the_coordinate_precision(n_fft, dtype):
 
 
 @pytest.mark.parametrize(
-    "flag", ["is_one_sided", "observations_are_independent", "time_bins_are_independent"]
+    "flag",
+    [
+        "is_one_sided",
+        "observations_are_independent",
+        "time_bins_are_independent",
+        "time_bins_are_disjoint",
+    ],
 )
 @pytest.mark.parametrize("value", ["False", None, 0, print])
 def test_constructor_flags_must_be_bools(flag, value):
