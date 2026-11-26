@@ -42,6 +42,39 @@ The migration guide for code written against 2.x is
 
 ### Added
 
+- `Multitaper(artifact_samples=...)`, and the same in
+  `ShortTimeFourierTransform`, leaves out artifacts, gaps, and missing
+  samples: a boolean mask, `True` at an artifact (a sample to leave out), of
+  shape `(n_time_samples,)`,
+  `(n_time_samples, n_trials)`, or the time series' own (an artifact in any
+  signal then leaves the sample out of all), or `"nonfinite"` for every NaN
+  or infinite sample. A trial's window is used only if none of its samples is
+  an artifact, so each time window averages the trials it keeps.
+  `multitaper_connectivity` takes it in `transform_kwargs`. New
+  `artifact_samples`, `valid_windows` (`True` at the kept trial windows), and
+  `observation_weights` properties of both transforms.
+- `Connectivity.n_valid_observations`: the observations each bin (time window
+  and frequency, by default) averages; `n_observations` stays the raw count.
+  Where zero observation weights drop observations, the debiased squared
+  (weighted) phase lag index, pairwise phase consistency, the zero-coherence
+  test of `delay` and `group_delay`, and `jackknife` use each bin's count. A
+  bin keeping fewer than two observations is NaN in the debiased measures,
+  and one keeping fewer than three in the jackknife, with a warning.
+- A boxcar `MorletWavelet(edge_mode="nan")` with an expectation that pools
+  time now works with the debiased phase-lag measures, pairwise phase
+  consistency, and `delay`/`group_delay`, counting each frequency's valid
+  bins; it raised `ValueError` before.
+- `coherence_significance_pvalue` takes one count per estimate, an array
+  that broadcasts against the coherency (such as
+  `n_valid_observations[..., np.newaxis, np.newaxis]`); it used to reject an
+  array. Every statistics function that takes a count of observations
+  (`coherence_significance_pvalue`, `coherence_fisher_z_transform`,
+  `coherence_bias`, `power_confidence_intervals`, `power_fisher_z_transform`,
+  `power_bias`, `power_variance`) reads an array of counts the same way: an
+  entry below the fewest observations the statistic needs (2 for the
+  coherence statistics, 1 for the power statistics), a bin that keeps too
+  few, gives NaN there, where the others raised; the power statistics accept
+  the NaN power of such a bin. A single count below that still raises.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working
@@ -588,10 +621,11 @@ The migration guide for code written against 2.x is
   allowing for the storage rounding of a float32 coordinate; the same test
   decides whether a result records `frequency_bin_spacing` and whether
   two-sided frequencies are in FFT order), and
-  `delay`/`group_delay` reject non-uniform observation
-  weights, because their adjacent-bin combinations and coherence null assume
-  equal spacing and equally weighted observations (wavelet grids and Hann
-  smoothing violate these silently).
+  `delay`/`group_delay` reject observation weights that reweight
+  observations, because their adjacent-bin combinations and coherence null
+  assume equal spacing and equally weighted observations (wavelet grids and
+  Hann smoothing violate these silently); weights that only drop
+  observations are counted instead.
 - `Connectivity.jackknife` requires at least three observations, rejects
   diagnostics, alternate constructors, and structured (component) results with
   a clear error, and documents the supported explicit `fisher_squared`
@@ -893,11 +927,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   counts it takes, and `Connectivity.n_observations`: `coherence_bias`,
   `power_bias`, `power_variance`, `coherence_significance_pvalue`,
   `power_confidence_intervals`, and both counts of
-  `coherence_fisher_z_transform` and `power_fisher_z_transform`. A count the
-  formula cannot use raises a `ValueError`, as `coherence_significance_pvalue`
-  already did: `coherence_bias` needs at least 2 (it returned -0.5 for 0 and
-  divided by zero for 1), and the power helpers at least 1 (0 hit the
-  digamma and trigamma poles). A non-finite or fractional count raises too,
+  `coherence_fisher_z_transform` and `power_fisher_z_transform`. A single
+  count the formula cannot use raises a `ValueError`, as
+  `coherence_significance_pvalue` already did: `coherence_bias` needs at
+  least 2 (it returned -0.5 for 0 and divided by zero for 1), and the power
+  helpers at least 1 (0 hit the digamma and trigamma poles); in an array of
+  counts such an entry gives NaN (see Added). A non-finite or fractional count
+  raises too,
   naming the offending values of an array of counts. A boolean, a string, or
   None raises a `TypeError`: `power_bias(True)` and
   `power_confidence_intervals(True)` read `True` as 1 observation,
@@ -1233,6 +1269,61 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   by 1e-4 to 0.1 for data at 1e-6 of unit variance (microvolt signals stored
   in volts) in the cases run, and by more below that. Recompute directed
   results from small-amplitude data.
+- The Wilson factorization behind every directed measure starts from a
+  factor covariant under rescaling the signals (`U` with `U Uᵀ = R0`, not
+  `chol(R0)ᵀ`, for the zero-lag matrix `R0`), so the factor of `D S D` is
+  `D G`. From the old start it could converge, without a warning and with
+  `G Gᴴ` within 1e-9 of `S`, to a factor that is not minimum phase, and every
+  directed measure was then wrong: DTF and PDC were 0.3-0.8 off for 9 of 400
+  random VARs of comparable-power signals (now none; at most 5e-9), and
+  pairwise Granger 6.5 off for a chain of nearly integrating signals (now
+  3e-7). 2.x has the same start and defect. Recompute directed results.
+- As preconditioning, every signal is scaled to unit mean power for the
+  factorization and the factor unscaled afterwards. Pairwise Granger of raw
+  and standardized multitaper estimates of that chain differed by 2.7-5.8 at
+  their largest in five simulations (3.7-5.9 in 2.x) and now agree to within
+  the convergence tolerance (at most 7e-7). Signals of comparable power move by
+  much less than their estimation error: at most 7e-3 in the regression
+  examples, under a sixth of their RMS error against the generating models,
+  which is unchanged to 0.1%. A signal with no power, in a window where
+  another signal has power, is factored as an independent white signal at
+  rounding-level power, so its window needs no fallback start; on CuPy, whose
+  Cholesky returns NaN rather than raising, a window with a dead channel was
+  NaN and now factors as on NumPy. On NumPy, the other signals' values in
+  such a window changed: conditional Granger, DTF, DC, PDC and gPDC differed
+  from those of the same signals without the dead channel by up to 3.7e-2
+  (dDTF by 5.1e-4), and now match them to 3e-15. A window where no signal
+  has power is still NaN with a warning, which now reports it as singular:
+  it started from a finite factor that never converged, so one such window
+  held every other window to `max_iterations` (about 20 times the time, for
+  one of 50 windows) and the warning blamed the iteration budget.
+- The inverses behind the directed measures (of the factor's lag-0
+  coefficient, the transfer function, the reduced transfer function, and
+  the noise covariance or its target block) load each diagonal entry by
+  1e-12 of its own size instead of 1e-12 of the matrix's RMS entry, which
+  perturbed a signal far weaker than the others by far more (PDC 0.9 off for
+  signal powers from 5e-5 to 3e12). The spectral Granger family, directed
+  coherence, and gPDC are now invariant under rescaling the signals, and
+  DTF, PDC, and dDTF covariant.
+- The factorization warns, as a best-effort check, when a converged factor's
+  determinant winds around zero (so the factor is not minimum phase); the
+  spectral Granger measures warn once per call, naming the signal pairs. The
+  winding is counted from the determinant's unit phase where it turns by less
+  than `π/2` between bins, and a nonzero count is recounted on grids 2 to 16
+  times finer, interpolating the factor as a causal filter, so that steps a
+  coarse grid aliases do not warn. It catches most wrong factors but not all:
+  in sweeps of 800 random dense VARs factored from the old start it caught 41
+  of the 44 that converged to a wrong factor (the three it missed were off by
+  2e-4 to 3e-2), and it flagged none of the 800 factors from the new start,
+  nothing in the test suite, and none of 1440 windows of zero-padded
+  multitaper estimates. It cannot judge a determinant whose phase turns by
+  more than `π/2` between bins. A count of 0 is not recounted, so a real
+  winding that the grid aliases to 0 is missed (a factor of 8 signals
+  winding -4 times counted 0 on 8 bins). A factor that fails to be minimum
+  phase without its determinant winding countably is not caught either; that
+  includes a grid too coarse for the spectrum, where four coincident
+  resonators at radius 0.995 factor 0.8 off with no warning on 4096 bins (and
+  correctly on 16384).
 - The Wilson iteration builds each update from a square root of the
   cross-spectrum, so it is Hermitian positive semidefinite by construction.
   Sub-spectra with near-duplicate channels (condition numbers from about 1e10)

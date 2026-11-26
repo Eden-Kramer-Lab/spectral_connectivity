@@ -7,6 +7,7 @@ import pytest
 
 import spectral_connectivity
 from spectral_connectivity._backend import ON_GPU
+from tests._mne_helpers import load_mne_reference
 
 
 def pytest_configure(config):
@@ -56,3 +57,9 @@ def backend_modules():
         for module in modules
         if hasattr(module, "xp") and module.__name__ != "spectral_connectivity._backend"
     )
+
+
+@pytest.fixture(scope="session")
+def mne_reference():
+    """The recorded mne-connectivity outputs and their settings."""
+    return load_mne_reference()

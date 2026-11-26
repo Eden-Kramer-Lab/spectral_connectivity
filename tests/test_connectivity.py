@@ -409,6 +409,39 @@ def test_imaginary_coherency_preserves_pair_orientation():
     assert np.isnan(signed[0, 0])
 
 
+def test_imaginary_coherency_is_nan_where_power_is_not_finite_and_zero_where_it_is_zero():
+    """A pair is NaN where a signal's power is NaN (a bin with no observation)
+    or infinite (overflow): coherency masks both with nan + 0j, whose imaginary
+    part is 0. A pair with a zero-power signal stays 0, as documented."""
+    rng = np.random.default_rng(3)
+    # (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    coefficients = rng.standard_normal((1, 6, 1, 4, 4)) + 1j * rng.standard_normal(
+        (1, 6, 1, 4, 4)
+    )
+    # A real coefficient whose square overflows: power inf (a complex one's
+    # cross term inf - inf would make it NaN).
+    coefficients[..., 1] = 1e160 * coefficients[..., 1].real
+    coefficients[..., 2] = 0.0  # zero power
+    coefficients[0, 2, 0, :, 3] = np.nan  # NaN power
+    with warnings.catch_warnings():
+        # The NaN-coefficient, overflow, and zero-power warnings.
+        warnings.simplefilter("ignore")
+        connectivity = Connectivity(coefficients)
+        power = connectivity.power(one_sided=False)[0]
+        signed = connectivity.imaginary_coherency()[0]
+    assert np.isposinf(power[:, 1]).all()
+    assert np.isnan(power[:, 3]).all()
+    not_finite = np.array([False, True, False, True])
+    expected_nan = (
+        not_finite[:, np.newaxis] | not_finite[np.newaxis, :] | np.eye(4, dtype=bool)
+    )
+    np.testing.assert_array_equal(
+        np.isnan(signed), np.broadcast_to(expected_nan, signed.shape)
+    )
+    np.testing.assert_array_equal(signed[:, 0, 2], 0.0)
+    np.testing.assert_array_equal(signed[:, 2, 0], 0.0)
+
+
 def test_partial_coherence_matches_inverse_spectral_matrix_definition():
     rng = np.random.default_rng(102)
     coefficients = rng.standard_normal((1, 200, 3, 4, 3)) + 1j * (
@@ -1567,9 +1600,11 @@ def test__bandpass_keeps_the_masked_bins():
     data = np.arange(0, 10).reshape((2, 5))
     frequencies = np.arange(0, 5) * 2.0  # 0, 2, 4, 6, 8
     mask = np.array([False, True, True, False, False])
-    filtered_data, filtered_frequencies = _bandpass(data, frequencies, mask, axis=-1)
+    filtered_data, filtered_frequencies = _bandpass(
+        to_device(data), frequencies, mask, axis=-1
+    )
     np.testing.assert_array_equal(filtered_frequencies, [2.0, 4.0])
-    np.testing.assert_array_equal(filtered_data, [[1, 2], [6, 7]])
+    np.testing.assert_array_equal(to_host(filtered_data), [[1, 2], [6, 7]])
 
 
 @pytest.mark.parametrize("measure", ["group_delay", "delay", "phase_slope_index"])
@@ -2821,21 +2856,6 @@ _GRANGER_MEASURES = {
 }
 
 
-# On CuPy the batched Cholesky of a rank-deficient zero-lag matrix returns NaN
-# instead of raising, so no deterministic fallback start is used and the whole
-# pair with a dead channel is NaN, not only the influences on the dead channel
-# (see ``minimum_phase_decomposition._get_initial_conditions``).
-_GPU_DEAD_CHANNEL_NAMED_PAIRS = {
-    "pairwise_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
-    "time_reversed_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
-    "subset_pairwise_spectral_granger_prediction": "0 -> 2, 2 -> 0",
-    "blockwise_spectral_granger_prediction": "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'",
-    "time_reversed_blockwise_spectral_granger_prediction": (
-        "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'"
-    ),
-}
-
-
 @pytest.mark.parametrize(
     ("measure", "defect", "named_pairs"),
     [
@@ -2882,8 +2902,6 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     for a dead channel) without naming the pair, and the advice mentioned a
     regularization parameter no Granger method has.
     """
-    if ON_GPU and defect == "dead":
-        named_pairs = _GPU_DEAD_CHANNEL_NAMED_PAIRS[measure]
     connectivity = _granger_connectivity(defect)
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
@@ -2898,12 +2916,15 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     assert "regularization" not in named[0]
     # The generic, pair-less non-convergence warning is not repeated for the
     # measure's own factorizations, and no other warning reports the same NaN
-    # bins. Only conditional Granger's full model is the factorization cached
-    # and shared with DTF, PDC and the other directed measures; its warning is
-    # kept because it is the only one those measures get. The time-reversed
-    # full model is used by its measure alone.
+    # bins. Conditional Granger's full model, forward (the factorization
+    # cached and shared with DTF, PDC and the other directed measures) or
+    # time-reversed, keeps it, so a full-model failure is reported the same
+    # way in both directions.
     n_generic = sum("Wilson minimum-phase" in message for message in messages)
-    shares_full_model = measure == "conditional_spectral_granger_prediction"
+    shares_full_model = measure in (
+        "conditional_spectral_granger_prediction",
+        "time_reversed_conditional_spectral_granger_prediction",
+    )
     assert n_generic == int(shares_full_model), messages
     assert not any("not positive" in message for message in messages), messages
     assert not any("not positive-definite" in message for message in messages), messages
@@ -2935,6 +2956,100 @@ def test_batched_granger_factorization_matches_one_pair_at_a_time(
 
     _assert_batched_granger_matches(compute, monkeypatch)
     assert named_per_run[1] == named_per_run[0]
+
+
+_DIRECTED_MEASURES = {
+    **_GRANGER_MEASURES,
+    "directed_transfer_function": lambda c: c.directed_transfer_function(),
+    "directed_coherence": lambda c: c.directed_coherence(),
+    "partial_directed_coherence": lambda c: c.partial_directed_coherence(),
+    "generalized_partial_directed_coherence": (
+        lambda c: c.generalized_partial_directed_coherence()
+    ),
+    "direct_directed_transfer_function": lambda c: c.direct_directed_transfer_function(),
+}
+
+
+@pytest.mark.parametrize("measure", list(_DIRECTED_MEASURES))
+def test_a_window_where_no_signal_has_power_is_nan_with_a_warning(measure):
+    """In a time window where every signal is zero (an artifact blanked on
+    every channel) every directed measure is NaN, with a warning, and the
+    other window is as computed on its own.
+
+    Regression: each zero-power signal was factored as an independent white
+    signal also where no signal had power, so that window's factor was a
+    rounding-level identity and conditional Granger, DTF, DC, PDC, gPDC and
+    dDTF were a finite 0 there without a warning."""
+    from spectral_connectivity import Multitaper
+
+    signals = np.random.default_rng(0).standard_normal((1024, 10, 3))
+    signals[1:, :, 1] += 0.8 * signals[:-1, :, 0]
+    signals[512:] = 0.0
+
+    def compute(signals):
+        return to_host(
+            _DIRECTED_MEASURES[measure](
+                Connectivity.from_transform(
+                    Multitaper(
+                        signals,
+                        sampling_frequency=256,
+                        time_halfbandwidth_product=2,
+                        time_window_duration=2.0,
+                        time_window_step=2.0,
+                    )
+                )
+            )
+        )
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = compute(signals)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        live_window = compute(signals[:512])
+
+    messages = [str(w.message) for w in record]
+    assert any(re.search("did not converge|NaN at every frequency", m) for m in messages)
+    assert result.shape[0] == 2
+    assert np.isnan(result[1]).all()
+    assert np.isfinite(live_window).any()
+    np.testing.assert_allclose(result[:1], live_window, rtol=0, atol=1e-12, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "conditional_spectral_granger_prediction",
+        "time_reversed_conditional_spectral_granger_prediction",
+    ],
+)
+def test_conditional_granger_with_one_live_signal(measure):
+    """Signal 0 has power and signals 1 and 2 none. Conditional Granger from
+    the live signal to a dead one is NaN, with a warning naming those pairs:
+    the reduced model without that source has no power. Between the dead
+    signals, and from a dead signal to the live one, the reduced model keeps
+    the live signal and the influence is 0. These are the values before the
+    zero-power signals were factored as white signals.
+
+    Regression: the reduced model without the live source, with no power,
+    was factored as two white signals, so the influences from the live
+    signal were a finite 0 without a warning."""
+    coefficients = np.zeros((1, 10, 1, 32, 3), dtype=complex)
+    coefficients[0, :, 0, :, 0] = np.fft.fft(
+        np.random.default_rng(0).standard_normal((10, 32)), axis=-1
+    )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = to_host(getattr(Connectivity(to_device(coefficients)), measure)())[0]
+
+    named = [str(w.message) for w in record if "source -> target" in str(w.message)]
+    assert len(named) == 1, named
+    assert ": 0 -> 1, 0 -> 2 (" in named[0]
+    nan_everywhere = np.isnan(result).all(axis=0)
+    np.testing.assert_array_equal(
+        nan_everywhere, [[True, True, True], [False, True, False], [False, False, True]]
+    )
+    np.testing.assert_allclose(result[:, [1, 2, 2, 1], [0, 0, 1, 2]], 0, atol=1e-14)
 
 
 def _assert_batched_granger_matches(compute, monkeypatch):
@@ -3121,14 +3236,21 @@ def test_conditional_granger_factorizes_each_channel_set_once():
     shape = (1, 20, 3, 32, 4)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     conn = Connectivity(coefficients)
-    # The full model and every reduced model are factorized through _granger.
-    with patch.object(
-        _granger,
-        "minimum_phase_decomposition",
-        wraps=_granger.minimum_phase_decomposition,
-    ) as factorize:
+    # The full model is factorized (with its warnings) through _granger's
+    # minimum_phase_decomposition, and every reduced model through its core.
+    with (
+        patch.object(
+            _granger, "minimum_phase_decomposition", wraps=_granger.minimum_phase_decomposition
+        ) as factorize_full,
+        patch.object(
+            _granger,
+            "_minimum_phase_factor_and_flags",
+            wraps=_granger._minimum_phase_factor_and_flags,
+        ) as factorize_reduced,
+    ):
         conn.conditional_spectral_granger_prediction()
-    assert factorize.call_count == shape[-1] + 1
+    assert factorize_full.call_count == 1
+    assert factorize_reduced.call_count == shape[-1]
 
 
 @pytest.mark.parametrize(
@@ -3429,13 +3551,15 @@ def test_mvar_regularized_inverse_ill_conditioned_is_finite():
 def test_mvar_rank_deficient_fails_gracefully_without_linalg_error():
     """A rank-deficient input must not raise LinAlgError.
 
-    With near-identical channels the cross-spectral matrix is singular and the
-    Wilson decomposition cannot converge; the result is NaN (with a convergence
-    warning), but the regularized solve must not crash. On CuPy the batched
-    Cholesky returns NaN instead of raising, so only NumPy warns that it failed
-    (see ``minimum_phase_decomposition._get_initial_conditions``).
+    With identical channels the cross-spectral matrix is exactly singular and
+    the Wilson decomposition cannot converge; the result is NaN (with a
+    convergence warning), but the regularized solve must not crash. On CuPy the
+    batched Cholesky returns NaN instead of raising, so only NumPy warns that it
+    failed (see ``minimum_phase_decomposition._get_initial_conditions``).
+    Channels differing by 1e-10 are singular only to rounding, so whether the
+    Cholesky start fails for them depends on the LAPACK build.
     """
-    conn = Connectivity(fourier_coefficients=_near_singular_fourier(1e-10))
+    conn = Connectivity(fourier_coefficients=_near_singular_fourier(0.0))
     with (
         nullcontext() if ON_GPU else pytest.warns(UserWarning, match="Cholesky failed"),
         pytest.warns(UserWarning, match="did not converge"),

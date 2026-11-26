@@ -954,3 +954,223 @@ def test_pairwise_granger_is_defined_on_a_grid_the_spectrum_wraps_around(n_fft):
     off_diagonal = ~np.eye(3, dtype=bool)
     assert np.isfinite(granger[:, off_diagonal]).all()
     assert (granger[:, off_diagonal] >= 0).all()
+
+
+# A chain 0 -> 1 -> 2 of nearly integrating signals (each an AR(1) at 0.99):
+# every coupling integrates its input, so the mean powers are 50, 1e4 and 3e6.
+_INTEGRATING_CHAIN_COEFFICIENTS = 0.99 * np.eye(3)[np.newaxis] + np.array(
+    [[[0.0, 0.0, 0.0], [0.2, 0.0, 0.0], [0.0, 0.2, 0.0]]]
+)
+_INTEGRATING_CHAIN_N_FFT = 8192
+
+
+@pytest.fixture(scope="module")
+def integrating_chain_oracle():
+    """Pairwise and conditional Granger of the integrating chain from its
+    state space; both are unchanged by rescaling the signals."""
+    coefficients, n_fft = _INTEGRATING_CHAIN_COEFFICIENTS, _INTEGRATING_CHAIN_N_FFT
+    conditional = np.full((n_fft // 2 + 1, 3, 3), np.nan)
+    for source, target in itertools.permutations(range(3), 2):
+        conditional[:, source, target] = _state_space_conditional_granger(
+            coefficients, np.eye(3), n_fft, target, source
+        )
+    return {
+        "pairwise_spectral_granger_prediction": _pairwise_granger_from_state_space(
+            coefficients, np.eye(3), n_fft
+        ),
+        "conditional_spectral_granger_prediction": conditional,
+    }
+
+
+@pytest.mark.parametrize(
+    "scales",
+    [(1.0, 1.0, 1.0), (0.1, 1.0, 10.0), (1e-3, 1.0, 1e3), (1e3, 1.0, 1e-3), (1e-6, 1.0, 1e6)],
+    ids=["as_simulated", "rescaled", "rescaled_1e3", "reversed_1e3", "rescaled_1e6"],
+)
+@_BOTH_FACTORIZATION_PATHS
+def test_directed_measures_of_signals_of_very_different_power_match_oracle(
+    integrating_chain_oracle, scales, conjugate_symmetric
+):
+    """Signals whose powers differ by orders of magnitude, as they do in the
+    integrating chain and more so once rescaled (mean powers from 5e-11 to
+    3e18), give the measures as accurately as signals of equal power.
+    Rescaling signal ``i`` by ``d_i`` leaves spectral Granger unchanged and
+    scales the transfer function to ``D H D^-1`` and its inverse to
+    ``D A D^-1``, which give the DTF, PDC, and dDTF of the rescaled model."""
+    scale = np.diag(scales)
+    coefficients = scale @ _INTEGRATING_CHAIN_COEFFICIENTS @ np.linalg.inv(scale)
+    noise_covariance = scale @ scale
+    A, H, spectrum = _analytic_var(coefficients, noise_covariance, _INTEGRATING_CHAIN_N_FFT)
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
+    off_diagonal = ~np.eye(3, dtype=bool)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        for measure, oracle in integrating_chain_oracle.items():
+            result = np.asarray(getattr(connectivity, measure)())[0]
+            np.testing.assert_allclose(
+                result[:, off_diagonal],
+                oracle[:, off_diagonal],
+                atol=1e-5,
+                rtol=0,
+                err_msg=measure,
+            )
+        transfer_function_measures = {
+            measure: np.asarray(getattr(connectivity, measure)())[0]
+            for measure in (
+                "directed_transfer_function",
+                "partial_directed_coherence",
+                "direct_directed_transfer_function",
+            )
+        }
+    expected = _analytic_directed_measures(A, H, noise_covariance)
+    for measure, result in transfer_function_measures.items():
+        np.testing.assert_allclose(
+            result, np.swapaxes(expected[measure], -1, -2), atol=1e-5, rtol=0, err_msg=measure
+        )
+
+
+@pytest.mark.parametrize(
+    "scales",
+    [
+        (1.0, 1.0, 1.0, 1.0),
+        (1e-3, 1.0, 1e3, 1.0),
+        (1e-6, 1.0, 1e6, 1.0),
+        (1e-6, 1e6, 1.0, 1.0),
+    ],
+    ids=["as_drawn", "rescaled_1e3", "rescaled_1e6", "within_block_1e6"],
+)
+@_BOTH_FACTORIZATION_PATHS
+def test_blockwise_granger_of_blocks_of_signals_of_very_different_power_matches_oracle(
+    scales, conjugate_symmetric
+):
+    """Blockwise Granger between two-signal blocks is unchanged by rescaling
+    the signals, also when the signals of one block differ in power by twelve
+    orders of magnitude: the inverse of the target block's innovation
+    covariance is loaded per signal."""
+    n_fft = 1024
+    coefficients, noise_covariance = _dense_stable_var(
+        n_signals=4, n_lags=2, spectral_radius=0.8, seed=0
+    )
+    scale = np.diag(scales)
+    coefficients = scale @ coefficients @ np.linalg.inv(scale)
+    noise_covariance = scale @ noise_covariance @ scale
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        blockwise, labels = connectivity.blockwise_spectral_granger_prediction([0, 0, 1, 1])
+
+    oracle = _block_granger_from_state_space(
+        coefficients, noise_covariance, n_fft, _blocks([0, 0, 1, 1], labels)
+    )
+    off_diagonal = ~np.eye(2, dtype=bool)
+    np.testing.assert_allclose(
+        blockwise[0][:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "pairwise_spectral_granger_prediction",
+        "conditional_spectral_granger_prediction",
+        "directed_coherence",
+        "generalized_partial_directed_coherence",
+        "blockwise",
+    ],
+)
+def test_scale_invariant_measures_of_estimates_do_not_change_when_the_signals_are_standardized(
+    measure,
+):
+    """Spectral Granger, directed coherence and gPDC are unchanged by
+    rescaling the signals. On 20 windows of a multitaper estimate on the
+    default grid, the values for the raw signals and for the signals divided
+    by their standard deviations (7, 1e2 and 2e3) agree to 1e-9 (observed at
+    most 7e-14; from ``chol(R0)ᵀ`` with the RMS-loaded inverses, before
+    the covariant start, they differed by 0.5 to 1.1)."""
+    data = simulate_MVAR(
+        _INTEGRATING_CHAIN_COEFFICIENTS,
+        noise_covariance=np.eye(3),
+        n_time_samples=20 * 256,
+        n_trials=4,
+        random_state=0,
+    )
+    standardized = data / data.std(axis=(0, 1))
+
+    def compute(signals):
+        connectivity = Connectivity.from_transform(
+            Multitaper(
+                signals,
+                sampling_frequency=1.0,
+                time_halfbandwidth_product=3,
+                time_window_duration=256,
+            )
+        )
+        if measure == "blockwise":
+            return connectivity.blockwise_spectral_granger_prediction([0, 1, 1])[0]
+        return getattr(connectivity, measure)()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        warnings.filterwarnings("ignore", message="directed_coherence assumes uncorrelated")
+        raw, rescaled = to_host(compute(data)), to_host(compute(standardized))
+    np.testing.assert_allclose(raw, rescaled, atol=1e-9, rtol=0)
+
+
+# Dense VARs of signals of comparable power that a start which is not
+# covariant under rescaling the signals factored to a factor that is not
+# minimum phase (the second only once the signals were scaled to unit power).
+_DENSE_VARS_ONCE_FACTORED_WRONGLY = pytest.mark.parametrize(
+    ("model", "scales"),
+    [
+        pytest.param(
+            {"n_signals": 3, "n_lags": 1, "spectral_radius": 0.99, "seed": 857449258},
+            (1.0, 1.0, 1.0),
+            id="var1",
+        ),
+        pytest.param(
+            {"n_signals": 3, "n_lags": 3, "spectral_radius": 0.99, "seed": 357460746},
+            (60.2, 17.8, 82.8),
+            id="var3_rescaled",
+        ),
+    ],
+)
+
+
+@_DENSE_VARS_ONCE_FACTORED_WRONGLY
+@_BOTH_FACTORIZATION_PATHS
+def test_transfer_function_measures_of_dense_vars_match_closed_form(
+    model, scales, conjugate_symmetric
+):
+    """The factor of these spectra is minimum phase, so DTF, PDC, and gPDC
+    match the closed forms of the model at the default tolerance."""
+    coefficients, noise_covariance = _dense_stable_var(**model)
+    scale = np.diag(scales)
+    coefficients = scale @ coefficients @ np.linalg.inv(scale)
+    noise_covariance = scale @ noise_covariance @ scale
+    A, H, spectrum = _analytic_var(coefficients, noise_covariance, 4096)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            spectrum, conjugate_symmetric=conjugate_symmetric
+        )
+    )
+    expected = _analytic_directed_measures(A, H, noise_covariance)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        for measure in (
+            "directed_transfer_function",
+            "partial_directed_coherence",
+            "generalized_partial_directed_coherence",
+        ):
+            result = np.asarray(getattr(connectivity, measure)())[0]
+            np.testing.assert_allclose(
+                result,
+                np.swapaxes(expected[measure], -1, -2),
+                atol=1e-6,
+                rtol=0,
+                err_msg=measure,
+            )

@@ -421,7 +421,7 @@ def test_nested_list_input_matches_the_array_input():
     # A contiguous copy, which the list's array is: a strided view can change
     # the summation order, and so the last bit.
     coefficients = np.ascontiguousarray(
-        Multitaper(data[:, np.newaxis, :], sampling_frequency=500).fft()[0]
+        to_host(Multitaper(data[:, np.newaxis, :], sampling_frequency=500).fft()[0])
     )
     frequencies = np.fft.fftfreq(coefficients.shape[-2], d=1 / 500)
     for layout in (coefficients[0], coefficients):  # 3-D and 4-D
