@@ -356,7 +356,9 @@ def test_a_time_varying_model_stacks_the_models_of_its_windows():
                 n_fft_samples=n_fft,
             )
         )
-        np.testing.assert_array_equal(stacked.fft()[window], single._fourier_coefficients[0])
+        np.testing.assert_array_equal(
+            to_host(stacked.fft()[window]), to_host(single._fourier_coefficients[0])
+        )
         np.testing.assert_allclose(
             _directed(connectivity, "pairwise_spectral_granger_prediction")[window],
             _directed(single, "pairwise_spectral_granger_prediction")[0],
@@ -517,10 +519,10 @@ def test_the_model_is_a_read_only_snapshot():
     """Changing the caller's arrays afterwards changes nothing."""
     coefficients, noise_covariance = (array.copy() for array in _DENSE)
     var = _var((coefficients, noise_covariance))
-    before = var.fft()
+    before = to_host(var.fft())
     coefficients[:] = 0
     noise_covariance[:] = np.eye(3)
-    np.testing.assert_array_equal(var.fft(), before)
+    np.testing.assert_array_equal(to_host(var.fft()), before)
     with pytest.raises(ValueError, match="read-only"):
         var.coefficients[0, 0, 0, 0] = 1.0
     assert var.fft() is not var.fft()
