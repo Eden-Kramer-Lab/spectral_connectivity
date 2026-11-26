@@ -16,6 +16,7 @@ from numpy.typing import ArrayLike, NDArray
 
 from spectral_connectivity.utils import (
     VAR_SINGLE_LAG_HINT,
+    _generator,
     _validate_sampling_frequency,
     is_positive_integer,
     reject_complex_var,
@@ -25,13 +26,6 @@ from spectral_connectivity.utils import (
     var_spectral_radius,
     var_stabilizing_advice,
 )
-
-
-def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
-    """Return ``random_state`` if it is a Generator, else a Generator seeded by it."""
-    if isinstance(random_state, np.random.Generator):
-        return random_state
-    return np.random.default_rng(random_state)
 
 
 def _per_signal(

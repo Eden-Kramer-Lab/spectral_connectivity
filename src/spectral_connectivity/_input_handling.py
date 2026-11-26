@@ -71,6 +71,9 @@ class _SignalMetadata(NamedTuple):
     n_trials: int | None = None
     # The input DataArray's signal dimension; None for a plain array.
     signal_dimension: Hashable | None = None
+    # The input DataArray's dimensions in (time[, trial], signal) order, as it
+    # was transposed; None for a plain array.
+    dimension_order: tuple[Hashable, ...] | None = None
 
 
 class _UnwrappedInput(NamedTuple):
@@ -824,6 +827,7 @@ def _unwrap_xarray_input(
             units=_stated_units(time_series.attrs.get("units")),
             recording_coordinates=_scalar_coordinates_from_dataarray(time_series),
             signal_dimension=signal_dimension,
+            dimension_order=dimension_order,
         ),
     )
 

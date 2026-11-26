@@ -196,6 +196,44 @@ def _companion_matrix(coefficients):
     return companion
 
 
+def _normalized_inverse(matrices, loading=None):
+    """``|P_ij|^2 / (P_ii P_jj)`` for ``P = inv(matrices + diag(loading))``.
+
+    The partial coherence of a cross-spectral matrix, ``(..., n, n)``;
+    ``loading``, ``(..., n)``, is added to the diagonal first (none by
+    default)."""
+    identity = np.eye(matrices.shape[-1])
+    if loading is not None:
+        matrices = matrices + loading[..., None, :] * identity
+    precision = np.linalg.solve(matrices, np.broadcast_to(identity, matrices.shape))
+    diagonal = np.real(np.diagonal(precision, axis1=-2, axis2=-1))
+    return np.abs(precision) ** 2 / (diagonal[..., :, None] * diagonal[..., None, :])
+
+
+def _coherency(spectrum):
+    """Coherency ``S_ij / sqrt(S_ii S_jj)`` of a cross-spectral matrix ``(..., n, n)``."""
+    power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
+    return spectrum / np.sqrt(power[..., :, None] * power[..., None, :])
+
+
+def _gaussian_coefficients(spectrum, n_replicates, n_trials, n_tapers=1, seed=0):
+    """Complex Gaussian coefficients ``(n_replicates, n_trials, n_tapers,
+    n_frequencies, n_signals)`` with covariance ``E[x x^H] = spectrum``
+    ``(n_frequencies, n_signals, n_signals)`` at each frequency, one replicate
+    dataset per time window."""
+    rng = np.random.default_rng(seed)
+    shape = (n_replicates, n_trials, n_tapers, *spectrum.shape[:-1])
+    white = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / np.sqrt(2)
+    return np.einsum("fij,...fj->...fi", np.linalg.cholesky(spectrum), white)
+
+
+def _mean_and_limit(values):
+    """Replicate mean of ``values`` (replicates on the first axis) and five
+    standard errors of it, for each of its other entries."""
+    values = np.asarray(values)
+    return values.mean(axis=0), 5 * values.std(axis=0, ddof=1) / np.sqrt(len(values))
+
+
 def _companion_spectral_radius(coefficients):
     """Largest eigenvalue modulus of a VAR's companion matrix (< 1 is stable)."""
     return np.max(np.abs(np.linalg.eigvals(_companion_matrix(coefficients))))

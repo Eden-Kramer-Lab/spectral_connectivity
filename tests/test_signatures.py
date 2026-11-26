@@ -26,6 +26,7 @@ from spectral_connectivity.simulate import (
 )
 from spectral_connectivity.statistics import power_confidence_intervals
 from spectral_connectivity.wrapper import connectivity_to_xarray, multitaper_connectivity
+from tests._backend_helpers import to_host
 
 _POSITIONAL = (
     inspect.Parameter.POSITIONAL_ONLY,
@@ -82,7 +83,7 @@ def test_multitaper_positional_call_binds_the_released_parameters():
     assert positional.time_halfbandwidth_product == 2
     assert positional.detrend_type == "linear"
     assert positional.n_tapers == 2
-    np.testing.assert_array_equal(positional.fft(), keyword.fft())
+    np.testing.assert_array_equal(to_host(positional.fft()), to_host(keyword.fft()))
 
 
 @pytest.mark.parametrize(
@@ -197,7 +198,7 @@ def test_minimum_phase_decomposition_keeps_its_positional_tolerances():
         warnings.simplefilter("error")
         positional = minimum_phase_decomposition(spectrum, 1e-10, 50)
         keyword = minimum_phase_decomposition(spectrum, tolerance=1e-10, max_iterations=50)
-    np.testing.assert_array_equal(positional, keyword)
+    np.testing.assert_array_equal(to_host(positional), to_host(keyword))
 
 
 def test_global_coherence_keeps_released_max_rank_and_workspace_is_keyword_only(

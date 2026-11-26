@@ -398,10 +398,20 @@ one `transform_parameters_json` record of the settings. See the
 [result-schema reference and migration examples](docs/cookbook.md#result-schema-and-transform-bandwidth).
 
 For uncertainty, `Connectivity.jackknife(method)` recomputes a real-valued
-measure, leaving out one trial/taper observation at a time. It returns a
+measure, leaving out one trial/taper observation at a time
+(`leave_out="trial"` leaves out whole trials instead, which includes the
+variability between trials). It returns a
 bias-corrected estimate, standard error, and confidence interval, and applies
 a variance-stabilizing transformation automatically: log for power,
 `atanh(sqrt(.))` for magnitude-squared coherence, and circular for phase.
+
+For significance, `Connectivity.surrogate_test(method, kind=...)` compares a
+measure with its values on surrogate data: trials shuffled between signals,
+or whole trials phase-rotated or conjugated (time-reversed), each for a
+different null hypothesis. It returns uncorrected p-values and p-values
+corrected for the family-wise error rate; the
+[cookbook recipe](docs/cookbook.md#test-against-surrogate-data) says which
+kind answers which question.
 
 ## Documentation
 

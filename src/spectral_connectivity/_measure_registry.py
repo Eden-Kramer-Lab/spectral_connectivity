@@ -450,7 +450,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         diagonal_policy="masked_nan",
         quantity="squared_magnitude",
         formula="|P_st|^2 / (P_ss * P_tt), where P is the (regularized) inverse of the "
-        "cross-spectral matrix",
+        "cross-spectral matrix, optionally shrunk toward its diagonal first (shrinkage)",
         defined_for_exact_spectrum=True,
     ),
     "corrected_imaginary_phase_locking_value": _MeasureSpec(
