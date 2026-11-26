@@ -66,7 +66,7 @@ def test_removing_where_there_is_no_line_takes_one_taper_share_of_the_noise():
     cleaned = Multitaper(noise, _SAMPLING_FREQUENCY, line_frequencies=[60.0], **_SETTINGS)
 
     def power_at(multitaper, frequency):
-        index = np.argmin(np.abs(multitaper.frequencies - frequency))
+        index = np.argmin(np.abs(to_host(multitaper.frequencies) - frequency))
         # (trial,): power summed over the tapers at that bin
         return np.sum(np.abs(to_host(multitaper.fft())[0, :, :, index, 0]) ** 2, axis=1)
 
@@ -98,7 +98,7 @@ def test_a_threshold_removes_a_line_only_where_it_is_significant():
     )
     raw_coefficients, cleaned_coefficients = to_host(raw.fft()), to_host(cleaned.fft())
     np.testing.assert_array_equal(cleaned_coefficients[0], raw_coefficients[0])
-    at_60 = np.argmin(np.abs(raw.frequencies - 60.0))
+    at_60 = np.argmin(np.abs(to_host(raw.frequencies) - 60.0))
     # What is left at 60 Hz is the window's noise, a few tenths of a percent
     # of the line's power there.
     assert np.sum(np.abs(cleaned_coefficients[1, ..., at_60, :]) ** 2) < 0.05 * np.sum(
@@ -313,7 +313,7 @@ def test_a_threshold_works_per_trial_and_signal():
         raw[:, without_line.nonzero()[0], ..., without_line.nonzero()[1]],
     )
     at_120 = np.argmin(
-        np.abs(Multitaper(signals, _SAMPLING_FREQUENCY, **plain).frequencies - 120)
+        np.abs(to_host(Multitaper(signals, _SAMPLING_FREQUENCY, **plain).frequencies) - 120)
     )
     assert np.sum(np.abs(cleaned[:, 1, :, at_120, 0]) ** 2) < 0.01 * np.sum(
         np.abs(raw[:, 1, :, at_120, 0]) ** 2
