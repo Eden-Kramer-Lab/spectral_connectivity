@@ -8,6 +8,7 @@ import pytest
 
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
 from spectral_connectivity.wrapper import connectivity_to_xarray
+from tests._backend_helpers import to_host
 from tests._deprecation_helpers import warns_once_at_the_call
 
 
@@ -42,7 +43,9 @@ def _deprecations(record):
 
 def _assert_same_connectivity(actual, expected):
     assert type(actual) is type(expected)
-    np.testing.assert_array_equal(actual.fourier_coefficients, expected.fourier_coefficients)
+    np.testing.assert_array_equal(
+        to_host(actual.fourier_coefficients), to_host(expected.fourier_coefficients)
+    )
     np.testing.assert_array_equal(actual.frequencies, expected.frequencies)
     np.testing.assert_array_equal(actual.time, expected.time)
     assert actual.expectation_type == expected.expectation_type

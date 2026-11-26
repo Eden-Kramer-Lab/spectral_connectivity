@@ -6,16 +6,14 @@ dependency; its outputs are recorded once in
 beside it.
 """
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 from nitime.algorithms import coherence as nitime_coherence
 from nitime.algorithms import multi_taper_csd
-from scipy.signal.windows import dpss
 
 from spectral_connectivity import Connectivity, Multitaper
 from spectral_connectivity.simulate import simulate_lagged_broadband
+from tests._mne_helpers import MNE_TRANSFORMS, mne_epochs, mne_tapers
 from tests.reference._mne_measures import MEASURES as _MNE_EXPECTED
 from tests.reference._mne_measures import UNMATCHED as _MNE_UNMATCHED
 
@@ -110,55 +108,18 @@ def test_coherence_matches_nitime(nitime_series):
     )
 
 
-_MNE_REFERENCE = Path(__file__).parent / "reference" / "mne_connectivity_reference.npz"
-_TRANSFORMS = {"identity": np.asarray, "sqrt": np.sqrt, "abs": np.abs}
-
-
-@pytest.fixture(scope="module")
-def mne_reference():
-    """The recorded mne-connectivity outputs and their settings."""
-    with np.load(_MNE_REFERENCE) as reference:
-        return {key: reference[key] for key in reference.files}
-
-
-def _mne_tapers(n_time_samples, time_halfbandwidth_product):
-    """mne-connectivity's taper set with its taper weights folded in.
-
-    MNE uses periodic DPSS (``sym=False``), keeps those with concentration
-    above 0.9 (``mt_low_bias=True``) and weights taper ``k`` by
-    ``sqrt(eigenvalue_k)``. Scaling each taper by that weight and averaging
-    uniformly gives MNE's weighted cross-spectrum times a constant, which every
-    normalized measure cancels. Shape ``(n_time_samples, n_tapers)``.
-    """
-    tapers, eigenvalues = dpss(
-        n_time_samples,
-        time_halfbandwidth_product,
-        int(2 * time_halfbandwidth_product),
-        sym=False,
-        return_ratios=True,
-    )
-    keep = eigenvalues > 0.9
-    return (tapers[keep] * np.sqrt(eigenvalues[keep])[:, np.newaxis]).T
-
-
 @pytest.fixture(scope="module")
 def mne_matched_connectivity(mne_reference):
     """``Connectivity`` for each recorded ``NW``, from the recorded data and settings."""
     n_time_samples = int(mne_reference["n_time_samples"])
-    time_series = simulate_lagged_broadband(
-        mne_reference["lags"],
-        float(mne_reference["noise_level"]),
-        n_time_samples,
-        n_trials=int(mne_reference["n_trials"]),
-        random_state=int(mne_reference["seed"]),
-    )
+    time_series = mne_epochs(mne_reference)
     return {
         nw: Connectivity.from_transform(
             Multitaper(
                 time_series,
                 sampling_frequency=float(mne_reference["sampling_frequency"]),
                 time_halfbandwidth_product=nw,
-                tapers=_mne_tapers(n_time_samples, nw),
+                tapers=mne_tapers(n_time_samples, nw),
             )
         )
         for nw in np.unique(mne_reference["time_halfbandwidth_products"]).tolist()
@@ -194,7 +155,7 @@ def test_measures_match_mne_connectivity_reference(
     MNE's connection ``seed -> target`` is ``[..., seed, target]`` here: both
     packages form the cross-spectrum as ``X_seed conj(X_target)``, so the
     signed measures (imcoh, psi, dpli) need no sign change. The comparison uses
-    MNE's own tapers (see ``_mne_tapers``): with this package's symmetric DPSS
+    MNE's own tapers (see ``mne_tapers``): with this package's symmetric DPSS
     and ``taper_weighting="eigen"`` instead, coh and imcoh differ by up to
     5e-4, and at NW 1 the sign-based PLI flips on bins whose imaginary part is
     near zero (one epoch in 30, 0.067). CaCoh is maximized over a phase by an iterative
@@ -209,7 +170,7 @@ def test_measures_match_mne_connectivity_reference(
     the same per-epoch estimator, which is what is compared.
     """
     method, transform_name, time_halfbandwidth_product, atol = _MNE_EXPECTED[measure]
-    transform = _TRANSFORMS[transform_name]
+    transform = MNE_TRANSFORMS[transform_name]
     connectivity = mne_matched_connectivity[time_halfbandwidth_product]
     frequency_index = np.searchsorted(connectivity.frequencies, mne_reference["freqs"])
     np.testing.assert_allclose(

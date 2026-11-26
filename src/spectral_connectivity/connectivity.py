@@ -622,7 +622,9 @@ def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[No
     filters invalidates each module's record of warnings already shown, so a
     warning shown once under the "default" action can be shown again. Only
     NaN or Inf coefficients (``ignore``) take this path;
-    finite input never touches the filters. Recording the warnings and
+    finite input never touches the filters (nor do the jackknife replicates
+    of a bin with too few kept observations, whose single-observation
+    warnings it ignores, on any other input). Recording the warnings and
     re-emitting the others would need ``catch_warnings`` as well, so it would
     not be safer.
     """
@@ -636,6 +638,18 @@ def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[No
 
 
 _ABSENT = object()
+
+# Where the warnings of bins that zero weights leave a single observation say
+# so; the jackknife ignores them in its replicates (see Connectivity.jackknife).
+_SINGLE_OBSERVATION_IN_SOME_BINS = (
+    "in some bins, where observation_weights give only one observation a nonzero "
+    "weight (see n_valid_observations)"
+)
+_SINGLE_KEPT_OBSERVATION = "observation_weights keep a single observation in"
+_SINGLE_KEPT_OBSERVATION_WARNINGS = (
+    ".*" + re.escape(f"computed from a single observation {_SINGLE_OBSERVATION_IN_SOME_BINS}"),
+    ".*" + re.escape(_SINGLE_KEPT_OBSERVATION),
+)
 
 
 def _optional_transform_attribute(transform: Any, name: str, default: Any) -> Any:
@@ -950,7 +964,12 @@ class Connectivity:
         Finite non-negative weights with shape ``(time, trial, taper,
         frequency, 1)``. They are applied to every expectation and shared
         across signals. Transform constructors supply these automatically when
-        smoothing uses a non-uniform kernel or masks invalid edge estimates.
+        smoothing uses a non-uniform kernel, masks invalid edge estimates, or
+        (``Multitaper(artifact_samples=...)``) drops trial windows with artifact
+        samples. Weights that only drop observations (0, or one common weight
+        in each bin) leave each bin the plain mean of the observations it
+        keeps, which the measures that count observations count
+        (:attr:`n_valid_observations`).
     observations_are_independent : bool, default=True
         Whether the trial/taper observations are statistically independent.
         Transform constructors set this ``False`` when the observation axis
@@ -974,6 +993,9 @@ class Connectivity:
         the raw count, not a weighted effective sample size, and it is not
         reduced for correlated observations (see
         ``observations_are_independent``).
+    n_valid_observations : ndarray of int
+        The observations with nonzero weight in each bin of a result, the
+        count the measures that count observations use.
 
     See Also
     --------
@@ -1720,17 +1742,21 @@ class Connectivity:
             raise ValueError(msg)
 
     def _require_uniform_observation_weights(self, measure: str, reason: str) -> None:
-        """Raise if observation weights are non-uniform for a measure that
-        assumes equally weighted independent observations."""
-        if self._observation_weights_are_uniform:
+        """Raise if observation weights reweight observations for a measure
+        that assumes equally weighted independent observations.
+
+        Weights that only keep or drop observations (see
+        :attr:`_observation_weights_only_drop`) pass: the measure counts each
+        bin's kept observations instead.
+        """
+        if self._observation_weights_only_drop:
             return
         msg = (
             f"{measure} does not support non-uniform observation_weights. "
             f"{reason} Non-uniform weights come from a smoothing_kernel other "
-            "than 'boxcar', or from edge_mode='nan' when the time axis is part "
-            "of the expectation (the edge mask zeroes some observations). Use "
-            "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or an "
-            "expectation_type that keeps the time axis."
+            "than 'boxcar'; weights that only drop observations (0 or one common "
+            "weight in each bin, as artifact_samples and edge_mode='nan' give) are "
+            "supported. Use smoothing_kernel='boxcar'."
         )
         raise ValueError(msg)
 
@@ -1740,7 +1766,8 @@ class Connectivity:
         The debiased phase-lag index and pairwise phase consistency divide by
         ``n_observations - 1`` (respectively ``n_observations ** 2 -
         n_observations``), which is zero for a single observation and would
-        otherwise return silent inf/NaN.
+        otherwise return silent inf/NaN. A bin that zero weights leave with
+        fewer than two is NaN instead (see :meth:`_counts_for_correction`).
         """
         n_observations = self.n_observations
         if n_observations < 2:
@@ -1854,29 +1881,34 @@ class Connectivity:
         warns instead of raising.
         """
         if self.n_observations < 2:
-            remedies = self._more_observations_remedies()
-            warnings.warn(
-                f"{measure} is computed from a single observation "
-                f"(n_observations == 1), so {consequence} "
-                "regardless of the data, and the result carries no information. "
-                f"Use {', or '.join(remedies)}.",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
+            where = "(n_observations == 1)"
+        elif self._fewest_valid_observations() == 1:
+            where = _SINGLE_OBSERVATION_IN_SOME_BINS
+        else:
+            return
+        remedies = self._more_observations_remedies()
+        warnings.warn(
+            f"{measure} is computed from a single observation {where}, so "
+            f"{consequence} regardless of the data, and the result carries no "
+            f"information. Use {', or '.join(remedies)}.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
 
     def _warn_few_global_coherence_observations(self) -> None:
         """Warn when global coherence pools fewer observations than signals.
 
-        With ``n = n_observations`` pooled observations and ``p`` signals the
-        value is at least ``1 / min(n, p)`` whatever the data, so for ``n < p``
-        it cannot reach the ``1 / p`` of independent signals. For ``n >= p`` it
-        is still biased above ``1 / p`` but no longer bounded away from it, so
-        ``n < p`` is where the warning starts. The floor, the bias, and the raw
-        count ``n`` (zero-weight observations included) are described in the
-        Notes of :meth:`global_coherence`.
+        With ``n`` pooled observations and ``p`` signals the value is at least
+        ``1 / min(n, p)`` whatever the data, so for ``n < p`` it cannot reach
+        the ``1 / p`` of independent signals. For ``n >= p`` it is still biased
+        above ``1 / p`` but no longer bounded away from it, so ``n < p`` is
+        where the warning starts. ``n`` counts the observations with nonzero
+        weight in the bin that has fewest (see :attr:`n_valid_observations`);
+        the floor and the bias are described in the Notes of
+        :meth:`global_coherence`.
         """
-        n_observations, n_signals = self.n_observations, self.n_signals
-        if n_observations >= n_signals:
+        n_observations, n_signals = self._fewest_valid_observations(), self.n_signals
+        if n_observations == 0 or n_observations >= n_signals:
             return
         averaged = self.expectation_type.split("_")
         # A labelled wrapper fixed expectation_type at "trials_tapers": name the
@@ -1891,17 +1923,26 @@ class Connectivity:
                 "expectation_type='time_trials_tapers') for coefficients)"
             )
         remedies.append("fewer signals")
+        dropped = n_observations < self.n_observations
         if n_observations == 1:
+            where = _SINGLE_OBSERVATION_IN_SOME_BINS if dropped else "(n_observations == 1)"
             floor = (
-                "is computed from a single observation (n_observations == 1). The "
+                f"is computed from a single observation {where}. The "
                 "cross-spectral matrix then has rank one, so its first component "
                 "holds all of the power. Global coherence is forced to 1 whatever "
                 "the data, and the result carries no information"
             )
         else:
+            pooled = (
+                f"as few as {n_observations} observations with nonzero weight in "
+                "some bins (see n_valid_observations; of the averaged "
+                f"{' x '.join(averaged)})"
+                if dropped
+                else f"n_observations == {n_observations} observations (the averaged "
+                f"{' x '.join(averaged)})"
+            )
             floor = (
-                f"pools n_observations == {n_observations} observations (the "
-                f"averaged {' x '.join(averaged)}) for {n_signals} signals. The "
+                f"pools {pooled} for {n_signals} signals. The "
                 f"cross-spectral matrix then has rank at most {n_observations}, so "
                 f"global coherence is at least 1/{n_observations} = "
                 f"{1 / n_observations:.3g} whatever the data"
@@ -2205,7 +2246,10 @@ class Connectivity:
         )
         if weights is None:
             return cross_spectral_matrix / n_observations
-        denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis]
+        # At the product's precision, so the weights do not promote it.
+        denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis].astype(
+            cross_spectral_matrix.real.dtype, copy=False
+        )
         return _divide_where(cross_spectral_matrix, denominator, denominator > 0, xp.nan)
 
     @cached_property
@@ -2332,18 +2376,119 @@ class Connectivity:
         return _divide_where(numerator, denominator, denominator > 0, xp.nan)
 
     @cached_property
-    def _observation_weights_are_uniform(self) -> bool:
-        """Whether every reduced bin gives its observations equal weight."""
-        if self._observation_weights is None:
+    def _kept_observations(self) -> BackendArray | None:
+        """The observations 0/1 weights keep, when they are the same at every
+        frequency: ``(n_time_windows, n_trials, n_tapers, 1, 1)`` booleans.
+
+        ``Multitaper(artifact_samples=...)`` gives such weights. The phase-lag
+        moments then zero each dropped observation of a tile in place and
+        divide by the count kept, the values of the weighted path at a
+        fraction of its cost (the other expectations multiply by the weights
+        either way). ``None`` without weights or for any other weights.
+        """
+        weights = self._observation_weights
+        if weights is None:
+            return None
+        first = weights[..., :1, :]
+        if not bool(xp.all((first == 0) | (first == 1))) or not bool(xp.all(weights == first)):
+            return None
+        kept: BackendArray = first > 0
+        return kept
+
+    @cached_property
+    def _observation_weights_only_drop(self) -> bool:
+        """Whether the observation weights only keep or drop observations.
+
+        True when, in every reduced bin, the observations with nonzero weight
+        share one weight, so the weighted expectation there is the plain mean
+        of the observations it keeps: equal weights, or the 0/1 weights of
+        ``Multitaper(artifact_samples=...)`` and of a boxcar ``MorletWavelet``
+        with ``edge_mode="nan"``. The measures that count observations then
+        count each bin's kept ones (:attr:`n_valid_observations`). False when
+        the weights also reweight the observations they keep (a smoothing
+        kernel other than a boxcar), which those measures refuse.
+        """
+        if self._observation_weights is None or self._kept_observations is not None:
             return True
         weights = self._observation_weights[..., 0]
         kept_axes = self._kept_observation_axes
         order = [*kept_axes, 3, *self._expectation_axes]
         reordered = xp.transpose(weights, order)
         flattened = reordered.reshape((*reordered.shape[: len(kept_axes) + 1], -1))
-        if flattened.shape[-1] < 2:
-            return True
-        return bool(xp.all(flattened == flattened[..., :1]))
+        largest = xp.max(flattened, axis=-1, keepdims=True)
+        return bool(xp.all((flattened == largest) | (flattened == 0)))
+
+    def _valid_counts_over(self, axes: tuple[int, ...]) -> BackendArray:
+        """Observations with nonzero weight over the observation ``axes``.
+
+        Shape: the other observation axes, then ``n_fft_samples``. Only with
+        observation weights.
+        """
+        assert self._observation_weights is not None
+        counts: BackendArray = xp.count_nonzero(
+            self._observation_weights[..., 0] > 0, axis=axes
+        )
+        return counts
+
+    @cached_property
+    def _valid_observation_counts(self) -> BackendArray:
+        """Observations with nonzero weight in each reduced bin, ``(*kept
+        observation axes, n_fft_samples)``; only with observation weights."""
+        return self._valid_counts_over(self._expectation_axes)
+
+    @staticmethod
+    def _fewest_positive(counts: BackendArray) -> int:
+        """The smallest positive count, ignoring the bins that keep none
+        (every measure is NaN there); 0 if none keeps any."""
+        kept = counts[counts > 0]
+        return int(xp.min(kept)) if kept.size else 0
+
+    def _fewest_valid_observations(self) -> int:
+        """The fewest observations any reduced bin keeps (see
+        :meth:`_fewest_positive`); :attr:`n_observations` without weights."""
+        if self._observation_weights is None:
+            return self.n_observations
+        return self._fewest_positive(self._valid_observation_counts)
+
+    @staticmethod
+    def _uses_observations(fewest: int, n_observations: int, where: str) -> str:
+        """ "uses {n} observations", or "uses as few as {n} ... in some bins" with
+        ``where`` saying where the counts are when zero weights drop some."""
+        noun = f"observation{'' if fewest == 1 else 's'}"
+        if fewest == n_observations:
+            return f"uses {fewest} {noun}"
+        return f"uses as few as {fewest} {noun} in some bins ({where})"
+
+    def _counts_for_correction(self, measure: str, dtype: DTypeLike) -> int | BackendArray:
+        """The observation count of each bin of a measure that counts them.
+
+        ``n_observations`` without observation weights; otherwise each bin's
+        count of kept observations, shaped ``(..., n_nonnegative_frequencies,
+        1, 1)`` to broadcast against a pairwise measure, in the measure's real
+        ``dtype`` so they do not promote it. A bin with fewer than
+        two leaves the finite-sample correction undefined: the caller makes it
+        NaN. This warns once if a bin keeps a single observation; a bin that
+        keeps none is NaN in every measure, which the transform reports.
+        """
+        if self._observation_weights is None:
+            return self.n_observations
+        counts = self._valid_observation_counts
+        n_nonnegative = self._nonnegative_frequency_count(counts.shape[-1])
+        counts = counts[..., :n_nonnegative, xp.newaxis, xp.newaxis]
+        single = counts == 1
+        if bool(xp.any(single)):
+            n_single, n_bins = int(xp.count_nonzero(single)), int(single.size)
+            warnings.warn(
+                f"{measure}: {_SINGLE_KEPT_OBSERVATION} "
+                f"{n_single} of {n_bins} bins (one per kept observation index and "
+                "frequency), where its finite-sample correction, which needs two, "
+                "is undefined, so it is NaN there. Connectivity.n_valid_observations "
+                "counts each bin's observations; mark fewer samples as artifacts, or "
+                "use shorter windows or more trials.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return counts.astype(dtype)
 
     @property
     def _expectation_axes(self) -> tuple[int, ...]:
@@ -2368,9 +2513,12 @@ class Connectivity:
             Product of the lengths of the averaged observation axes (for the
             default ``"trials_tapers"`` expectation, ``n_trials * n_tapers``).
             This is a raw count, not an effective number of independent
-            observations: it ignores ``observation_weights`` and is not reduced
-            when the transform's observations are correlated (see
-            ``observations_are_independent``).
+            observations: it ignores ``observation_weights``, so it includes
+            the observations zero weights drop, and is not reduced when the
+            transform's observations are correlated (see
+            ``observations_are_independent``). Use
+            :attr:`n_valid_observations` when ``artifact_samples`` or edge
+            masking drops observations.
 
         """
         return int(
@@ -2378,6 +2526,59 @@ class Connectivity:
                 [self._fourier_coefficients.shape[axis] for axis in self._expectation_axes]
             )
         )
+
+    @property
+    def n_valid_observations(self) -> NDArray[np.intp]:
+        """Number of observations each bin of a result averages.
+
+        The observations with nonzero ``observation_weights`` among those the
+        expectation averages: :attr:`n_observations` in every bin without
+        weights, and fewer where zero weights drop observations, such as the
+        trial windows ``Multitaper(artifact_samples=...)`` drops or the
+        edges a ``MorletWavelet(edge_mode="nan")`` masks. The measures that
+        count observations (the debiased phase-lag measures, pairwise phase
+        consistency, the significance test of ``delay`` and ``group_delay``,
+        and ``jackknife``) use these counts; pass them to the statistics
+        functions too (for coherency shaped ``(..., n_frequencies, n_signals,
+        n_signals)``, ``n_valid_observations[..., np.newaxis, np.newaxis]``).
+        Like :attr:`n_observations` it is a raw count, not reduced for
+        correlated observations.
+
+        Returns
+        -------
+        NDArray[int], shape (*kept_observation_axes, n_frequencies)
+            One count per bin of a measure's leading axes: the observation axes
+            ``expectation_type`` keeps (``n_time_windows`` for the default),
+            then the non-negative frequencies of :attr:`frequencies`. A host
+            array.
+
+        Examples
+        --------
+        Drop the windows of a trial that an artifact touches:
+
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> time_series = np.random.default_rng(0).standard_normal((1000, 4, 2))
+        >>> artifact_samples = np.zeros((1000, 4), dtype=bool)
+        >>> artifact_samples[600:620, 1] = True  # trial 1, 0.6-0.62 s
+        >>> multitaper = Multitaper(
+        ...     time_series, sampling_frequency=1000, time_window_duration=0.25,
+        ...     artifact_samples=artifact_samples,
+        ... )
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> connectivity.n_observations  # 4 trials x 5 tapers
+        20
+        >>> connectivity.n_valid_observations[:, 0].tolist()  # per window, at 0 Hz
+        [20, 20, 15, 20]
+        """
+        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[3])
+        if self._observation_weights is None:
+            kept_shape = tuple(
+                self._fourier_coefficients.shape[axis] for axis in self._kept_observation_axes
+            )
+            return np.full((*kept_shape, n_nonnegative), self.n_observations, dtype=np.intp)
+        counts = self._valid_observation_counts[..., :n_nonnegative]
+        return np.asarray(to_numpy(counts), dtype=np.intp)
 
     @property
     def n_signals(self) -> int:
@@ -2492,6 +2693,15 @@ class Connectivity:
 
         Notes
         -----
+        Where zero ``observation_weights`` drop observations (the invalid
+        windows of ``Multitaper(artifact_samples=...)``, say), each bin's
+        interval is the jackknife of the observations it keeps: leaving out an
+        observation the bin does not have gives no replicate there, and the
+        degrees of freedom are its count of kept observations less one
+        (:attr:`n_valid_observations`; ``JackknifeResult.n_observations`` is
+        then one count per bin). A bin keeping fewer than 3 is NaN, with a
+        warning.
+
         Circular confidence bounds are wrapped to ``(-pi, pi]``, so when the
         interval crosses ``+/-pi`` the lower bound exceeds the upper bound;
         the interval is then the arc from ``lower`` up through ``pi`` and on
@@ -2517,7 +2727,10 @@ class Connectivity:
           zero-coherence null instead:
           :func:`spectral_connectivity.statistics.coherence_significance_pvalue`
           applied to ``coherency()`` and ``n_observations`` (valid for
-          independent, equally weighted observations), corrected across
+          independent, equally weighted observations; when ``artifact_samples``
+          or edge masking drops observations, pass
+          ``n_valid_observations[..., np.newaxis, np.newaxis]`` instead),
+          corrected across
           frequencies and pairs with
           :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`.
           For measures without an analytic null, use a permutation or
@@ -2631,18 +2844,56 @@ class Connectivity:
             observation_coefficients = coefficients
             observation_axis = 2 if self.expectation_type == "tapers" else 1
             n_observations = coefficients.shape[observation_axis]
-        if n_observations < 3:
+        # Where zero weights drop observations, which units each kept bin has:
+        # (n_units, *kept observation axes), a unit counting in a bin if it has
+        # a nonzero weight at any frequency there. Leaving out a unit a bin
+        # never had gives no replicate there.
+        unit_is_valid = None
+        if observation_weights is not None:
+            positive = observation_weights[..., 0] > 0
+            present = xp.any(positive, axis=-1)
+            # A frequency keeping only some of a bin's units would need its own
+            # replicates and count; one keeping none is NaN there anyway.
+            if not bool(
+                xp.all(
+                    (positive == present[..., xp.newaxis])
+                    | ~xp.any(positive, axis=observation_axis, keepdims=True)
+                )
+            ):
+                msg = (
+                    "jackknife needs observation_weights that drop the same "
+                    "observations at every frequency of a bin (or all of them), as "
+                    "Multitaper(artifact_samples=...) and MorletWavelet(edge_mode='nan') "
+                    "do; these drop an observation at some frequencies only, which "
+                    "would give those frequencies a different count of replicates. "
+                    "Compute the interval one frequency at a time, or zero an "
+                    "observation's weight at every frequency."
+                )
+                raise ValueError(msg)
+            if self.expectation_type == "trials_tapers":
+                present = present[:, :, 0]
+            present = to_numpy(xp.moveaxis(present, observation_axis, 0))
+            if not present.all():
+                unit_is_valid = present
+        n_valid = n_observations if unit_is_valid is None else int(unit_is_valid.sum(0).max())
+        if n_valid < 3:
             msg = (
-                f"jackknife requires at least 3 observations, got {n_observations}. "
+                f"jackknife requires at least 3 observations, got {n_valid}"
+                f"{'' if unit_is_valid is None else ' with nonzero weight in any bin'}. "
                 "With two, each leave-one-out replicate has a single observation, "
                 "which forces magnitude-normalized measures to 1 and makes the "
                 "interval degenerate (a zero standard error, or NaN under a "
                 "variance-stabilizing transform such as the coherence default)."
             )
             raise ValueError(msg)
+        omitted_units: Sequence[int] = range(n_observations)
+        if unit_is_valid is not None:
+            omitted_units = np.flatnonzero(
+                unit_is_valid.reshape(n_observations, -1).any(axis=1)
+            ).tolist()
 
         replicates: list[NDArray[np.floating]] = []
-        for omitted in range(n_observations):
+        for omitted in omitted_units:
             keep = xp.arange(n_observations) != omitted
             subset = xp.compress(keep, observation_coefficients, axis=observation_axis)
             subset_weights = (
@@ -2667,7 +2918,12 @@ class Connectivity:
             )
             token = _emit_migration_notices.set(False)
             try:
-                replicate = getattr(replicate_connectivity, method)(**method_kwargs)
+                # Only a bin with fewer than 3 kept observations leaves a
+                # replicate a single one, and the interval is NaN there.
+                with _user_warnings_ignored(
+                    _SINGLE_KEPT_OBSERVATION_WARNINGS, unit_is_valid is not None
+                ):
+                    replicate = getattr(replicate_connectivity, method)(**method_kwargs)
             finally:
                 _emit_migration_notices.reset(token)
             if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
@@ -2694,6 +2950,31 @@ class Connectivity:
                 resolved_transformation = "identity"
         else:
             resolved_transformation = transformation
+        replicate_is_valid = None
+        if unit_is_valid is not None and not unit_is_valid[omitted_units].all():
+            # Each bin's replicates lead the measure's own axes.
+            kept_shape = unit_is_valid.shape[1:]
+            replicate_is_valid = unit_is_valid[omitted_units].reshape(
+                (
+                    len(omitted_units),
+                    *kept_shape,
+                    *(1,) * (full_estimate.ndim - len(kept_shape)),
+                )
+            )
+            too_few = unit_is_valid.sum(axis=0) < 3
+            if too_few.any():
+                warnings.warn(
+                    f"jackknife: observation_weights leave fewer than 3 observations "
+                    f"in {int(too_few.sum())} of {too_few.size} bins (see "
+                    "n_valid_observations), too few for a leave-one-out interval, so "
+                    "the bias-corrected estimate, standard error and bounds are NaN "
+                    "there.",
+                    UserWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
+                replicate_is_valid = replicate_is_valid & ~too_few.reshape(
+                    replicate_is_valid.shape[1:]
+                )
         result = jackknife_confidence_interval(
             full_estimate,
             np.stack(replicates, axis=0),
@@ -2705,6 +2986,7 @@ class Connectivity:
                 if method == "phase_locking_value"
                 else False
             ),
+            _replicate_is_valid=replicate_is_valid,
         )
         if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:
             # tanh maps the atanh-scale interval onto [-1, 1], but a magnitude
@@ -3156,7 +3438,9 @@ class Connectivity:
         **Range**: ``[-1, 1]``. ``Im(S_ij) / sqrt(S_ii * S_jj)``. Pairs
         involving a zero-power signal are 0, not NaN: :meth:`coherency` masks
         them with ``nan + 0j``, whose imaginary part is 0, so use
-        :meth:`power` to find such signals. The diagonal is NaN, a mask
+        :meth:`power` to find such signals. A pair is NaN where a signal's
+        power is not finite: NaN, as in a bin that keeps no observation (see
+        :attr:`n_valid_observations`), or infinite. The diagonal is NaN, a mask
         matching :meth:`coherency`: the imaginary part of a signal's coherency
         with itself is 0, which :meth:`imaginary_coherence` returns there.
 
@@ -3179,6 +3463,12 @@ class Connectivity:
         True
         """
         imaginary = self._coherency().imag
+        # Coherency is nan + 0j both where a signal has zero power (0 here, as
+        # documented) and where its power is not finite: NaN, such as a bin
+        # that keeps no observation, or infinite, from overflow. Those stay NaN.
+        n_nonnegative = self._nonnegative_frequency_count(self._power.shape[-2])
+        bad_power = ~xp.isfinite(self._power[..., :n_nonnegative, :])
+        imaginary[bad_power[..., :, xp.newaxis] | bad_power[..., xp.newaxis, :]] = xp.nan
         diagonal = xp.arange(self.n_signals)
         imaginary[..., diagonal, diagonal] = xp.nan
         return imaginary
@@ -3251,14 +3541,18 @@ class Connectivity:
             "the null space: the estimate is 1 for every pair of two signals and "
             "otherwise unrelated to the data",
         )
-        n_observations = self.n_observations
+        n_observations = self._fewest_valid_observations()
         # The inverse of a rank-deficient cross-spectral matrix is dominated by
         # its null space: with one null direction the normalized off-diagonal
         # precision has unit magnitude for every pair, and with more it is still
         # unrelated to the data. (A single observation already warned above.)
+        # With observations dropped by zero weights, the bin keeping fewest.
         if 2 <= n_observations < self.n_signals:
+            uses = self._uses_observations(
+                n_observations, self.n_observations, "see n_valid_observations"
+            )
             warnings.warn(
-                f"partial_coherence uses {n_observations} observations (the "
+                f"partial_coherence {uses} (the "
                 f"averaged trials x tapers), fewer than the {self.n_signals} "
                 "signals, so the cross-spectral matrix is rank-deficient and its "
                 "inverse is dominated by the null space: the estimate is forced "
@@ -3433,36 +3727,50 @@ class Connectivity:
         True
         """
         labels, group_indices, _ = self._validated_group_indices(group_labels)
-        # The estimate treats trials x tapers as observations. When a group pair
-        # has more signals than observations, the two groups' observation
-        # subspaces must intersect and the value is forced to 1 for any data.
+        n_frequencies = self._fourier_coefficients.shape[-2]
+        non_negative_frequencies = xp.arange(
+            0, self._nonnegative_frequency_count(n_frequencies)
+        )
+        observation_weights = None
+        # The estimate treats each window's trials x tapers as observations,
+        # less those zero weights drop: (n_time_windows, n_frequencies) counts.
         n_observations = (
             self._fourier_coefficients.shape[1] * self._fourier_coefficients.shape[2]
         )
+        valid_counts = None
+        fewest = n_observations
+        if self._observation_weights is not None:
+            observation_weights = self._observation_weights[..., non_negative_frequencies, :]
+            # Whatever expectation_type is: canonical coherence always pools
+            # each window's trials and tapers.
+            valid_counts = self._valid_counts_over((1, 2))[..., non_negative_frequencies]
+            fewest = self._fewest_positive(valid_counts) or n_observations
+        # When a group pair has more signals than observations, the two groups'
+        # observation subspaces must intersect and the value is forced to 1 for
+        # any data.
         degenerate_pairs = [
             (labels[first], labels[second])
             for first, second in combinations(range(len(labels)), 2)
-            if len(group_indices[first]) + len(group_indices[second]) > n_observations
+            if len(group_indices[first]) + len(group_indices[second]) > fewest
         ]
         if degenerate_pairs:
             pairs = ", ".join(f"({first}, {second})" for first, second in degenerate_pairs)
+            uses = self._uses_observations(
+                fewest,
+                n_observations,
+                "time windows and frequencies whose trials x tapers observation_weights "
+                "partly drop",
+            )
             warnings.warn(
-                f"canonical_coherence uses {n_observations} "
-                f"observation{'' if n_observations == 1 else 's'} (trials x "
+                f"canonical_coherence {uses} (trials x "
                 f"tapers), fewer than the signals in group pair(s) {pairs}; "
                 "their canonical coherence is forced to 1 regardless of the data. "
                 "Provide more trials or tapers, or use smaller groups.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
-        n_frequencies = self._fourier_coefficients.shape[-2]
-        non_negative_frequencies = xp.arange(
-            0, self._nonnegative_frequency_count(n_frequencies)
-        )
         fourier_coefficients = self._fourier_coefficients[..., non_negative_frequencies, :]
-        observation_weights = None
-        if self._observation_weights is not None:
-            observation_weights = self._observation_weights[..., non_negative_frequencies, :]
+        if observation_weights is not None:
             # Canonical correlation is computed from observation covariance
             # matrices. Multiplying every observation by sqrt(weight) gives the
             # weighted covariance while retaining the existing whitening
@@ -3504,8 +3812,8 @@ class Connectivity:
         magnitude = _clip_rounding_above_one(_squared_magnitude(canonical_coherency))
         # (n_time_windows, n_frequencies) bins already reported as undefined.
         no_valid_observations = xp.zeros(ranks[0].shape, dtype=bool)
-        if observation_weights is not None:
-            no_valid_observations = xp.sum(observation_weights[..., 0], axis=(1, 2)) <= 0
+        if valid_counts is not None:
+            no_valid_observations = valid_counts == 0
         # A group with no power at a bin has no direction left after whitening;
         # its canonical coherence there is 0/0, so report NaN (as coherency does)
         # rather than the 0 the empty projection would give.
@@ -3518,8 +3826,12 @@ class Connectivity:
             xp.nan,
             magnitude,
         )
-        full_rank = xp.asarray(
-            [min(len(indices), n_observations) for indices in group_indices]
+        # A group spans at most as many directions as the bin has observations.
+        group_sizes = xp.asarray([len(indices) for indices in group_indices])
+        full_rank = (
+            xp.minimum(group_sizes, n_observations)
+            if valid_counts is None
+            else xp.minimum(group_sizes, valid_counts[..., xp.newaxis])
         )
         reported = ~no_valid_observations[..., xp.newaxis]
         # One host synchronization for both warnings: (2, n_groups) flags.
@@ -4214,8 +4526,9 @@ class Connectivity:
             (``n_observations < n_signals``): the value is then at least
             ``1 / n_observations`` whatever the data (1 for a single
             observation), above the ``1 / n_signals`` of independent signals.
-            The count is :attr:`n_observations`, which includes observations
-            that zero ``observation_weights`` omit. Also if the expectation
+            Where zero ``observation_weights`` drop observations, the count is
+            that of the bin keeping fewest (:attr:`n_valid_observations`).
+            Also if the expectation
             pools time windows the transform reports as correlated
             (``time_bins_are_independent`` is ``False``, e.g. windows
             overlapping by more than half), which add fewer effective
@@ -4263,10 +4576,11 @@ class Connectivity:
           trials x tapers by default, times the windows when time is pooled)
           and ``p`` signals, the leading value is at least ``1 / min(n, p)``
           whatever the data, and 1 for one observation; it warns when
-          ``n < p``. ``n`` is the raw count: observations that zero
-          ``observation_weights`` omit (the masked edges of a Morlet
-          transform, say) still count, so the floor can be higher than
-          ``1 / min(n, p)`` there, and the warning does not see it.
+          ``n < p``. Observations that zero ``observation_weights`` drop (the
+          dropped windows of ``Multitaper(artifact_samples=...)`` or the masked
+          edges of a Morlet transform, say) do not count: ``n`` is each bin's
+          :attr:`n_valid_observations`, and the warning sees the bin keeping
+          fewest.
         - *Bias without coupling*: independent signals of equal power have the
           value ``1 / p``, but the estimate is well above it unless
           ``n >> p``. As ``n`` and ``p`` grow with ``p / n`` fixed, the largest
@@ -4546,7 +4860,7 @@ class Connectivity:
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
     def _phase_locking_value(
-        self, dtype: DTypeLike | None = None
+        self, dtype: DTypeLike | None = None, *, warn_single_observation: bool = True
     ) -> NDArray[np.complexfloating]:
         # Normalize each Fourier coefficient to unit magnitude, then reuse the
         # batched reduced cross-spectral matmul: because
@@ -4558,7 +4872,8 @@ class Connectivity:
         # O(observations * signals**2). Kept on the active namespace (xp); the
         # public ``phase_locking_value`` wrapper converts to NumPy.
         self._validate_multiple_signals()
-        self._warn_single_observation_degenerate("phase_locking_value")
+        if warn_single_observation:
+            self._warn_single_observation_degenerate("phase_locking_value")
         # Normalize at the computation dtype (``self._dtype``, complex128 by
         # default): the previous materialized path formed the outer product at
         # that dtype, so normalizing complex64 inputs at their own precision here
@@ -4570,6 +4885,10 @@ class Connectivity:
         coefficients = self._nonnegative_fourier_coefficients(dtype)
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
+        if self._observation_weights is not None:
+            # An observation zero weights drop (a zero-filled invalid window)
+            # never reaches the average.
+            zero_magnitude &= self._observation_weights[..., : coefficients.shape[-2], :] > 0
         if bool(xp.any(zero_magnitude)):
             warnings.warn(
                 "Some cross-spectrum entries have zero magnitude (e.g. a "
@@ -4826,9 +5145,8 @@ class Connectivity:
             # Filled here and cached only once complete, so an error partway
             # through leaves no uninitialized moments behind.
             if (
-                self._observation_weights is None
-                and self.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS
-            ):
+                self._observation_weights is None or self._kept_observations is not None
+            ) and self.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS:
                 computed_keys = list(_IMAGINARY_MOMENTS)
             else:
                 computed_keys = list(dict.fromkeys(key for key in keys if key not in cache))
@@ -4950,7 +5268,8 @@ class Connectivity:
         :meth:`_expectation`, which needs the per-observation values.
         """
         block = (..., slice(start, stop), slice(start, None))
-        if self._observation_weights is not None:
+        keep = self._kept_observations
+        if self._observation_weights is not None and keep is None:
             if "sign" in moments or "nonzero" in moments:
                 # One sign pass into the scratch buffer serves both moments.
                 xp.sign(imaginary, out=scratch)
@@ -4965,28 +5284,54 @@ class Connectivity:
             return
 
         observation_axes = self._expectation_axes
-        n_observations = self.n_observations
+        if keep is not None:
+            # Zero the dropped observations in place (they add nothing to any
+            # sum) and divide each sum by the count kept.
+            keep = keep[..., 0, 0].reshape((*keep.shape[:3], 1, 1, 1))
+            xp.copyto(imaginary, 0, where=~keep)
+            count = xp.sum(keep, axis=observation_axes)
+
+            def mean(total: BackendArray) -> BackendArray:
+                return _divide_where(total, count, count > 0, xp.nan)
+
+        else:
+            n_observations = self.n_observations
+
+            def mean(total: BackendArray) -> BackendArray:
+                return total / n_observations
+
         if "sign" in moments or "nonzero" in moments:
             positive = xp.count_nonzero(imaginary > 0, axis=observation_axes)
             negative = xp.count_nonzero(imaginary < 0, axis=observation_axes)
             invalid = xp.any(xp.isnan(imaginary), axis=observation_axes)
             if "sign" in moments:
-                moments["sign"][block] = xp.where(
-                    invalid, xp.nan, (positive - negative) / n_observations
-                )
+                moments["sign"][block] = xp.where(invalid, xp.nan, mean(positive - negative))
             if "nonzero" in moments:
                 moments["nonzero"][block] = xp.where(
-                    invalid, xp.nan, (positive + negative) / n_observations
+                    invalid, xp.nan, mean(positive + negative)
                 )
         if "imaginary" in moments:
-            moments["imaginary"][block] = xp.mean(imaginary, axis=observation_axes)
+            moments["imaginary"][block] = (
+                xp.mean(imaginary, axis=observation_axes)
+                if keep is None
+                else mean(xp.sum(imaginary, axis=observation_axes))
+            )
         if "squared" in moments:
-            # Sum of squares without materializing imaginary * imaginary.
-            squared_sum = xp.einsum(squared_subscripts, imaginary, imaginary)
-            moments["squared"][block] = squared_sum / n_observations
+            if keep is None:
+                # Sum of squares without materializing imaginary * imaginary.
+                squared_sum = xp.einsum(squared_subscripts, imaginary, imaginary)
+            else:
+                # As the weighted path sums them, to the bit.
+                xp.multiply(imaginary, imaginary, out=scratch)
+                squared_sum = xp.sum(scratch, axis=observation_axes)
+            moments["squared"][block] = mean(squared_sum)
         if "absolute" in moments:
             xp.abs(imaginary, out=scratch)
-            moments["absolute"][block] = xp.mean(scratch, axis=observation_axes)
+            moments["absolute"][block] = (
+                xp.mean(scratch, axis=observation_axes)
+                if keep is None
+                else mean(xp.sum(scratch, axis=observation_axes))
+            )
 
     @_asnumpy
     def phase_lag_index(self) -> NDArray[np.floating]:
@@ -5234,18 +5579,25 @@ class Connectivity:
         True
         """
         self._validate_debiasing_observations("debiased_squared_phase_lag_index")
-        n_observations = self.n_observations
         mean_sign, mean_nonzero, mean_absolute = self._imaginary_cross_spectrum_moments(
             "sign", "nonzero", "absolute"
+        )
+        n_observations = self._counts_for_correction(
+            "debiased_squared_phase_lag_index", mean_sign.dtype
         )
         # The mean of s_k s_l over ordered pairs of distinct observations,
         # (n**2 m**2 - sum_k s_k**2) / (n (n - 1)), is unbiased for E[s]**2.
         # sum_k s_k**2 / n is the fraction of observations whose Im is not 0;
-        # Vinck's closed form (n m**2 - 1) / (n - 1) takes it as 1.
-        debiased = (n_observations * mean_sign**2 - mean_nonzero) / (n_observations - 1.0)
+        # Vinck's closed form (n m**2 - 1) / (n - 1) takes it as 1. With
+        # observations dropped by zero weights, n is each bin's kept count and
+        # the moments are means over the kept observations.
+        # A bin of one kept observation divides by 0; it is NaN below.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            debiased = (n_observations * mean_sign**2 - mean_nonzero) / (n_observations - 1.0)
         # Where there is no phase lag (in-phase signals, the zeroed diagonal)
         # the signs are rounding noise; there is no lag to estimate, so 0.
-        return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
+        result = xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
+        return self._nan_where_too_few(result, n_observations)
 
     @_asnumpy
     def debiased_squared_weighted_phase_lag_index(self) -> NDArray[np.floating]:
@@ -5297,11 +5649,15 @@ class Connectivity:
         True
         """
         self._validate_debiasing_observations("debiased_squared_weighted_phase_lag_index")
-        n_observations = self.n_observations
         mean_imaginary, mean_squared, mean_absolute = self._imaginary_cross_spectrum_moments(
             "imaginary", "squared", "absolute"
         )
+        n_observations = self._counts_for_correction(
+            "debiased_squared_weighted_phase_lag_index", mean_imaginary.dtype
+        )
         # Each product is a fresh array, so the cached moments are not mutated.
+        # With observations dropped by zero weights the moments are means over
+        # each bin's kept observations, and these their sums.
         imaginary_csm_sum = mean_imaginary * n_observations
         squared_imaginary_csm_sum = mean_squared * n_observations
         imaginary_csm_magnitude_sum = mean_absolute * n_observations
@@ -5316,7 +5672,7 @@ class Connectivity:
                 imaginary_csm_sum**2 - squared_imaginary_csm_sum, weights, weights != 0, xp.nan
             ),
         )
-        return debiased
+        return self._nan_where_too_few(debiased, n_observations)
 
     @_asnumpy
     def pairwise_phase_consistency(self) -> NDArray[np.floating]:
@@ -5363,12 +5719,42 @@ class Connectivity:
         True
         """
         self._validate_debiasing_observations("pairwise_phase_consistency")
-        n_observations = self.n_observations
-        plv_sum = self._phase_locking_value() * n_observations
-        ppc = (plv_sum * plv_sum.conjugate() - n_observations) / (
-            n_observations**2 - n_observations
+        # A bin of a single observation is reported once, as PPC's.
+        phase_locking_value = self._phase_locking_value(warn_single_observation=False)
+        n_observations = self._counts_for_correction(
+            "pairwise_phase_consistency", phase_locking_value.real.dtype
         )
-        return ppc.real
+        # The mean over ordered pairs of distinct observations of
+        # Re(u_k conj(u_l)), unit phasors u: (|sum_k u_k|**2 - n) / (n (n - 1)).
+        # With observations dropped by zero weights, n is each bin's kept count
+        # and the PLV their mean.
+        plv_sum = phase_locking_value * n_observations
+        if isinstance(n_observations, int):
+            ppc = (plv_sum * plv_sum.conjugate() - n_observations) / (
+                n_observations**2 - n_observations
+            )
+            return ppc.real
+        ppc_values: NDArray[np.floating] = _divide_where(
+            (plv_sum * plv_sum.conjugate()).real - n_observations,
+            n_observations**2 - n_observations,
+            n_observations >= 2,
+            xp.nan,
+        )
+        return ppc_values
+
+    @staticmethod
+    def _nan_where_too_few(
+        values: BackendArray, n_observations: int | BackendArray
+    ) -> BackendArray:
+        """``values`` with NaN in the bins of fewer than two observations.
+
+        ``n_observations`` is :meth:`_counts_for_correction`'s count: an
+        ``int`` (every bin has it, so ``values`` is returned as it is) or one
+        count per bin.
+        """
+        if isinstance(n_observations, int):
+            return values
+        return xp.where(n_observations >= 2, values, xp.nan)
 
     @_orientation_changed
     @_source_first
@@ -6520,9 +6906,14 @@ class Connectivity:
             ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
         ]
 
+        # One count per window and frequency where zero weights drop
+        # observations, (..., n_band_frequencies, 1) against the pairs.
+        n_observations: int | NDArray[np.intp] = self.n_observations
+        if self._observation_weights is not None:
+            n_observations = self.n_valid_observations[..., frequency_mask, np.newaxis]
         is_significant = _find_significant_frequencies(
             bandpassed_coherency,
-            self.n_observations,
+            n_observations,
             independent_frequency_step,
             significance_threshold=significance_threshold,
             real_valued=self._real_valued_frequency_mask[frequency_mask][:, np.newaxis],
@@ -7448,7 +7839,7 @@ def _largest_independent_group_along_frequency(
 
 def _find_significant_frequencies(
     coherency: NDArray[np.complexfloating],
-    n_obs: int,
+    n_obs: int | NDArray[np.integer],
     frequency_step: int = 1,
     significance_threshold: float = 0.05,
     min_group_size: int = 3,
@@ -7470,8 +7861,11 @@ def _find_significant_frequencies(
     ----------
     coherency : array, shape (..., n_frequencies, n_signals, n_signals)
         The complex coherency between signals.
-    n_obs : int
-        The number of observations used to estimate the coherency.
+    n_obs : int or array of int
+        The number of observations used to estimate the coherency: one count,
+        or one per estimate, broadcastable against ``coherency``. An estimate
+        of fewer than 2 observations has no test (its p-value is NaN, so it is
+        never significant and does not count in the correction).
     frequency_step : int
         The number of points between each independent frequency step
     significance_threshold : float
@@ -7493,7 +7887,13 @@ def _find_significant_frequencies(
     # Test each frequency's coherence against zero using the exact
     # magnitude-squared-coherence null distribution. The Fisher z-transform is
     # miscalibrated at the zero boundary and over-rejects the null ~3-4x.
-    p_values = coherence_significance_pvalue(coherency, n_obs, real_valued=real_valued)
+    counts = np.asarray(n_obs)
+    too_few = counts < 2
+    p_values = coherence_significance_pvalue(
+        coherency, np.where(too_few, 2, counts), real_valued=real_valued
+    )
+    if np.any(too_few):
+        p_values = np.where(too_few, np.nan, p_values)
     is_significant = adjust_for_multiple_comparisons(
         p_values, alpha=significance_threshold, method=multiple_comparisons_method
     )
