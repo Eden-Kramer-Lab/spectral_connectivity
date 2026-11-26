@@ -273,11 +273,10 @@ def test_auto_shrinkage_refuses_weights_that_reweight_observations():
     connectivity.partial_coherence(shrinkage=0.3)  # a fixed intensity counts nothing
 
 
-def test_auto_intensity_counts_only_the_observations_weights_keep(monkeypatch):
+def test_auto_intensity_counts_only_the_observations_weights_keep():
     """Equal weights change nothing, and weights that only drop observations
-    give the intensity of the observations they keep. Such weights are refused
-    today by the guard against reweighting, which this bypasses: the intensity
-    must still count each bin's kept observations once that guard admits them."""
+    give the intensity of the observations they keep, as does
+    partial_coherence(shrinkage="auto")."""
     rng = np.random.default_rng(8)
     coefficients = _coefficients(rng, (2, 8, 2, 4, 3))
     intensity = Connectivity(coefficients).partial_coherence_shrinkage()
@@ -288,18 +287,59 @@ def test_auto_intensity_counts_only_the_observations_weights_keep(monkeypatch):
     keep[0, :3] = 0.0  # drop three trials from window 0
     dropped = coefficients.copy()
     dropped[0, :3] = np.nan  # omitted by a zero weight, so never used
-    monkeypatch.setattr(
-        Connectivity, "_require_uniform_observation_weights", lambda *args, **kwargs: None
-    )
     with pytest.warns(UserWarning, match="NaN or Inf"):
         weighted = Connectivity(dropped, observation_weights=keep)
+    kept = Connectivity(coefficients[:1, 3:])
     actual = weighted.partial_coherence_shrinkage()
-    np.testing.assert_allclose(
-        actual[0],
-        Connectivity(coefficients[:1, 3:]).partial_coherence_shrinkage()[0],
-        rtol=1e-12,
-    )
+    np.testing.assert_allclose(actual[0], kept.partial_coherence_shrinkage()[0], rtol=1e-12)
     np.testing.assert_allclose(actual[1], intensity[1], rtol=1e-12)
+    np.testing.assert_allclose(
+        weighted.partial_coherence(shrinkage="auto")[0],
+        kept.partial_coherence(shrinkage="auto")[0],
+        rtol=1e-10,
+        equal_nan=True,
+    )
+
+
+def test_auto_shrinkage_of_artifact_samples_is_that_of_the_kept_trial_windows():
+    """Multitaper(artifact_samples=...) drops the trial windows with an
+    artifact; "auto" shrinkage in each window is that of its kept trials."""
+    rng = np.random.default_rng(12)
+    window = 64
+    time_series = rng.standard_normal((2 * window, 6, 4))
+    time_series[:, :, 1] += 0.5 * time_series[:, :, 0]
+    artifacts = np.zeros(time_series.shape[:2], dtype=bool)
+    artifacts[10:20, [0, 4]] = True  # window 0 loses trials 0 and 4
+    time_series[artifacts] = np.nan
+    masked = Connectivity.from_transform(
+        Multitaper(
+            time_series,
+            100.0,
+            n_time_samples_per_window=window,
+            time_halfbandwidth_product=2,
+            artifact_samples="nonfinite",
+        )
+    )
+    kept = Connectivity.from_transform(
+        Multitaper(
+            time_series[:window, [1, 2, 3, 5]],
+            100.0,
+            n_time_samples_per_window=window,
+            time_halfbandwidth_product=2,
+        )
+    )
+    np.testing.assert_array_equal(masked.n_valid_observations[:, 0], [12, 18])
+    np.testing.assert_allclose(
+        masked.partial_coherence_shrinkage()[0],
+        kept.partial_coherence_shrinkage()[0],
+        rtol=1e-10,
+    )
+    np.testing.assert_allclose(
+        masked.partial_coherence(shrinkage="auto")[0],
+        kept.partial_coherence(shrinkage="auto")[0],
+        rtol=1e-10,
+        equal_nan=True,
+    )
 
 
 def test_auto_shrinkage_warns_for_correlated_observations():

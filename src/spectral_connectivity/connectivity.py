@@ -3931,10 +3931,9 @@ class Connectivity:
         power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
         root_power = xp.sqrt(power)
         has_power = power > 0  # False for NaN (a bin with no observation weights)
-        # Count each bin's kept observations, not n_observations: the uniform-
-        # weights guard admits only equal weights today, but once it admits
-        # weights that only drop observations, the raw count would give a wrong
-        # intensity without any error.
+        # Count each bin's kept observations, not n_observations: where zero
+        # weights drop observations (artifact_samples, say), the raw count
+        # would give a wrong intensity without any error.
         counts = (
             self.n_observations
             if self._observation_weights is None
