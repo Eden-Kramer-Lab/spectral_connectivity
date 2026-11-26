@@ -75,8 +75,13 @@ class JackknifeResult:
         ``(-pi, pi)``.
     n_observations : int or array of int
         Number of leave-one-out replicates; the interval's critical value has
-        ``n_observations - 1`` degrees of freedom. Where observation weights
-        drop different observations in different bins (see
+        ``n_observations - 1`` degrees of freedom. From
+        :meth:`Connectivity.jackknife` it is the number of averaged
+        observations (``n_trials * n_tapers`` for ``trials_tapers``) with
+        ``leave_out="observation"`` and the number of trials with
+        ``leave_out="trial"``, so it is not always
+        ``Connectivity.n_observations``. Where observation weights drop
+        different observations in different bins (see
         ``Connectivity.n_valid_observations``), one count per bin, an array
         that broadcasts against the estimate.
     transformation : str

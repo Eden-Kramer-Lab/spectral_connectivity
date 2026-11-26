@@ -976,7 +976,8 @@ class Connectivity:
         holds correlated estimates (a ``MorletWavelet`` smoothing neighborhood,
         or ``Welch`` segments overlapping by more than half). Measures whose
         finite-sample corrections or null distributions count observations
-        warn in that case, and ``jackknife`` refuses to leave out tapers.
+        warn in that case, and ``jackknife`` refuses to leave out tapers
+        (``leave_out="trial"``, which leaves out whole trials, still works).
     time_bins_are_independent : bool, default=True
         Whether the time bins may be counted as independent observations when
         the expectation averages over time. Transform constructors set this
@@ -2628,16 +2629,17 @@ class Connectivity:
         transformation: Literal[
             "auto", "identity", "log", "fisher", "fisher_squared", "circular"
         ] = "auto",
+        leave_out: Literal["observation", "trial"] = "observation",
         **method_kwargs: Any,
     ) -> JackknifeResult:
-        """Estimate uncertainty by leaving out one trial/taper observation.
+        """Estimate uncertainty by leaving out one observation or one trial.
 
         The configured expectation must average trials, tapers, or their
-        combination. For ``trials_tapers`` each trial-taper eigencoefficient is
-        treated as one observation. The method is recomputed for every
-        leave-one-out sample, so it supports nonlinear measures without an
-        analytic variance formula (at a computational cost proportional to
-        ``n_observations``).
+        combination. By default each averaged observation is left out in turn,
+        or each whole trial with ``leave_out="trial"``. The method is
+        recomputed for every leave-one-out sample, so it supports nonlinear
+        measures without an analytic variance formula (at a computational cost
+        proportional to the number of samples left out).
 
         Parameters
         ----------
@@ -2664,6 +2666,27 @@ class Connectivity:
               are clamped at 0, since a magnitude cannot be negative;
             - ``"circular"`` for ``coherence_phase``;
             - ``"identity"`` for every other measure.
+        leave_out : {"observation", "trial"}, default="observation"
+            What one leave-one-out replicate omits. ``"observation"`` omits
+            one averaged observation (a trial-taper eigencoefficient for
+            ``trials_tapers``). ``"trial"`` omits one whole trial (the
+            coefficients' trial axis), all of its tapers together, so the
+            interval has ``n_trials - 1`` degrees of freedom and reflects how
+            much the measure varies from trial to trial.
+
+            Prefer ``"trial"`` for recordings of several trials unless they
+            are known to be alike: when trials differ (in coupling strength,
+            state, or noise level), leaving out one taper at a time treats the
+            tapers of one trial as independent draws from one shared spectrum
+            and gives too narrow an interval. Its cost is a wider interval
+            when trials are alike and few (see Notes). Keep ``"observation"``
+            for a single trial.
+
+            ``"trial"`` needs an expectation that averages trials
+            (``"trials_tapers"``, or ``"trials"``, for which the two settings
+            are the same) and at least 3 trials. It assumes the trials are
+            independent, but not the tapers within one, so it is allowed when
+            ``observations_are_independent`` is ``False``.
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -2679,17 +2702,23 @@ class Connectivity:
         Raises
         ------
         ValueError
-            If the expectation averages tapers (``"tapers"`` or
-            ``"trials_tapers"``) but ``observations_are_independent`` is
-            ``False``: correlated observations (a MorletWavelet smoothing
-            neighborhood, overlapping Welch segments) are not valid
-            leave-one-out units. Recompute the transform with independent
-            observations instead: ``Welch`` with ``segment_overlap <= 0.5``, a
-            ``Multitaper`` transform, or ``MorletWavelet`` without
+            If ``leave_out="observation"`` and the expectation averages tapers
+            (``"tapers"`` or ``"trials_tapers"``) but
+            ``observations_are_independent`` is ``False``: correlated
+            observations (a MorletWavelet smoothing neighborhood, overlapping
+            Welch segments) are not valid leave-one-out units. With
+            ``"trials_tapers"`` and at least 3 trials, pass
+            ``leave_out="trial"``; otherwise recompute the transform with
+            independent observations: ``Welch`` with ``segment_overlap <=
+            0.5``, a ``Multitaper`` transform, or ``MorletWavelet`` without
             ``smoothing_time`` on at least 3 trials.
             (``expectation_type="trials"`` is accepted but keeps the correlated
             axis as an output dimension instead of averaging it, a different
             measure.)
+
+            Also raised if ``leave_out`` is not ``"observation"`` or
+            ``"trial"``, or is ``"trial"`` with an expectation that does not
+            average trials or with fewer than 3 trials.
 
         Notes
         -----
@@ -2699,8 +2728,9 @@ class Connectivity:
         observation the bin does not have gives no replicate there, and the
         degrees of freedom are its count of kept observations less one
         (:attr:`n_valid_observations`; ``JackknifeResult.n_observations`` is
-        then one count per bin). A bin keeping fewer than 3 is NaN, with a
-        warning.
+        then one count per bin). With ``leave_out="trial"`` the units are
+        trials, a trial counting in a bin if any of its tapers is kept there.
+        A bin keeping fewer than 3 is NaN, with a warning.
 
         Circular confidence bounds are wrapped to ``(-pi, pi]``, so when the
         interval crosses ``+/-pi`` the lower bound exceeds the upper bound;
@@ -2742,6 +2772,18 @@ class Connectivity:
         - ``coherence_phase`` (``circular``): under-covers when coherence is
           weak (77-88% at a true ``|coherency|`` of 0.1, 84-93% at 0.2,
           87-94% at 0.3, against 92-95% at 0.6).
+
+        Leaving out trials: with 5 to 20 trials of 3 or 7 tapers each and the
+        same pooled magnitude-squared coherence (0.45 ** 2), the default 95%
+        interval for ``magnitude_squared_coherence`` covers 94-96% with either
+        setting when every trial has the same coherency. When each trial's
+        coherency is drawn from U(0, 0.9), ``leave_out="observation"`` covers
+        82-92% (less with 7 tapers per trial than with 3), because it treats
+        one trial's tapers as independent draws, and ``leave_out="trial"``
+        93.5-96.5%, from ``n_tapers`` times fewer replicates. When the trials
+        are alike, the median ``"trial"`` interval is wider by 19-47% with 3
+        or 4 trials, 13-20% with 5 and 5-8% with 10, at the same coverage
+        (two Monte Carlo runs of 1000-2000 datasets each).
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (
@@ -2754,10 +2796,37 @@ class Connectivity:
             )
             raise ValueError(msg)
         _validate_confidence_level(confidence_level)
-        if not self._observations_are_independent and self.expectation_type in {
-            "tapers",
-            "trials_tapers",
-        }:
+        if leave_out not in ("observation", "trial"):
+            msg = f"leave_out must be 'observation' or 'trial'; got {leave_out!r}."
+            raise ValueError(msg)
+        if leave_out == "trial" and self.expectation_type == "tapers":
+            msg = (
+                "jackknife(leave_out='trial') leaves out one trial at a time, but "
+                "expectation_type='tapers' does not average trials (each trial is "
+                "its own output). Build the Connectivity with "
+                "expectation_type='trials_tapers' to average trials and leave one "
+                "out, or keep leave_out='observation' to leave out one taper."
+            )
+            raise ValueError(msg)
+        coefficients = self._fourier_coefficients
+        n_trials = coefficients.shape[1]
+        # Each replicate leaves out one index of ``observation_axis``; for one
+        # trial-taper observation of ``trials_tapers`` the two axes are
+        # flattened into axis 1 first.
+        flatten_trials_tapers = (
+            self.expectation_type == "trials_tapers" and leave_out == "observation"
+        )
+        observation_axis = 2 if self.expectation_type == "tapers" else 1
+        n_observations = (
+            n_trials * coefficients.shape[2]
+            if flatten_trials_tapers
+            else coefficients.shape[observation_axis]
+        )
+        if (
+            leave_out == "observation"
+            and not self._observations_are_independent
+            and self.expectation_type in {"tapers", "trials_tapers"}
+        ):
             msg = (
                 f"jackknife with expectation_type={self.expectation_type!r} leaves "
                 "out one taper observation at a time, but this transform's "
@@ -2765,6 +2834,13 @@ class Connectivity:
                 "False: a MorletWavelet smoothing neighborhood, or Welch segments "
                 "overlapping by more than half), so leave-one-out intervals over "
                 "them are invalid. For an interval on the same averaged measure, "
+            )
+            if self.expectation_type == "trials_tapers" and n_trials >= 3:
+                msg += (
+                    "pass leave_out='trial', which leaves out whole trials and is "
+                    "valid with correlated tapers, or "
+                )
+            msg += (
                 "recompute the transform with independent observations: Welch "
                 "with segment_overlap <= 0.5, a Multitaper transform, or "
                 "MorletWavelet without smoothing_time on at least 3 trials (the "
@@ -2803,6 +2879,35 @@ class Connectivity:
         # on the class, so the bound attribute is always callable here.
         measure = getattr(self, method)
 
+        if n_observations < 3:
+            if leave_out == "trial":
+                msg = (
+                    "jackknife(leave_out='trial') requires at least 3 trials, got "
+                    f"{n_observations}: an interval over n trials has n - 1 degrees "
+                    "of freedom, so 2 trials give a critical value near 13 and 1 "
+                    "trial gives none."
+                )
+                if (
+                    self.expectation_type == "trials_tapers"
+                    and self._observations_are_independent
+                ):
+                    msg += (
+                        " Keep leave_out='observation' to leave out one trial-taper "
+                        "observation at a time."
+                    )
+                else:
+                    msg += " Collect at least 3 trials for an interval."
+            else:
+                msg = (
+                    "jackknife requires at least 3 observations, got "
+                    f"{n_observations}. With two, each leave-one-out replicate has a "
+                    "single observation, which forces magnitude-normalized measures "
+                    "to 1 and makes the interval degenerate (a zero standard error, "
+                    "or NaN under a variance-stabilizing transform such as the "
+                    "coherence default)."
+                )
+            raise ValueError(msg)
+
         full_estimate = measure(**method_kwargs)
         if isinstance(full_estimate, tuple):
             msg = f"jackknife does not support tuple-valued measure {method!r}."
@@ -2820,10 +2925,9 @@ class Connectivity:
             msg = f"jackknife requires a real-valued measure; {method!r} is complex."
             raise TypeError(msg)
 
-        coefficients = self._fourier_coefficients
         observation_weights = self._observation_weights
-        if self.expectation_type == "trials_tapers":
-            n_observations = coefficients.shape[1] * coefficients.shape[2]
+        observation_coefficients = coefficients
+        if flatten_trials_tapers:
             observation_coefficients = coefficients.reshape(
                 coefficients.shape[0],
                 n_observations,
@@ -2839,11 +2943,6 @@ class Connectivity:
                     observation_weights.shape[3],
                     1,
                 )
-            observation_axis = 1
-        else:
-            observation_coefficients = coefficients
-            observation_axis = 2 if self.expectation_type == "tapers" else 1
-            n_observations = coefficients.shape[observation_axis]
         # Where zero weights drop observations, which units each kept bin has:
         # (n_units, *kept observation axes), a unit counting in a bin if it has
         # a nonzero weight at any frequency there. Leaving out a unit a bin
@@ -2851,6 +2950,10 @@ class Connectivity:
         unit_is_valid = None
         if observation_weights is not None:
             positive = observation_weights[..., 0] > 0
+            if leave_out == "trial" and self.expectation_type == "trials_tapers":
+                # The unit is a whole trial, kept in a bin if any of its
+                # tapers is.
+                positive = xp.any(positive, axis=2, keepdims=True)
             present = xp.any(positive, axis=-1)
             # A frequency keeping only some of a bin's units would need its own
             # replicates and count; one keeping none is NaN there anyway.
@@ -2875,14 +2978,16 @@ class Connectivity:
             present = to_numpy(xp.moveaxis(present, observation_axis, 0))
             if not present.all():
                 unit_is_valid = present
-        n_valid = n_observations if unit_is_valid is None else int(unit_is_valid.sum(0).max())
-        if n_valid < 3:
+        units = "trials" if leave_out == "trial" else "observations"
+        # The raw count was checked above; these are the units kept anywhere.
+        if unit_is_valid is not None and (n_valid := int(unit_is_valid.sum(0).max())) < 3:
+            caller = "jackknife(leave_out='trial')" if leave_out == "trial" else "jackknife"
             msg = (
-                f"jackknife requires at least 3 observations, got {n_valid}"
-                f"{'' if unit_is_valid is None else ' with nonzero weight in any bin'}. "
-                "With two, each leave-one-out replicate has a single observation, "
-                "which forces magnitude-normalized measures to 1 and makes the "
-                "interval degenerate (a zero standard error, or NaN under a "
+                f"{caller} requires at least 3 {units}, got {n_valid} with "
+                "nonzero weight in any bin. With two, "
+                "each leave-one-out replicate has a single one, which forces "
+                "magnitude-normalized measures to 1 and makes the interval "
+                "degenerate (a zero standard error, or NaN under a "
                 "variance-stabilizing transform such as the coherence default)."
             )
             raise ValueError(msg)
@@ -2964,7 +3069,7 @@ class Connectivity:
             too_few = unit_is_valid.sum(axis=0) < 3
             if too_few.any():
                 warnings.warn(
-                    f"jackknife: observation_weights leave fewer than 3 observations "
+                    f"jackknife: observation_weights leave fewer than 3 {units} "
                     f"in {int(too_few.sum())} of {too_few.size} bins (see "
                     "n_valid_observations), too few for a leave-one-out interval, so "
                     "the bias-corrected estimate, standard error and bounds are NaN "

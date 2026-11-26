@@ -96,6 +96,12 @@ The migration guide for code written against 2.x is
   `group_labels="region"`, whose values then label the signals. A string
   given with a plain array, or to `connectivity_to_xarray`, now raises
   `TypeError` saying so, where it raised a shape `ValueError`.
+- `Connectivity.jackknife(method, leave_out="trial")` leaves out whole trials
+  (all their tapers) instead of single trial-taper observations, so the
+  interval includes the variability between trials; the default interval is
+  too narrow when coupling varies across trials. It needs an expectation that
+  averages trials and at least 3 trials, and is allowed when the tapers within
+  a trial are correlated. The default (`"observation"`) is unchanged.
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided

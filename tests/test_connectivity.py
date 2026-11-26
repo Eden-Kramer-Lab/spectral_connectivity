@@ -26,6 +26,7 @@ from spectral_connectivity.connectivity import (
     _total_outflow,
 )
 from spectral_connectivity.simulate import simulate_MVAR, simulate_shared_oscillation
+from spectral_connectivity.statistics import jackknife_confidence_interval
 from spectral_connectivity.transforms import MorletWavelet, Multitaper
 from tests._backend_helpers import ON_GPU, to_device, to_host
 from tests._var_oracle import (
@@ -5011,6 +5012,145 @@ def test_connectivity_jackknife_recomputes_leave_one_out_measure():
         np.tanh(transformed + critical_value * transformed_standard_error) ** 2,
         rtol=1e-8,
     )
+
+
+def test_jackknife_leave_out_trial_recomputes_without_each_whole_trial():
+    """leave_out='trial' matches a hand-rolled jackknife that deletes all of one
+    trial's tapers at a time, on n_trials - 1 degrees of freedom."""
+    rng = np.random.default_rng(511)
+    shape = (1, 5, 3, 16, 2)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    result = Connectivity(coefficients).jackknife(
+        "magnitude_squared_coherence", leave_out="trial"
+    )
+
+    def by_trial(trials):  # (n_trials, n_tapers, n_fft, 2): pool the trials' tapers
+        return _fisher_squared_coherence(trials.reshape(-1, *trials.shape[2:]))
+
+    coherence = _magnitude_squared_coherence(_trial_taper_observations(coefficients))
+    transformed_standard_error = _leave_one_out_standard_error(by_trial, coefficients[0])
+    standard_error = 2 * np.sqrt(coherence) * (1 - coherence) * transformed_standard_error
+    critical_value = scipy.stats.t.ppf(0.975, df=4)
+
+    assert result.n_observations == 5
+    np.testing.assert_allclose(result.estimate[0, :, 0, 1], coherence, rtol=1e-10)
+    np.testing.assert_allclose(result.standard_error[0, :, 0, 1], standard_error, rtol=1e-8)
+    np.testing.assert_allclose(
+        result.confidence_interval[1][0, :, 0, 1],
+        np.tanh(np.arctanh(np.sqrt(coherence)) + critical_value * transformed_standard_error)
+        ** 2,
+        rtol=1e-8,
+    )
+
+
+def test_jackknife_leave_out_trial_drops_the_trial_from_weights_and_every_window():
+    """With observation weights and several time windows, each replicate drops
+    the same trial from the coefficients and the weights, in every window."""
+    rng = np.random.default_rng(516)
+    shape = (3, 4, 2, 8, 2)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.2, 1.0, (*shape[:-1], 1))
+
+    result = Connectivity(coefficients, observation_weights=weights).jackknife(
+        "magnitude_squared_coherence", leave_out="trial"
+    )
+
+    replicates = []
+    for omitted in range(shape[1]):
+        keep = np.arange(shape[1]) != omitted
+        replicates.append(
+            Connectivity(
+                coefficients[:, keep], observation_weights=weights[:, keep]
+            ).magnitude_squared_coherence()
+        )
+    full = Connectivity(
+        coefficients, observation_weights=weights
+    ).magnitude_squared_coherence()
+    expected = jackknife_confidence_interval(
+        full, np.stack(replicates), transformation="fisher_squared"
+    )
+    assert result.estimate.shape == (3, 5, 2, 2)
+    np.testing.assert_allclose(result.standard_error, expected.standard_error, rtol=1e-10)
+
+
+def test_jackknife_leave_out_trial_covers_when_coupling_varies_across_trials():
+    """When each trial has its own coherency, leaving out one taper at a time
+    treats a trial's tapers as independent draws and under-covers; leaving out
+    whole trials does not.
+
+    1000 datasets (on the time axis) of 10 trials x 7 tapers, each trial's
+    coherency drawn from U(0, 0.9), so the pooled magnitude-squared coherence
+    is 0.45**2. The jackknife's coverage is approximate, not exact, so the
+    allowance around 95% is 0.02: the sampling SE of 1000 datasets x 3
+    frequencies is 0.4-0.7% (the frequencies share each trial's coherency),
+    and the jackknife's own bias here is about -0.4 points (measured 94.4-94.8%
+    over four seeds). Leaving out observations measured 81.6-83.3%, about six
+    allowances below 95%; the guard sits at three.
+    """
+    rng = np.random.default_rng(513)
+    n_datasets, n_trials, n_tapers, n_fft = 1000, 10, 7, 4
+    shape = (n_datasets, n_trials, n_tapers, n_fft)
+    rho = rng.uniform(0, 0.9, (n_datasets, n_trials, 1, 1))
+
+    def complex_gaussian():
+        return (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / np.sqrt(2)
+
+    first, independent = complex_gaussian(), complex_gaussian()
+    second = rho * first + np.sqrt(1 - rho**2) * independent
+    connectivity = Connectivity(np.stack([first, second], axis=-1))
+
+    def coverage(leave_out):
+        result = connectivity.jackknife("magnitude_squared_coherence", leave_out=leave_out)
+        lower, upper = (bound[..., 0, 1] for bound in result.confidence_interval)
+        return np.mean((lower <= 0.45**2) & (upper >= 0.45**2))
+
+    assert abs(coverage("trial") - 0.95) < 0.02
+    assert coverage("observation") < 0.95 - 3 * 0.02
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "leave_out", "match"),
+    [
+        ({}, "trials", "leave_out must be 'observation' or 'trial'; got 'trials'"),
+        ({}, ["trial"], "leave_out must be 'observation' or 'trial'; got ['trial']"),
+        ({"expectation_type": "tapers"}, "trial", "expectation_type='tapers' does not"),
+    ],
+)
+def test_jackknife_rejects_an_invalid_leave_out(kwargs, leave_out, match):
+    rng = np.random.default_rng(514)
+    shape = (1, 4, 3, 8, 2)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape), **kwargs
+    )
+    with pytest.raises(ValueError, match=re.escape(match)):
+        connectivity.jackknife("magnitude_squared_coherence", leave_out=leave_out)
+
+
+@pytest.mark.parametrize(
+    ("expectation_type", "independent", "suggests_observation"),
+    [
+        ("trials_tapers", True, True),
+        # Leaving out correlated observations is refused, so not suggested.
+        ("trials_tapers", False, False),
+        ("trials", True, False),
+    ],
+)
+def test_jackknife_leave_out_trial_requires_three_trials(
+    expectation_type, independent, suggests_observation
+):
+    rng = np.random.default_rng(515)
+    shape = (1, 2, 3, 8, 2)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+        expectation_type=expectation_type,
+        observations_are_independent=independent,
+    )
+    with pytest.raises(ValueError, match="at least 3 trials, got 2") as error:
+        connectivity.jackknife("magnitude_squared_coherence", leave_out="trial")
+    message = str(error.value)
+    assert ("Keep leave_out='observation'" in message) is suggests_observation
+    assert ("Collect at least 3 trials" in message) is not suggests_observation
 
 
 def test_connectivity_jackknife_documents_and_accepts_fisher_squared():
