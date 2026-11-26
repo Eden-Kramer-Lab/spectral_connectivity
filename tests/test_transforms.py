@@ -1109,7 +1109,7 @@ def test_windowed_transforms_require_3d_input(construct):
     rng = np.random.default_rng(42)
     time_series = rng.standard_normal((100, 2, 2))
     np.testing.assert_array_equal(
-        construct(time_series.tolist()).fft(), construct(time_series).fft()
+        to_host(construct(time_series.tolist()).fft()), to_host(construct(time_series).fft())
     )
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 1D"):
         construct(rng.standard_normal(100))
@@ -2531,8 +2531,8 @@ def test_welch_default_segment_warns_on_coarse_resolution():
 def test_welch_default_segment_reads_the_length_of_a_nested_list():
     time_series = np.random.default_rng(918).standard_normal((600, 2, 2))
     np.testing.assert_array_equal(
-        Welch(time_series.tolist(), sampling_frequency=100).fft(),
-        Welch(time_series, sampling_frequency=100).fft(),
+        to_host(Welch(time_series.tolist(), sampling_frequency=100).fft()),
+        to_host(Welch(time_series, sampling_frequency=100).fft()),
     )
 
 
