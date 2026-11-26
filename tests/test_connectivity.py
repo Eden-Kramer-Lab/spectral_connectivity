@@ -1576,9 +1576,11 @@ def test__bandpass_keeps_the_masked_bins():
     data = np.arange(0, 10).reshape((2, 5))
     frequencies = np.arange(0, 5) * 2.0  # 0, 2, 4, 6, 8
     mask = np.array([False, True, True, False, False])
-    filtered_data, filtered_frequencies = _bandpass(data, frequencies, mask, axis=-1)
+    filtered_data, filtered_frequencies = _bandpass(
+        to_device(data), frequencies, mask, axis=-1
+    )
     np.testing.assert_array_equal(filtered_frequencies, [2.0, 4.0])
-    np.testing.assert_array_equal(filtered_data, [[1, 2], [6, 7]])
+    np.testing.assert_array_equal(to_host(filtered_data), [[1, 2], [6, 7]])
 
 
 @pytest.mark.parametrize("measure", ["group_delay", "delay", "phase_slope_index"])
