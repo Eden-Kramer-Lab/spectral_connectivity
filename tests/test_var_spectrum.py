@@ -679,14 +679,18 @@ def test_the_chain_check_catches_an_unscaled_factorization(monkeypatch):
         zero_lag = np.fft.irfft(cross_spectral_matrix, n=n_fft_samples, axis=-3)[..., :1, :, :]
         return xp.linalg.cholesky(xp.asarray(zero_lag)).swapaxes(-1, -2)
 
+    def unit_scale(cross_spectral_matrix):
+        # Every signal of the chain has power: none is white, no window is dead.
+        batch_shape = cross_spectral_matrix.shape[:-3]
+        n_signals = cross_spectral_matrix.shape[-1]
+        return (
+            xp.ones((*batch_shape, n_signals)),
+            xp.zeros((*batch_shape, n_signals), dtype=bool),
+            xp.zeros(batch_shape, dtype=bool),
+        )
+
     monkeypatch.setattr(decomposition, "_get_initial_conditions", transposed_cholesky_start)
-    monkeypatch.setattr(
-        decomposition,
-        "_signal_scale",
-        lambda cross_spectral_matrix: xp.ones(
-            cross_spectral_matrix.shape[:-3] + cross_spectral_matrix.shape[-1:]
-        ),
-    )
+    monkeypatch.setattr(decomposition, "_signal_scale", unit_scale)
     coefficients, noise_covariance = _shared_dynamics_chain(0.99)
     var = _var((coefficients, noise_covariance))
     granger = _directed(
