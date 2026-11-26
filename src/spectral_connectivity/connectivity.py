@@ -38,8 +38,7 @@ from spectral_connectivity._granger import (
     _estimate_subset_spectral_granger_prediction,
     _factorize_spectrum,
     _var_model_from_factor,
-    _var_model_from_spectrum,
-    _warn_nan_granger_pairs,
+    _warn_granger_failures,
 )
 from spectral_connectivity._multivariate import (
     GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
@@ -2350,7 +2349,7 @@ class Connectivity:
 
     @cached_property
     def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
-        return _regularized_inverse(self._transfer_function)
+        return _regularized_inverse(self._transfer_function, per_signal=True)
 
     def _expectation(self, values: BackendArray, *, frequency_axis: int = 3) -> BackendArray:
         """Average observation axes, applying optional spectral weights.
@@ -5837,14 +5836,14 @@ class Connectivity:
         csm = self._expectation_cross_spectral_matrix()
         if time_reversed:
             csm = xp.swapaxes(csm, -1, -2)
-        result = _estimate_spectral_granger_prediction(
+        result, not_minimum_phase = _estimate_spectral_granger_prediction(
             self._power,
             csm,
             combinations(range(self.n_signals), 2),
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
-        _warn_nan_granger_pairs(result, measure)
+        _warn_granger_failures(result, not_minimum_phase, measure)
         return result
 
     @_orientation_changed
@@ -5903,7 +5902,7 @@ class Connectivity:
         """
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
-        result = _estimate_subset_spectral_granger_prediction(
+        result, not_minimum_phase = _estimate_subset_spectral_granger_prediction(
             self._power,
             self._subset_cross_spectral_matrix(pairs),
             pairs,
@@ -5913,8 +5912,11 @@ class Connectivity:
         )
         requested = np.zeros((self.n_signals, self.n_signals), dtype=bool)
         requested[pairs[:, 0], pairs[:, 1]] = requested[pairs[:, 1], pairs[:, 0]] = True
-        _warn_nan_granger_pairs(
-            result, "subset_pairwise_spectral_granger_prediction", requested=requested
+        _warn_granger_failures(
+            result,
+            not_minimum_phase,
+            "subset_pairwise_spectral_granger_prediction",
+            requested=requested,
         )
         return result
 
@@ -6081,35 +6083,37 @@ class Connectivity:
         max_iterations = self._minimum_phase_max_iterations
         if self.n_signals == 2:
             # No conditioning set: the measure is pairwise Geweke Granger.
-            result = _estimate_blockwise_spectral_granger(
+            result, not_minimum_phase = _estimate_blockwise_spectral_granger(
                 spectrum,
                 [np.array([0]), np.array([1])],
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
         else:
-            # The forward full model is the instance's cached factorization
-            # (the same CSM, tolerance and iteration cap), shared with the
-            # other directed measures, whose failure warning it keeps. The
-            # reversed one is factored here for this measure alone, so its
-            # failures are reported only by the warning naming the NaN pairs.
+            # The full model is factored with its own warnings: the forward one
+            # is the instance's cached factorization (the same CSM, tolerance
+            # and iteration cap), shared with the other directed measures; the
+            # reversed one goes through the same path. The pair warnings below
+            # name the failures of the reduced models.
             transfer_function, noise_covariance = (
-                _var_model_from_spectrum(
-                    spectrum,
-                    minimum_phase_tolerance=tolerance,
-                    minimum_phase_max_iterations=max_iterations,
+                _var_model_from_factor(
+                    _factorize_spectrum(
+                        spectrum,
+                        minimum_phase_tolerance=tolerance,
+                        minimum_phase_max_iterations=max_iterations,
+                    )
                 )
                 if time_reversed
                 else (self._transfer_function, self._noise_covariance)
             )
-            result = _estimate_all_conditional_spectral_granger(
+            result, not_minimum_phase = _estimate_all_conditional_spectral_granger(
                 spectrum,
                 transfer_function,
                 noise_covariance,
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
-        _warn_nan_granger_pairs(result, measure)
+        _warn_granger_failures(result, not_minimum_phase, measure)
         return result
 
     @_source_first
@@ -6254,13 +6258,13 @@ class Connectivity:
         spectrum = self._expectation_cross_spectral_matrix()
         if time_reversed:
             spectrum = xp.swapaxes(spectrum, -1, -2)
-        result = _estimate_blockwise_spectral_granger(
+        result, not_minimum_phase = _estimate_blockwise_spectral_granger(
             spectrum,
             indices,
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
-        _warn_nan_granger_pairs(result, measure, names=to_numpy(labels))
+        _warn_granger_failures(result, not_minimum_phase, measure, names=to_numpy(labels))
         # Swap on the host, like _source_first: [..., target, source] -> source first.
         return np.swapaxes(to_numpy(result), -1, -2), to_numpy(labels)
 
@@ -6740,7 +6744,9 @@ class Connectivity:
             self._transfer_function / _total_inflow(self._transfer_function, axis=(-1, -3))
         )
         mvar_coefficients = self._MVAR_Fourier_coefficients
-        inverse_noise_covariance = _regularized_inverse(self._noise_covariance)
+        inverse_noise_covariance = _regularized_inverse(
+            self._noise_covariance, per_signal=True
+        )
         inverse_spectrum = xp.matmul(
             xp.matmul(
                 _conjugate_transpose(mvar_coefficients),

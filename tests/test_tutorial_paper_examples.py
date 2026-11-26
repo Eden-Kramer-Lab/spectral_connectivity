@@ -374,7 +374,7 @@ def test_factors_behind_example_reproduce_its_spectrum(analysis):
     pairs = np.array(list(itertools.combinations(range(spectrum.shape[-1]), 2)))
     # (window, frequency, pair, 2, 2) -> (window, pair, frequency, 2, 2)
     pair_spectra = np.moveaxis(spectrum[..., pairs[:, :, None], pairs[:, None, :]], -3, -4)
-    transfer, covariance = (
+    transfer, covariance, not_minimum_phase = (
         to_host(part)
         for part in _var_model_from_spectrum(
             to_device(pair_spectra),
@@ -382,6 +382,7 @@ def test_factors_behind_example_reproduce_its_spectrum(analysis):
             minimum_phase_max_iterations=connectivity._minimum_phase_max_iterations,
         )
     )
+    assert not not_minimum_phase.any()
     n_non_negative = transfer.shape[-3]
     _assert_reproduces(
         transfer @ covariance[..., None, :, :] @ transfer.conj().swapaxes(-1, -2),

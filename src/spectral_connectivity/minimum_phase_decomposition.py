@@ -7,13 +7,18 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 
 import warnings
 from logging import DEBUG, getLogger
+from typing import NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
 
-from spectral_connectivity._array_utils import _batched_eigh, _conjugate_transpose
+from spectral_connectivity._array_utils import (
+    _batched_eigh,
+    _conjugate_transpose,
+    _divide_where,
+)
 from spectral_connectivity._backend import fft, ifft, irfft, rfft, xp
-from spectral_connectivity.utils import stacklevel_outside_package
+from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
 logger = getLogger(__name__)
 
@@ -21,6 +26,42 @@ logger = getLogger(__name__)
 # Connectivity matches to drop them for NaN or Inf coefficients.
 CHOLESKY_FALLBACK_WARNING_START = "Computing the initial conditions using the Cholesky failed"
 NONCONVERGENCE_WARNING_START = "Wilson minimum-phase decomposition did not converge"
+NOT_MINIMUM_PHASE_WARNING_START = (
+    "Wilson minimum-phase decomposition converged to a factor that is not minimum phase"
+)
+
+# The winding number of det G is counted only where its phase changes by less
+# than this between neighbouring bins. Factors that were not minimum phase
+# changed by at most 0.31 per bin; aliased counts on coarse grids (a winding
+# of 2 for factors whose zero-padded winding is 0) came with changes of 1.9 to
+# 3.1.
+WINDING_MAX_PHASE_INCREMENT = np.pi / 2
+# A nonzero count is recounted on grids this many times finer, interpolating
+# the factor; it stands only if two successive finer grids agree on it. Steps
+# that each turn by more than pi alias to small ones, so the guard above
+# cannot catch them: det G = h^8 for eight MA(1) signals on 16 bins turns by
+# up to 7.3 radians between bins and counted -2 for a minimum-phase factor.
+WINDING_REFINEMENTS = (2, 4, 8, 16)
+
+
+def _not_minimum_phase_message(where: str) -> str:
+    """The warning for factors that converged but are not minimum phase.
+
+    ``where`` names what was factored, e.g. "3 of 10 sub-spectra" or a
+    measure's signal pairs.
+    """
+    return (
+        f"{NOT_MINIMUM_PHASE_WARNING_START} for {where}: its determinant winds "
+        "around zero on the frequency grid. The factor "
+        "reproduces the spectrum, but its transfer function and noise covariance, "
+        "and every directed measure read from them (spectral Granger, DTF, PDC, "
+        "etc.), are wrong there. This is a numerical failure of the factorization "
+        "that a tighter tolerance or more iterations do not fix; treat those "
+        "values as unreliable and report the case, with the spectrum that "
+        "produced it, at https://github.com/Eden-Kramer-Lab/spectral_connectivity/"
+        "issues. The check is best effort: a factor can fail to be minimum phase "
+        "without being caught."
+    )
 
 
 def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) -> bool:
@@ -75,14 +116,78 @@ def _to_two_sided(
     return xp.concatenate((nonnegative, negative), axis=-3)
 
 
+def _signal_scale(
+    cross_spectral_matrix: NDArray[np.complexfloating],
+) -> tuple[NDArray[np.floating], NDArray[np.bool_], NDArray[np.bool_]]:
+    """Root-mean-square amplitude of each signal of each sub-spectrum.
+
+    The square root of the signal's power averaged over the frequency axis
+    (-3), its zero-lag autocovariance on the grid. A signal with non-finite
+    power gets a scale of 1 (its sub-spectrum is not finite). A signal with no
+    power in a sub-spectrum where some signal has power is factored as white:
+    it gets ``eps`` times the smallest scale of the signals with power, so the
+    factor's row for it, that of an independent white signal of unit power
+    once unscaled (see :func:`_minimum_phase_factor_and_flags`), reconstructs
+    a power ``eps²`` times that of the weakest signal. A sub-spectrum where no
+    signal has power is not factored (it is singular, and returned as NaN).
+
+    Parameters
+    ----------
+    cross_spectral_matrix : NDArray[complexfloating],
+        shape (..., n_fft_samples, n_signals, n_signals)
+        Two-sided cross-spectral matrix.
+
+    Returns
+    -------
+    scale : NDArray[floating], shape (..., n_signals)
+        Positive scale of each signal, in float64 or wider.
+    white : NDArray[bool], shape (..., n_signals)
+        Signals whose power is zero at every frequency, in sub-spectra where
+        some signal has power.
+    no_power : NDArray[bool], shape (...)
+        Sub-spectra where no signal has finite, positive power.
+    """
+    # Accumulate in the wider dtype: a float32 mean of powers near 1e37
+    # overflows to Inf.
+    power = xp.mean(
+        xp.diagonal(cross_spectral_matrix, axis1=-2, axis2=-1).real,
+        axis=-2,
+        dtype=xp.result_type(cross_spectral_matrix.real.dtype, xp.float64),
+    )
+    has_power = xp.isfinite(power) & (power > 0)
+    scale = xp.sqrt(xp.where(has_power, power, 1))
+    no_power = ~xp.any(has_power, axis=-1)
+    white = (power == 0) & ~no_power[..., xp.newaxis]
+    weakest = xp.min(xp.where(has_power, scale, xp.inf), axis=-1, keepdims=True)
+    return xp.where(white, xp.finfo(scale.dtype).eps * weakest, scale), white, no_power
+
+
+def _reverse_cholesky(matrices: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Upper-triangular ``U`` with a positive diagonal and ``U Uᵀ = M``.
+
+    ``J chol(J M J) J`` for the exchange matrix ``J``, which reverses the
+    order of the signals; batched over the leading axes.
+    """
+    flipped: NDArray[np.floating] = xp.linalg.cholesky(matrices[..., ::-1, ::-1])
+    return flipped[..., ::-1, ::-1]
+
+
 def _get_initial_conditions(
     cross_spectral_matrix: NDArray[np.complexfloating],
     n_fft_samples: int | None = None,
 ) -> NDArray[np.floating]:
     """Generate initial guess for minimum phase factor using Cholesky decomposition.
 
-    Provides an initial estimate for the Wilson algorithm by taking the Cholesky
-    decomposition of the zero-lag cross-spectral matrix (real part of inverse FFT).
+    Provides an initial estimate for the Wilson algorithm: the upper-triangular
+    ``U`` with a positive diagonal and ``U Uᵀ = R0``, where ``R0`` is the
+    zero-lag cross-spectral matrix (real part of the inverse FFT). It is the
+    "reverse" Cholesky factor ``J chol(J R0 J) J``, with ``J`` the exchange
+    matrix. For a positive diagonal ``D`` the start for ``D R0 D`` is then
+    ``D U``, as the factor of ``D S D`` is ``D G``, so the iteration is
+    covariant under rescaling the signals. The transposed lower Cholesky
+    factor ``chol(R0)ᵀ`` satisfies ``Uᵀ U = R0`` instead: its start for
+    ``D R0 D`` is ``U D``, and for some spectra of signals of comparable power
+    the iteration then converged to a factor that is not minimum phase.
     Falls back to a deterministic positive-definite start if Cholesky fails.
 
     Parameters
@@ -100,7 +205,7 @@ def _get_initial_conditions(
     -------
     minimum_phase_factor : NDArray[floating],
         shape (n_time_samples, ..., 1, n_signals, n_signals)
-        Initial guess for minimum phase square root matrix. Real-valued (the
+        Initial guess for minimum phase square root matrix. Real-valued (a
         Cholesky factor of the real zero-lag matrix); the caller promotes it to
         the complex working dtype.
 
@@ -121,7 +226,7 @@ def _get_initial_conditions(
     else:
         zero_lag = irfft(cross_spectral_matrix, n=n_fft_samples, axis=-3)[..., 0:1, :, :]
     try:
-        return xp.linalg.cholesky(zero_lag).swapaxes(-1, -2)
+        return _reverse_cholesky(zero_lag)
     except xp.linalg.LinAlgError:
         # One or more sub-spectra are not positive-definite (rank-deficient /
         # duplicated channels). Replace ONLY those with a deterministic PD start
@@ -161,7 +266,7 @@ def _get_initial_conditions(
         not_positive_definite = xp.zeros(flat_zero_lag.shape[0], dtype=bool)
         for index in range(flat_zero_lag.shape[0]):
             try:
-                xp.linalg.cholesky(flat_zero_lag[index])
+                _reverse_cholesky(flat_zero_lag[index])
             except xp.linalg.LinAlgError:  # noqa: PERF203 -- per-unit on purpose (see above)
                 not_positive_definite[index] = True
         # Deterministic well-conditioned PD start for the failed units. The
@@ -180,7 +285,7 @@ def _get_initial_conditions(
         deterministic_start = n_signals * xp.eye(n_signals, dtype=zero_lag.dtype)
         safe_flat = flat_zero_lag.copy()
         safe_flat[failed_indices] = deterministic_start
-        return xp.linalg.cholesky(safe_flat.reshape(zero_lag.shape)).swapaxes(-1, -2)
+        return _reverse_cholesky(safe_flat.reshape(zero_lag.shape))
 
 
 def _get_causal_signal(
@@ -315,6 +420,178 @@ def _check_convergence(
     scale: NDArray[np.floating] = xp.max(xp.abs(current).reshape(*batch_shape, -1), axis=-1)
     scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
     return error / scale < tolerance
+
+
+def _determinant_phase(factor: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
+    """``det G / |det G|`` of each matrix: 0 where ``det G`` is 0, NaN where not finite.
+
+    Parameters
+    ----------
+    factor : NDArray[complexfloating], shape (..., n_signals, n_signals)
+
+    Returns
+    -------
+    NDArray[complexfloating], shape (...)
+    """
+    if factor.shape[-1] == 2:
+        # Closed form: LAPACK's per-matrix overhead dominates for 2x2 (the
+        # pairwise and subset Granger factors), as in _solve_2x2. A factor
+        # of signals scaled to unit power has entries of order one, so this
+        # determinant neither underflows nor overflows.
+        determinant = (
+            factor[..., 0, 0] * factor[..., 1, 1] - factor[..., 0, 1] * factor[..., 1, 0]
+        )
+        magnitude = xp.abs(determinant)
+        # A NaN factor (an unconverged sub-spectrum) stays NaN without the
+        # warning NumPy gives for NaN / NaN.
+        with np.errstate(invalid="ignore"):
+            phase: NDArray[np.complexfloating] = _divide_where(
+                determinant, magnitude, magnitude != 0, 0.0
+            )
+        return phase
+    # NumPy 1.24's complex slogdet (like its det) warns on well-conditioned
+    # input, and on a singular or NaN factor, whose winding is NaN or not
+    # counted anyway; later releases do not.
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        phase, _ = xp.linalg.slogdet(factor)
+    return phase
+
+
+def _grid_winding_number(phase: NDArray[np.complexfloating]) -> NDArray[np.floating]:
+    """Winding number of a unit phase sampled on every bin of a grid.
+
+    Parameters
+    ----------
+    phase : NDArray[complexfloating], shape (..., n_fft_samples)
+        ``det G / |det G|`` at each bin, in standard FFT order.
+
+    Returns
+    -------
+    NDArray[floating], shape (...,)
+        The sum of the phase increments between neighbouring bins, each
+        wrapped to ``(-π, π]``, over ``2π``; NaN where an increment reaches
+        ``WINDING_MAX_PHASE_INCREMENT`` or the phase is not finite.
+    """
+    # From the unit phases: the product of neighbouring determinants
+    # underflows for a near-singular factor (|det G| about 1e-189 for 64
+    # signals correlated at 0.999999).
+    increments = xp.angle(xp.roll(phase, -1, axis=-1) * xp.conj(phase))
+    resolved = xp.max(xp.abs(increments), axis=-1) < WINDING_MAX_PHASE_INCREMENT
+    winding: NDArray[np.floating] = xp.where(
+        resolved, xp.sum(increments, axis=-1) / (2 * np.pi), xp.nan
+    )
+    return winding
+
+
+def _refined_winding_number(factor: NDArray[np.complexfloating]) -> float:
+    """Winding number of ``det G`` on which two successive finer grids agree.
+
+    The grids of ``WINDING_REFINEMENTS`` interpolate the factor as a causal
+    filter: its lag coefficients ``c`` on lags ``0`` to ``n - 1`` give it a
+    fraction ``j / R`` of a bin off the grid as ``fft(c * exp(-2πi lag j /
+    (R n)))``. A Wilson factor is a product of updates, each causal on lags
+    ``0`` to ``n / 2``, so its lags are those of a causal filter wrapped
+    round the grid; an interpolant on lags ``-n / 2`` to ``n / 2`` would read
+    the wrapped tail as negative lags and can lose a real winding. Each grid
+    interleaves the shifts ``j`` it needs, and only their determinant phases
+    are kept, so no array larger than the factor is held and each shift is
+    transformed once for all the grids.
+
+    Parameters
+    ----------
+    factor : NDArray[complexfloating], shape (n_fft_samples, n_signals, n_signals)
+        Factor on every bin of a grid, in standard FFT order.
+
+    Returns
+    -------
+    float
+        The count of the first two successive grids of
+        ``WINDING_REFINEMENTS`` that count the same, or NaN if none do.
+    """
+    n_fft_samples = factor.shape[-3]
+    finest = WINDING_REFINEMENTS[-1]
+    coefficients = ifft(factor, axis=-3)
+    lags = xp.arange(n_fft_samples)
+    phases = {0: _determinant_phase(factor)}
+    previous = np.nan
+    for refinement in WINDING_REFINEMENTS:
+        shifts = range(0, finest, finest // refinement)
+        for shift in shifts:
+            if shift not in phases:
+                ramp = xp.exp(-2j * np.pi * lags * shift / (finest * n_fft_samples)).astype(
+                    coefficients.dtype, copy=False
+                )
+                phases[shift] = _determinant_phase(
+                    fft(coefficients * ramp[:, xp.newaxis, xp.newaxis], axis=-3)
+                )
+        fine_phase = xp.stack([phases[shift] for shift in shifts], axis=-1).reshape(-1)
+        count = float(_grid_winding_number(fine_phase))
+        if abs(count - previous) < 0.5:  # False while either is NaN
+            return count
+        previous = count
+    return np.nan
+
+
+def _determinant_winding_number(
+    factor: NDArray[np.complexfloating],
+    n_fft_samples: int | None = None,
+) -> NDArray[np.floating]:
+    """Times ``det G(e^{iω})`` winds around zero as ``ω`` goes once round the circle.
+
+    The phase increments between neighbouring bins, each wrapped to
+    ``(-π, π]``, summed and divided by ``2π``. A minimum-phase factor's
+    determinant has no zeros or poles outside the unit disk (in ``z⁻¹``), so
+    its winding number is 0; rescaling the signals multiplies ``det G`` by a
+    positive constant and leaves it unchanged. The count is reliable only if
+    the phase changes by much less than ``π`` between neighbouring bins, so a
+    factor whose largest increment reaches ``WINDING_MAX_PHASE_INCREMENT`` is
+    reported as NaN (not tested). A nonzero count is recounted by
+    :func:`_refined_winding_number` on the grids of ``WINDING_REFINEMENTS``,
+    which returns the count two successive grids agree on, or NaN.
+
+    As a test of minimum phase it is best effort: a factor that is not
+    minimum phase but whose determinant does not wind countably (a causal
+    factor with zeros outside the unit circle that the count misses, or an
+    anticausal one) passes it, and so does one whose determinant turns by
+    ``WINDING_MAX_PHASE_INCREMENT`` or more between bins, as near a zero close
+    to the unit circle on a coarse grid, or one whose winding the grid
+    aliases to 0, which is not recounted.
+
+    Parameters
+    ----------
+    factor : NDArray[complexfloating],
+        shape (..., n_frequencies, n_signals, n_signals)
+        Factors on every bin of the grid, or on the non-negative half of a
+        conjugate-symmetric one of ``n_fft_samples`` bins.
+    n_fft_samples : int, optional
+        Two-sided length of a half spectrum.
+
+    Returns
+    -------
+    NDArray[floating], shape (...,)
+        The winding number, or NaN for a non-finite factor or one whose phase
+        changes too fast between bins to count.
+    """
+    phase = _determinant_phase(factor)
+    if n_fft_samples is not None:
+        n_nonnegative = phase.shape[-1]
+        phase = xp.concatenate(
+            (phase, xp.conj(phase[..., n_fft_samples - n_nonnegative : 0 : -1])), axis=-1
+        )
+    winding = _grid_winding_number(phase)
+    counted = xp.abs(winding) > 0.5
+    if bool(xp.any(counted)):
+        # Rare (a factor flagged on its own grid), so one sub-spectrum at a
+        # time.
+        flat_factor = factor.reshape(-1, *factor.shape[-3:])
+        flat_winding = winding.reshape(-1)
+        for index in to_numpy(xp.flatnonzero(counted)).tolist():
+            unit = flat_factor[index]
+            if n_fft_samples is not None:
+                unit = _to_two_sided(unit, n_fft_samples)
+            flat_winding[index] = _refined_winding_number(unit)
+        winding = flat_winding.reshape(winding.shape)
+    return winding
 
 
 def _all_finite_units(
@@ -549,8 +826,6 @@ def minimum_phase_decomposition(
     cross_spectral_matrix: NDArray[np.complexfloating],
     tolerance: float = 1e-8,
     max_iterations: int = 500,
-    *,
-    _warn_on_failure: bool = True,
 ) -> NDArray[np.complexfloating]:
     """Compute minimum phase decomposition using Wilson algorithm.
 
@@ -566,7 +841,8 @@ def minimum_phase_decomposition(
         Cross-spectral density matrix to be decomposed. Must be Hermitian
         positive semidefinite for each frequency.
     tolerance : float, default=1e-8
-        Relative convergence tolerance for Wilson algorithm iterations.
+        Relative convergence tolerance for Wilson algorithm iterations,
+        applied to the factor of the scaled spectrum (see Notes).
     max_iterations : int, default=500
         Maximum number of iterations before stopping algorithm. Near-singular
         cross-spectral matrices (highly correlated channels) can need several
@@ -619,6 +895,43 @@ def minimum_phase_decomposition(
     (complex-valued signals), take the two-sided iteration, which does about
     twice the arithmetic per iteration.
 
+    Every factor ``G`` with ``G Gᴴ = S`` is a fixed point of the iteration;
+    which one it reaches depends on where it starts. It starts from the
+    upper-triangular ``U`` with ``U Uᵀ = R0`` for the zero-lag matrix ``R0``
+    (the reverse Cholesky factor), so the factorization is covariant under
+    rescaling the signals: for a positive diagonal ``D`` the factor of
+    ``D S D`` is ``D G``, up to rounding and the convergence tolerance.
+    FieldTrip's ``sfactorization_wilson.m`` starts from MATLAB's ``chol``,
+    the transposed Cholesky factor with ``Uᵀ U = R0``, which is not covariant.
+    As preconditioning, the iteration factors ``D S D`` with ``D_ii`` one
+    over the square root of the mean of ``S_ii`` over frequency, and returns
+    ``D⁻¹ G'`` for its factor ``G'``. A signal with no power (a zero row and
+    column of ``S``) is factored as an independent white signal, so its
+    window needs no fallback start, and its row of the factor is ``eps``
+    times the weakest other signal's scale: it reconstructs a power
+    ``eps²`` times that signal's, where an exactly zero row would leave the
+    factor singular for the directed measures. A window where no signal has
+    power has nothing to factor; it is returned as NaN with the
+    non-convergence warning.
+
+    A converged factor whose ``det G(e^{iω})`` winds around zero is not
+    minimum phase and gives a ``UserWarning``; its factor is returned as
+    computed. The winding is counted where the phase turns by less than
+    ``π / 2`` between bins, and since steps of more than ``π`` alias to
+    small ones, a nonzero count is recounted on grids 2 to 16 times finer,
+    interpolating the factor as a causal filter on lags ``0`` to
+    ``n_fft_samples - 1`` (the iteration's factor is a product of causal
+    updates, wrapped round the grid), and stands only if two of them agree.
+    The check is best effort. It cannot judge a determinant whose phase
+    turns by ``π / 2`` or more between bins. A count of 0 is not recounted,
+    so a real winding that the grid aliases to 0 is missed: a factor of 8
+    signals that winds -4 times counted 0 on 8 bins. And on a grid too
+    coarse for the spectrum the iteration can converge to a wrong factor
+    whose determinant does not wind: four coincident resonators at radius
+    0.995 factor 0.8 off with no warning on 4096 bins, and correctly on
+    16384. The count costs 0.1-0.5 of an iteration; recounting a flagged
+    sub-spectrum costs 2-14 of its iterations.
+
     Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
     computed once, which lets sub-spectra with near-collinear channels converge.
     An indefinite or non-finite ``S`` has no such square root and is returned as
@@ -656,6 +969,13 @@ def minimum_phase_decomposition(
        alternation to every measure derived from it. Odd-length grids were
        not affected.
 
+    .. versionchanged:: 3.0
+       The iteration starts from ``U`` with ``U Uᵀ = R0`` instead of
+       ``chol(R0)ᵀ``, the signals are scaled to unit mean power, and a
+       factor that is not minimum phase gives a warning. From the old start
+       the iteration could converge, without a warning, to a factor that is
+       not minimum phase; see the changelog for the measured errors.
+
     References
     ----------
     .. [1] Wilson, G. T. (1972). The factorization of matricial spectral
@@ -664,8 +984,66 @@ def minimum_phase_decomposition(
            information flow in brain networks with nonparametric Granger
            causality. NeuroImage, 41(2), 354-362.
     """
-    # _warn_on_failure=False is private to the spectral Granger measures, which
-    # report the NaN signal pairs themselves instead of this pair-less warning.
+    factorization = _minimum_phase_factor_and_flags(
+        cross_spectral_matrix, tolerance, max_iterations
+    )
+    n_units = factorization.unconverged.size
+    n_failed = int(factorization.unconverged.sum())
+    if n_failed:
+        reason = (
+            "a sub-spectrum became singular (rank-deficient / duplicated channels)"
+            if bool(factorization.singular.any())
+            else f"within {max_iterations} iterations (tolerance={tolerance})"
+        )
+        warnings.warn(
+            f"{NONCONVERGENCE_WARNING_START} for "
+            f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
+            f"sub-spectra are returned as NaN and will produce NaN in any "
+            f"directed connectivity measure (spectral Granger, DTF, etc.). "
+            f"Consider increasing max_iterations, using more tapers/trials, or "
+            f"checking for near-singular cross-spectral matrices (highly "
+            f"correlated channels).",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+    n_not_minimum_phase = int(factorization.not_minimum_phase.sum())
+    if n_not_minimum_phase:
+        warnings.warn(
+            _not_minimum_phase_message(
+                f"{n_not_minimum_phase} of {n_units} sub-spectrum/spectra"
+            ),
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+    return factorization.factor
+
+
+class _Factorization(NamedTuple):
+    """A Wilson factorization and what went wrong in it, per sub-spectrum.
+
+    The masks have shape ``cross_spectral_matrix.shape[:-3]``.
+    """
+
+    factor: NDArray[np.complexfloating]
+    """Two-sided factor; NaN for the unconverged sub-spectra."""
+    not_minimum_phase: NDArray[np.bool_]
+    """Converged factors whose determinant winds around zero."""
+    unconverged: NDArray[np.bool_]
+    """Sub-spectra that did not converge."""
+    singular: NDArray[np.bool_]
+    """Unconverged sub-spectra whose factor became non-finite (singular)."""
+
+
+def _minimum_phase_factor_and_flags(
+    cross_spectral_matrix: NDArray[np.complexfloating],
+    tolerance: float,
+    max_iterations: int,
+) -> _Factorization:
+    """:func:`minimum_phase_decomposition` without its warnings.
+
+    Returns the factor with the masks of its failures; the callers report
+    them (the spectral Granger measures name the signal pairs).
+    """
     if not np.isfinite(tolerance) or tolerance <= 0:
         msg = f"tolerance must be a finite positive number, got {tolerance}."
         raise ValueError(msg)
@@ -697,10 +1075,34 @@ def minimum_phase_decomposition(
         working_cross_spectral_matrix = cross_spectral_matrix[
             ..., : n_fft_samples // 2 + 1, :, :
         ]
-    working_cross_spectral_matrix = working_cross_spectral_matrix.astype(
-        working_dtype, copy=False
-    )
+    # Factor D S D, with D scaling every signal to unit mean power, and return
+    # D^-1 G for its factor G. The covariant start makes that the factor of S
+    # up to rounding; the scaling preconditions the iteration for signals
+    # whose powers differ by orders of magnitude (see Notes).
+    signal_scale, white, no_power = _signal_scale(cross_spectral_matrix)
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
+    # NumPy divides a complex Inf by the real scale as by a complex number,
+    # which gives NaN and warns; such a sub-spectrum is non-finite either way
+    # and is reported as unconverged below.
+    with np.errstate(invalid="ignore"):
+        working_cross_spectral_matrix = (
+            working_cross_spectral_matrix
+            / (
+                signal_scale[..., xp.newaxis, :, xp.newaxis]
+                * signal_scale[..., xp.newaxis, xp.newaxis, :]
+            )
+        ).astype(working_dtype, copy=False)
+    # A signal with no power has a zero row and column in S, which would make
+    # the zero-lag matrix singular: its window would start from the Cholesky
+    # fallback, or from NaN on CuPy, whose Cholesky does not raise. Factor it
+    # as an independent white signal of unit power instead; the factor is
+    # then that of the other signals with a 1 for it, and its scale makes
+    # that 1 a rounding-level power (see Notes of minimum_phase_decomposition).
+    # A window where no signal has power has nothing to factor; it starts at
+    # NaN below and is returned as singular.
+    working_cross_spectral_matrix = (
+        working_cross_spectral_matrix + white[..., xp.newaxis, xp.newaxis, :] * identity_matrix
+    )
     # S is fixed across iterations, so factor it once as S = L Lᴴ.
     cross_spectral_square_root = _hermitian_square_root(working_cross_spectral_matrix)
     # One convergence flag per independent sub-spectrum (all leading batch dims
@@ -712,6 +1114,14 @@ def minimum_phase_decomposition(
     initial = _get_initial_conditions(
         working_cross_spectral_matrix, half_spectrum_n_fft
     ).astype(working_dtype, copy=False)
+    # Its finite all-zero start would never converge and would hold the whole
+    # batch to max_iterations; a NaN start makes the loop count it as singular,
+    # and so finished, at once.
+    initial = xp.where(
+        no_power[..., xp.newaxis, xp.newaxis, xp.newaxis],
+        xp.asarray(xp.nan, dtype=initial.dtype),
+        initial,
+    )
     minimum_phase_factor = xp.broadcast_to(initial, working_cross_spectral_matrix.shape).copy()
     # Computed once: CuPy's tril_indices synchronizes the device.
     lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
@@ -768,37 +1178,23 @@ def minimum_phase_decomposition(
     # factor became singular), returning the partially-converged factor silently
     # would feed numerically wrong values into every downstream
     # directed-connectivity measure with no way for the caller to tell. Mark only
-    # the unconverged sub-spectra as NaN (leaving the converged ones intact) and
-    # warn loudly.
-    n_failed = int((~is_converged).sum())
-    if n_failed:
-        # A singular sub-spectrum is the unconverged one whose factor is non-finite.
-        singular_factor = bool(
-            (~is_converged & ~_all_finite_units(minimum_phase_factor, batch_shape)).any()
-        )
-        unconverged = ~is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
+    # the unconverged sub-spectra as NaN (leaving the converged ones intact);
+    # the callers report them.
+    unconverged = ~is_converged
+    # A singular sub-spectrum is the unconverged one whose factor is non-finite.
+    singular = unconverged & ~_all_finite_units(minimum_phase_factor, batch_shape)
+    if bool(unconverged.any()):
         minimum_phase_factor = xp.where(
-            unconverged,
+            unconverged[..., xp.newaxis, xp.newaxis, xp.newaxis],
             xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
             minimum_phase_factor,
         )
-        if _warn_on_failure:
-            reason = (
-                "a sub-spectrum became singular (rank-deficient / duplicated channels)"
-                if singular_factor
-                else f"within {max_iterations} iterations (tolerance={tolerance})"
-            )
-            warnings.warn(
-                f"{NONCONVERGENCE_WARNING_START} for "
-                f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
-                f"sub-spectra are returned as NaN and will produce NaN in any "
-                f"directed connectivity measure (spectral Granger, DTF, etc.). "
-                f"Consider increasing max_iterations, using more tapers/trials, or "
-                f"checking for near-singular cross-spectral matrices (highly "
-                f"correlated channels).",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
+    # A converged factor whose determinant winds around zero is not minimum
+    # phase. The winding number is unchanged by the scaling; the unconverged
+    # sub-spectra are NaN by now and are not flagged.
+    winding = _determinant_winding_number(minimum_phase_factor, half_spectrum_n_fft)
+    not_minimum_phase = xp.abs(winding) > 0.5
+    minimum_phase_factor = signal_scale[..., xp.newaxis, :, xp.newaxis] * minimum_phase_factor
     if half_spectrum_n_fft is not None:
         minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)
-    return minimum_phase_factor
+    return _Factorization(minimum_phase_factor, not_minimum_phase, unconverged, singular)
