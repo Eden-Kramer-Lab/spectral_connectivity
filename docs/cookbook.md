@@ -907,6 +907,7 @@ not.
 >>> from spectral_connectivity import Multitaper
 >>> sampling_frequency = 1000
 >>> time = np.arange(4000) / sampling_frequency
+>>> rng = np.random.default_rng(2)
 >>> recording = rng.standard_normal((4000, 1, 2))  # (time, trials, signals)
 >>> # 60 Hz line noise and its harmonic, in signal 0 only
 >>> recording[:, 0, 0] += 0.5 * np.cos(2 * np.pi * 60 * time)
