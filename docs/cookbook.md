@@ -269,6 +269,123 @@ Before 3.0, advanced settings were passed as plain keyword arguments, e.g.
 through 3.x, with the same result and a `DeprecationWarning` naming the
 mapping to use, and is removed in 4.0.
 
+## Leave out artifacts and missing samples
+
+Mark the samples to leave out with `artifact_samples`, a `Multitaper` (and
+`ShortTimeFourierTransform`) setting, so in `transform_kwargs` for the wrapper. `True` marks an **artifact**, a
+sample to leave out, as MNE's `BAD_` annotations, FieldTrip's artifact
+definitions, and NumPy masked arrays do; a mask that marks the valid samples
+as `True` must be inverted (`~mask`). `"nonfinite"` leaves out every NaN or
+infinite sample:
+
+```python
+>>> with_gap = time_series.copy()
+>>> with_gap[600:650, 1, :] = np.nan  # a gap in trial 1, 1.2-1.3 s
+>>> ppc = multitaper_connectivity(
+...     with_gap,
+...     sampling_frequency=500,
+...     time_window_duration=0.5,
+...     method="pairwise_phase_consistency",
+...     transform_kwargs={"artifact_samples": "nonfinite"},
+... )
+>>> bool(np.isfinite(ppc.isel(source=0, target=1)).all())
+True
+
+```
+
+A trial's window is used only if none of its samples is an artifact, so choose
+windows that fit between artifacts: here the 50-sample gap drops all 250
+samples of trial 1's third 0.5 s window, a quarter of that window's data, and a
+1 s window would drop half the recording of trial 1. Each time window averages
+the trials it keeps, a window keeping none is NaN in every measure, and
+dropping more than half of the trial windows warns. The outputs mark what is
+kept: `Multitaper.valid_windows` is `True` at the kept trial windows, and the
+result's `transform_parameters_json` records the kind of mask and the numbers
+of artifact samples and dropped trial windows (`n_observations` stays the raw
+count).
+
+Artifact intervals given in seconds, such as an MNE `BAD_` annotation's onset
+and duration, become a mask that is `True` from each onset for its duration,
+with the time series' `(n_time_samples, n_trials)` layout:
+
+```python
+>>> sampling_frequency = 500
+>>> times = np.arange(time_series.shape[0]) / sampling_frequency
+>>> artifact_samples = np.zeros(time_series.shape[:2], dtype=bool)
+>>> for trial, start, stop in [(1, 1.2, 1.3), (3, 0.1, 0.15)]:  # (trial, s, s)
+...     artifact_samples[(times >= start) & (times < stop), trial] = True
+>>> coherence = multitaper_connectivity(
+...     time_series,
+...     sampling_frequency=sampling_frequency,
+...     time_window_duration=0.5,
+...     method="magnitude_squared_coherence",
+...     transform_kwargs={"artifact_samples": artifact_samples},
+... )
+>>> coherence.sizes["time"]
+4
+
+```
+
+A FieldTrip artifact definition (`cfg.artfctdef.<type>.artifact`) gives each
+interval as a row `[begsample, endsample]` of 1-based sample numbers that
+include both ends: FieldTrip marks `begsample:endsample`
+([`trl2boolvec`](https://github.com/fieldtrip/fieldtrip/blob/00ecb6e750c6e0d22e087be1874834e689a475d8/private/trl2boolvec.m)).
+In Python that is the slice `begsample - 1:endsample`. The numbers count from
+the start of the recording, so in an epoch that starts at recording sample
+`trl_begsample` (the first column of FieldTrip's `trl`) the slice is
+`begsample - trl_begsample:endsample - trl_begsample + 1`:
+
+```python
+>>> artifact = np.array([[601, 650]])  # one row, samples 601 to 650 of the recording
+>>> recording_mask = np.zeros(1000, dtype=bool)
+>>> for begsample, endsample in artifact:
+...     recording_mask[begsample - 1 : endsample] = True
+>>> int(recording_mask.sum()), int(np.flatnonzero(recording_mask)[0])  # 50 samples from index 600
+(50, 600)
+
+```
+
+A `(n_time_samples,)` mask is shared by every trial. A mask may also mark each
+channel, with the time series' own `(n_time_samples, n_trials, n_signals)`
+shape: an artifact in one channel then leaves the sample out of every channel,
+since every cross-spectrum needs both channels at the same samples. For a 2-D
+`(n_time_samples, n_channels)` time series give the wrapper a
+`(n_time_samples,)` or `(n_time_samples, n_channels)` mask. For an
+`xarray.DataArray` time series, a `DataArray` mask is aligned by dimension
+name: it needs the time dimension, and is shared by every trial or channel
+when it lacks that dimension. An unlabeled mask is read in the time, trial,
+channel order.
+
+The measures that count observations (listed under
+`Connectivity.n_valid_observations`) count each bin's kept observations.
+`n_valid_observations` gives those counts, one per time window and
+frequency, for the statistics functions:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> from spectral_connectivity.statistics import coherence_significance_pvalue
+>>> multitaper = Multitaper(
+...     time_series,
+...     sampling_frequency=sampling_frequency,
+...     time_window_duration=0.5,
+...     artifact_samples=artifact_samples,
+... )
+>>> connectivity = Connectivity.from_transform(multitaper)
+>>> connectivity.n_valid_observations[:, 0].tolist()  # of 4 trials x 5 tapers
+[15, 20, 15, 20]
+>>> p_values = coherence_significance_pvalue(
+...     connectivity.coherency(),
+...     connectivity.n_valid_observations[..., np.newaxis, np.newaxis],
+... )
+
+```
+
+A bin that keeps fewer than two observations, such as a window that keeps no
+trial, has no test, and its p-value is NaN. Every statistics function that
+takes a count reads such an array the same way: an entry below the fewest
+observations the statistic needs (two for the coherence statistics, one for
+the power statistics) gives NaN there, while a single count below it raises.
+
 ## Group measures: canonical coherence between areas
 
 Group measures (`list_measures(category="group_pairwise")` and

@@ -42,6 +42,39 @@ The migration guide for code written against 2.x is
 
 ### Added
 
+- `Multitaper(artifact_samples=...)`, and the same in
+  `ShortTimeFourierTransform`, leaves out artifacts, gaps, and missing
+  samples: a boolean mask, `True` at an artifact (a sample to leave out), of
+  shape `(n_time_samples,)`,
+  `(n_time_samples, n_trials)`, or the time series' own (an artifact in any
+  signal then leaves the sample out of all), or `"nonfinite"` for every NaN
+  or infinite sample. A trial's window is used only if none of its samples is
+  an artifact, so each time window averages the trials it keeps.
+  `multitaper_connectivity` takes it in `transform_kwargs`. New
+  `artifact_samples`, `valid_windows` (`True` at the kept trial windows), and
+  `observation_weights` properties of both transforms.
+- `Connectivity.n_valid_observations`: the observations each bin (time window
+  and frequency, by default) averages; `n_observations` stays the raw count.
+  Where zero observation weights drop observations, the debiased squared
+  (weighted) phase lag index, pairwise phase consistency, the zero-coherence
+  test of `delay` and `group_delay`, and `jackknife` use each bin's count. A
+  bin keeping fewer than two observations is NaN in the debiased measures,
+  and one keeping fewer than three in the jackknife, with a warning.
+- A boxcar `MorletWavelet(edge_mode="nan")` with an expectation that pools
+  time now works with the debiased phase-lag measures, pairwise phase
+  consistency, and `delay`/`group_delay`, counting each frequency's valid
+  bins; it raised `ValueError` before.
+- `coherence_significance_pvalue` takes one count per estimate, an array
+  that broadcasts against the coherency (such as
+  `n_valid_observations[..., np.newaxis, np.newaxis]`); it used to reject an
+  array. Every statistics function that takes a count of observations
+  (`coherence_significance_pvalue`, `coherence_fisher_z_transform`,
+  `coherence_bias`, `power_confidence_intervals`, `power_fisher_z_transform`,
+  `power_bias`, `power_variance`) reads an array of counts the same way: an
+  entry below the fewest observations the statistic needs (2 for the
+  coherence statistics, 1 for the power statistics), a bin that keeps too
+  few, gives NaN there, where the others raised; the power statistics accept
+  the NaN power of such a bin. A single count below that still raises.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working
@@ -566,10 +599,11 @@ The migration guide for code written against 2.x is
   allowing for the storage rounding of a float32 coordinate; the same test
   decides whether a result records `frequency_bin_spacing` and whether
   two-sided frequencies are in FFT order), and
-  `delay`/`group_delay` reject non-uniform observation
-  weights, because their adjacent-bin combinations and coherence null assume
-  equal spacing and equally weighted observations (wavelet grids and Hann
-  smoothing violate these silently).
+  `delay`/`group_delay` reject observation weights that reweight
+  observations, because their adjacent-bin combinations and coherence null
+  assume equal spacing and equally weighted observations (wavelet grids and
+  Hann smoothing violate these silently); weights that only drop
+  observations are counted instead.
 - `Connectivity.jackknife` requires at least three observations, rejects
   diagnostics, alternate constructors, and structured (component) results with
   a clear error, and documents the supported explicit `fisher_squared`
@@ -866,11 +900,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   counts it takes, and `Connectivity.n_observations`: `coherence_bias`,
   `power_bias`, `power_variance`, `coherence_significance_pvalue`,
   `power_confidence_intervals`, and both counts of
-  `coherence_fisher_z_transform` and `power_fisher_z_transform`. A count the
-  formula cannot use raises a `ValueError`, as `coherence_significance_pvalue`
-  already did: `coherence_bias` needs at least 2 (it returned -0.5 for 0 and
-  divided by zero for 1), and the power helpers at least 1 (0 hit the
-  digamma and trigamma poles). A non-finite or fractional count raises too,
+  `coherence_fisher_z_transform` and `power_fisher_z_transform`. A single
+  count the formula cannot use raises a `ValueError`, as
+  `coherence_significance_pvalue` already did: `coherence_bias` needs at
+  least 2 (it returned -0.5 for 0 and divided by zero for 1), and the power
+  helpers at least 1 (0 hit the digamma and trigamma poles); in an array of
+  counts such an entry gives NaN (see Added). A non-finite or fractional count
+  raises too,
   naming the offending values of an array of counts. A boolean, a string, or
   None raises a `TypeError`: `power_bias(True)` and
   `power_confidence_intervals(True)` read `True` as 1 observation,

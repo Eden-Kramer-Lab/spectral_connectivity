@@ -388,6 +388,52 @@ def test_multitaper_transform_runs_on_the_device(xp):
     assert np.isfinite(coherence[..., 0, 1]).all()
 
 
+def test_artifact_samples_run_on_the_device(xp, monkeypatch):
+    """The mask, the zero-filled samples, the drop weights, and the measures
+    that count each bin's kept observations (the jackknife among them) stay on
+    the device and match the host."""
+    from spectral_connectivity import Multitaper
+
+    rng = np.random.default_rng(11)
+    time_series = rng.standard_normal((200, 4, 2))
+    time_series[60, 1, 0] = np.nan
+    measures = (
+        "pairwise_phase_consistency",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+        "canonical_coherence",
+    )
+
+    def compute():
+        multitaper = Multitaper(
+            time_series, 200, n_time_samples_per_window=50, artifact_samples="nonfinite"
+        )
+        connectivity = Connectivity.from_transform(multitaper)
+        results = {
+            measure: (
+                connectivity.canonical_coherence(["a", "b"])[0]
+                if measure == "canonical_coherence"
+                else getattr(connectivity, measure)()
+            )
+            for measure in measures
+        }
+        results["n_valid_observations"] = connectivity.n_valid_observations
+        results["jackknife"] = connectivity.jackknife(
+            "magnitude_squared_coherence"
+        ).standard_error
+        results["delay"] = connectivity.group_delay()[0]
+        return multitaper, results
+
+    multitaper, on_device = compute()
+    assert isinstance(multitaper.fft(), _DeviceArray)
+    assert isinstance(multitaper.observation_weights, _DeviceArray)
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    _, host = compute()
+    for name, value in on_device.items():
+        assert isinstance(value, np.ndarray), name
+        np.testing.assert_allclose(value, host[name], rtol=1e-12, equal_nan=True, err_msg=name)
+
+
 def test_phase_lag_family_runs_on_the_device(xp, monkeypatch):
     """The phase-lag tile loop (ufunc ``out=``, ``count_nonzero`` over an axis
     tuple, ``einsum``) runs on device arrays and matches the host result."""
