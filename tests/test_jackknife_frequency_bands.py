@@ -11,13 +11,16 @@ import warnings
 
 import numpy as np
 import pytest
+import scipy.stats
 import xarray as xr
 
 from spectral_connectivity import (
     Connectivity,
     MorletWavelet,
     Multitaper,
+    ShortTimeFourierTransform,
     Welch,
+    connectivity_to_xarray,
     frequency_band_reduce,
     list_measures,
     multitaper_connectivity,
@@ -32,7 +35,11 @@ from tests._expected_spectrum import (
     _expected_tapered_cross_spectrum,
 )
 from tests._monte_carlo import replicate_mean_and_limit
-from tests._var_oracle import _coherency
+from tests._var_oracle import (
+    _coherency,
+    _dense_stable_var,
+    _fourier_coefficients_with_cross_spectrum,
+)
 
 _SAMPLING_FREQUENCY = 200
 # 100-sample windows: 2 Hz bins. The "alpha" edges fall between bins, so its
@@ -406,7 +413,8 @@ def test_jackknife_result_is_built_from_its_original_fields():
         result.frequency_bands,
         result.frequency_reduction,
         result.leave_out,
-    ) == (None, None, None, None)
+        result.interval_center,
+    ) == (None, None, None, None, None)
     replicates = np.ones((5, 3))
     direct = jackknife_confidence_interval(estimate, replicates)
     assert direct.replicates is replicates
@@ -415,6 +423,7 @@ def test_jackknife_result_is_built_from_its_original_fields():
         None,
         None,
     )
+    assert direct.interval_center == "estimate"
 
 
 @pytest.mark.parametrize("frequency_bands", [None, _BANDS], ids=["frequencies", "bands"])
@@ -1416,3 +1425,347 @@ def test_one_taper_per_trial_with_artifacts_observation_equals_trial():
         np.testing.assert_array_equal(
             getattr(by_observation, name), getattr(by_trial, name), err_msg=name
         )
+
+
+# --- The bias-corrected interval center ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "transformation"),
+    [("magnitude_squared_coherence", "fisher_squared"), ("coherence_phase", "circular")],
+)
+def test_bias_corrected_center_is_the_hand_computed_interval(
+    time_series, method, transformation
+):
+    """``interval_center="bias_corrected"`` moves the interval, on the
+    transformed scale, from ``g(estimate)`` to ``n g(estimate) - (n - 1)
+    mean(g(replicates))``; the standard error and bias-corrected estimate are
+    those of the default."""
+    _, connectivity = _connectivity(time_series)
+    kwargs = {"leave_out": "trial", "frequency_bands": _BANDS, "keep_replicates": True}
+    default = connectivity.jackknife(method, **kwargs)
+    centered = connectivity.jackknife(method, interval_center="bias_corrected", **kwargs)
+
+    n = _N_TRIALS
+    estimate, replicates = default.estimate, default.replicates
+    if transformation == "fisher_squared":
+        transformed_estimate = np.arctanh(np.sqrt(estimate))
+        transformed = np.arctanh(np.sqrt(replicates))
+        inverse = lambda value: np.clip(np.tanh(value), 0, 1) ** 2  # noqa: E731
+    else:
+        transformed_estimate = estimate
+        transformed = estimate + np.angle(np.exp(1j * (replicates - estimate)))
+        inverse = lambda value: np.angle(np.exp(1j * value))  # noqa: E731
+    center = n * transformed_estimate - (n - 1) * transformed.mean(axis=0)
+    half_width = scipy.stats.t.ppf(0.975, df=n - 1) * np.sqrt(
+        (n - 1) / n * ((transformed - transformed.mean(axis=0)) ** 2).sum(axis=0)
+    )
+
+    assert (default.interval_center, centered.interval_center) == (
+        "estimate",
+        "bias_corrected",
+    )
+    np.testing.assert_array_equal(centered.standard_error, default.standard_error)
+    np.testing.assert_array_equal(centered.bias_corrected, default.bias_corrected)
+    off_diagonal = (..., 0, 1)
+    for bound, expected in zip(
+        centered.confidence_interval,
+        (inverse(center - half_width), inverse(center + half_width)),
+        strict=True,
+    ):
+        np.testing.assert_allclose(bound[off_diagonal], expected[off_diagonal], rtol=1e-12)
+    # The public function centers the same way.
+    _assert_same_interval(
+        jackknife_confidence_interval(
+            estimate,
+            replicates,
+            transformation=transformation,
+            interval_center="bias_corrected",
+        ),
+        centered,
+    )
+
+
+def test_an_unknown_interval_center_is_refused(time_series):
+    _, connectivity = _connectivity(time_series)
+    with pytest.raises(
+        ValueError, match="interval_center must be 'estimate' or 'bias_corrected'"
+    ):
+        connectivity.jackknife("power", interval_center="median")
+    with pytest.raises(ValueError, match="interval_center must be"):
+        jackknife_confidence_interval(np.ones(2), np.ones((3, 2)), interval_center="median")
+
+
+def test_bias_corrected_center_covers_a_biased_band_partial_coherence():
+    """A band-mean partial coherence is biased upward by more than its spread,
+    since averaging over the band's bins shrinks the spread but not the bias:
+    the interval centered on the estimate covers the band mean of the expected
+    spectrum's partial coherence far less than 95%, and the one centered on
+    the bias-corrected estimate about 95%.
+
+    A dense 5-signal VAR, 300 datasets of 10 trials of 512 samples (NW = 3, 50
+    observations) on the time-window axis; the pair with the weakest partial
+    coherence in the band (0.015), where the bias is largest relative to the
+    spread (2.4 standard deviations).
+    """
+    coefficients, noise_covariance = _dense_stable_var(
+        n_signals=5, n_lags=3, spectral_radius=0.95, seed=3
+    )
+    n_time, n_trials, n_datasets = 512, 10, 300
+    segments = simulate_MVAR(
+        coefficients,
+        noise_covariance=noise_covariance,
+        n_time_samples=n_time,
+        n_trials=n_datasets * n_trials,
+        n_burnin_samples=300,
+        random_state=1,
+    )
+    multitaper = Multitaper(
+        segments.reshape(n_time, n_datasets, n_trials, 5)
+        .transpose(1, 0, 2, 3)
+        .reshape(n_datasets * n_time, n_trials, 5),
+        sampling_frequency=1.0,
+        n_time_samples_per_window=n_time,
+        time_halfbandwidth_product=3,
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    band = (0.10, 0.20)
+    frequencies = connectivity.frequencies
+    in_band = (frequencies >= band[0]) & (frequencies <= band[1])
+    exact = Connectivity(
+        _fourier_coefficients_with_cross_spectrum(
+            _expected_multitaper_cross_spectrum(multitaper, coefficients, noise_covariance),
+            conjugate_symmetric=True,
+        )
+    )
+    truth = exact.partial_coherence()[0][in_band].mean(axis=0)
+    source, target = 0, 4
+    assert truth[source, target] == truth[np.triu_indices(5, 1)].min()
+
+    result = connectivity.jackknife(
+        "partial_coherence",
+        leave_out="trial",
+        frequency_bands={"band": band},
+        keep_replicates=True,
+    )
+
+    coverage = {}
+    for center in ("estimate", "bias_corrected"):
+        interval = jackknife_confidence_interval(
+            result.estimate[:, 0, source, target],
+            result.replicates[:, :, 0, source, target],
+            transformation=result.transformation,
+            interval_center=center,
+        )
+        lower, upper = interval.confidence_interval
+        coverage[center] = replicate_mean_and_limit(
+            ((lower <= truth[source, target]) & (truth[source, target] <= upper)).astype(float)
+        )
+    estimate_coverage, estimate_limit = coverage["estimate"]
+    corrected, corrected_limit = coverage["bias_corrected"]
+    # Measured 40-43% (seeds 1-3): more than 3 of its limits below nominal.
+    assert 0.95 - estimate_coverage > 3 * estimate_limit, coverage
+    # Measured 91.7-93.3% (seeds 1-3); the allowance is for the jackknife's
+    # residual bias and the Student t approximation.
+    assert abs(corrected - 0.95) <= corrected_limit + 0.02, coverage
+
+
+def test_trial_band_mean_coherence_under_covers_at_weak_coherence():
+    """With 5 trials and a band-mean coherence of 0.073 the estimate's upward
+    bias makes the trial interval cover only about 87%; centering it on the
+    bias-corrected estimate brings it to about 92%, and a moderate band of the
+    same call covers about 94% either way.
+
+    3000 datasets of 5 trials of 256 samples (NW = 3) on the time-window axis.
+    Measured over seeds 11 and 1-3: weak band 86.6-88.0% (estimate) and
+    91.6-93.1% (bias-corrected), moderate band 93.3-94.3% and 93.8-94.7%.
+    """
+    multitaper = Multitaper(
+        _datasets_as_windows(256, 5, n_datasets=3000, random_state=11),
+        sampling_frequency=1.0,
+        n_time_samples_per_window=256,
+        time_halfbandwidth_product=3,
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    frequencies = connectivity.frequencies
+    true_coherence = _magnitude_squared_coherence(
+        _expected_multitaper_cross_spectrum(
+            multitaper, _VAR_COEFFICIENTS, _VAR_NOISE_COVARIANCE
+        )[: frequencies.size]
+    )
+    bands = {"weak": (0.30, 0.40), "moderate": (0.15, 0.25)}
+    result = connectivity.jackknife(
+        "magnitude_squared_coherence",
+        leave_out="trial",
+        frequency_bands=bands,
+        keep_replicates=True,
+    )
+    coverage = {}
+    for index, (name, (low, high)) in enumerate(bands.items()):
+        target = true_coherence[(frequencies >= low) & (frequencies <= high)].mean()
+        for center in ("estimate", "bias_corrected"):
+            lower, upper = jackknife_confidence_interval(
+                result.estimate[:, index, 0, 1],
+                result.replicates[:, :, index, 0, 1],
+                transformation="fisher_squared",
+                interval_center=center,
+            ).confidence_interval
+            coverage[name, center] = replicate_mean_and_limit(
+                ((lower <= target) & (target <= upper)).astype(float)
+            )
+    weak, weak_limit = coverage["weak", "estimate"]
+    assert weak + weak_limit < 0.91, coverage
+    for key, allowance in (
+        (("weak", "bias_corrected"), 0.015),
+        (("moderate", "estimate"), 0.01),
+        (("moderate", "bias_corrected"), 0.01),
+    ):
+        value, limit = coverage[key]
+        assert abs(value - 0.95) <= limit + allowance, (key, coverage)
+
+
+# --- Figures the Notes cite --------------------------------------------------
+
+
+@pytest.mark.parametrize("time_halfbandwidth_product", [3, 4])
+def test_different_tapers_are_correlated_a_few_bins_apart(time_halfbandwidth_product):
+    """For white noise the correlation of tapers j and k's coefficients at
+    frequencies d bins apart is |sum_t h_j(t) h_k(t) exp(-2 pi i d t / N)| for
+    unit-energy tapers: 0 at d = 0 (orthogonal tapers) but, for d of 1 to 3
+    bins, up to 0.4-0.6 over pairs of different tapers (median 0.2-0.4), as
+    the jackknife Notes say (measured: 0.42-0.59, median 0.25-0.39)."""
+    multitaper = Multitaper(
+        np.zeros((256, 1, 1)),
+        sampling_frequency=1.0,
+        time_halfbandwidth_product=time_halfbandwidth_product,
+    )
+    tapers = to_host(multitaper.tapers).T  # (n_tapers, n_time)
+    tapers = tapers / np.linalg.norm(tapers, axis=1, keepdims=True)
+    different = ~np.eye(len(tapers), dtype=bool)
+    time = np.arange(tapers.shape[1])
+    np.testing.assert_allclose(
+        (tapers @ tapers.T)[different], 0, atol=1e-10
+    )  # uncorrelated at one frequency
+    for offset in (1, 2, 3):
+        shifted = tapers * np.exp(-2j * np.pi * offset * time / tapers.shape[1])
+        correlation = np.abs(shifted @ tapers.T)[different]
+        assert 0.4 <= correlation.max() <= 0.6, (offset, correlation.max())
+        assert 0.2 <= np.median(correlation) <= 0.4, (offset, np.median(correlation))
+
+
+def test_phase_slope_index_intervals_cover_with_either_unit():
+    """``phase_slope_index`` combines the bins of its ``frequency_range``
+    inside its own fit, and its leave-one-taper-out interval is not too narrow
+    the way a band mean's is: with 5 trials of 128 samples (NW = 3), both
+    leave_out settings cover the PSI of the expected spectrum about 95% of
+    1000 datasets (measured, seeds 1-3: 95.3-96.4% leaving out tapers,
+    93.6-94.9% leaving out trials)."""
+    coefficients = np.array([[[1.5, 0.0], [0.4, 0.5]], [[-0.9, 0.0], [0.0, 0.0]]])
+    n_time, n_trials, n_datasets = 128, 5, 1000
+    segments = simulate_MVAR(
+        coefficients,
+        noise_covariance=np.eye(2),
+        n_time_samples=n_time,
+        n_trials=n_datasets * n_trials,
+        n_burnin_samples=300,
+        random_state=1,
+    )
+    multitaper = Multitaper(
+        segments.reshape(n_time, n_datasets, n_trials, 2)
+        .transpose(1, 0, 2, 3)
+        .reshape(n_datasets * n_time, n_trials, 2),
+        sampling_frequency=1.0,
+        n_time_samples_per_window=n_time,
+        time_halfbandwidth_product=3,
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    kwargs = {"frequency_range": (0.08, 0.13)}
+    target = Connectivity(
+        _fourier_coefficients_with_cross_spectrum(
+            _expected_multitaper_cross_spectrum(multitaper, coefficients, np.eye(2)),
+            conjugate_symmetric=True,
+        )
+    ).phase_slope_index(**kwargs)[0, 0, 1]
+    for leave_out in ("observation", "trial"):
+        lower, upper = (
+            bound[:, 0, 1]
+            for bound in connectivity.jackknife(
+                "phase_slope_index", leave_out=leave_out, **kwargs
+            ).confidence_interval
+        )
+        coverage, limit = replicate_mean_and_limit(
+            ((lower <= target) & (target <= upper)).astype(float)
+        )
+        assert abs(coverage - 0.95) <= limit + 0.01, (leave_out, coverage)
+
+
+# --- The band estimate is the labeled band value -----------------------------
+
+_TRANSFORM_BANDS = {"theta": (4, 8), "alpha": (8.3, 12.7), "beta": (13, 30), "top": (80, 100)}
+
+
+def _transforms(x):
+    return {
+        "multitaper": Multitaper(
+            x,
+            sampling_frequency=200,
+            n_time_samples_per_window=100,
+            time_halfbandwidth_product=2,
+        ),
+        "multitaper_odd": Multitaper(
+            x,
+            sampling_frequency=200,
+            n_time_samples_per_window=99,
+            time_halfbandwidth_product=2,
+        ),
+        "welch": Welch(x, sampling_frequency=200, segment_duration=0.25, segment_overlap=0.0),
+        "stft": ShortTimeFourierTransform(x, sampling_frequency=200, time_window_duration=0.5),
+        "morlet": MorletWavelet(
+            x[:200], sampling_frequency=200, frequencies=np.arange(6, 99, 2.0)
+        ),
+    }
+
+
+@pytest.mark.parametrize("name", ["multitaper", "multitaper_odd", "welch", "stft", "morlet"])
+@pytest.mark.parametrize(
+    ("method", "reduction", "kwargs"),
+    [
+        ("power", "integral", {"one_sided": True}),
+        ("magnitude_squared_coherence", "mean", {}),
+        ("coherence_phase", "mean", {}),
+        ("delay", "mean", {"frequency_range": (5, 40)}),
+    ],
+)
+def test_band_estimate_is_the_labeled_band_value_for_every_transform(
+    time_series, name, method, reduction, kwargs
+):
+    """``jackknife(frequency_bands=...).estimate`` is what
+    ``connectivity_to_xarray(transform, frequency_bands=...)`` returns, for
+    each transform: two-sided even and odd FFT lengths, Welch, STFT, and the
+    one-sided Morlet."""
+    transform = quietly(lambda: _transforms(time_series)[name])
+    bands = _TRANSFORM_BANDS if method != "delay" else {"a": (5, 12), "b": (12.5, 40)}
+    leave_out = "observation" if name == "welch" else "trial"
+    # The whole-circle warnings of phase intervals.
+    result = quietly(
+        Connectivity.from_transform(transform).jackknife,
+        method,
+        leave_out=leave_out,
+        frequency_bands=bands,
+        frequency_reduction=reduction,
+        **kwargs,
+    )
+    wrapper_kwargs = (
+        {"connectivity_kwargs": {"one_sided": kwargs["one_sided"]}}
+        if "one_sided" in kwargs
+        else kwargs
+    )
+    labeled = quietly(
+        connectivity_to_xarray,
+        transform,
+        method,
+        frequency_bands=bands,
+        frequency_reduction=reduction,
+        **wrapper_kwargs,
+    )
+    np.testing.assert_array_equal(result.estimate, labeled.values)

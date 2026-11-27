@@ -64,6 +64,7 @@ from spectral_connectivity.statistics import (
     _SurrogateTally,
     _validate_alpha,
     _validate_confidence_level,
+    _validate_interval_center,
     _validate_jackknife_transformation,
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
@@ -3395,6 +3396,7 @@ class Connectivity:
         frequency_bands: Mapping[str, tuple[float, float]] | None = None,
         frequency_reduction: Literal["mean", "integral"] = "mean",
         keep_replicates: bool = False,
+        interval_center: Literal["estimate", "bias_corrected"] = "estimate",
         **method_kwargs: Any,
     ) -> JackknifeResult:
         """Estimate uncertainty by leaving out one observation or one trial.
@@ -3655,6 +3657,7 @@ class Connectivity:
         _validate_confidence_level(confidence_level)
         if transformation != "auto":
             _validate_jackknife_transformation(transformation)
+        _validate_interval_center(interval_center)
         keep_replicates = _validated_flag("keep_replicates", keep_replicates)
         if leave_out not in ("observation", "trial"):
             msg = f"leave_out must be 'observation' or 'trial'; got {leave_out!r}."
@@ -3844,6 +3847,7 @@ class Connectivity:
             leave_one_out,
             confidence_level=confidence_level,
             transformation=resolved_transformation,
+            interval_center=interval_center,
             # A NaN replicate of a unit the bin has is a NaN value of the
             # measure, which makes the bin's interval NaN.
             replicate_is_valid=replicate_is_valid,

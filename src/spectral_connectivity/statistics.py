@@ -127,6 +127,10 @@ class JackknifeResult:
         How :meth:`Connectivity.jackknife` combined each band's bins (its
         ``frequency_reduction``); ``None`` when the frequencies were kept, and
         from :func:`jackknife_confidence_interval`.
+    interval_center : {"estimate", "bias_corrected"} or None
+        What the interval is centered on, on the transformed scale (see
+        :func:`jackknife_confidence_interval`); ``None`` for a result built
+        directly.
     leave_out : {"observation", "trial"} or None
         The unit :meth:`Connectivity.jackknife` left out; ``None`` from
         :func:`jackknife_confidence_interval`, which is given the replicates.
@@ -142,6 +146,7 @@ class JackknifeResult:
     frequency_bands: Mapping[str, tuple[float, float]] | None = None
     frequency_reduction: str | None = None
     leave_out: str | None = None
+    interval_center: str | None = None
 
 
 @dataclass(frozen=True)
@@ -431,6 +436,19 @@ _TOO_FEW_REPLICATES_CONSEQUENCE = (
     "standard error and bounds are NaN there."
 )
 _JACKKNIFE_TRANSFORMATIONS = ("identity", "log", "fisher", "fisher_squared", "circular")
+_INTERVAL_CENTERS = ("estimate", "bias_corrected")
+
+
+def _validate_interval_center(interval_center: object) -> None:
+    """Reject an ``interval_center`` that is not one of ``_INTERVAL_CENTERS``."""
+    if interval_center not in _INTERVAL_CENTERS:
+        msg = (
+            "interval_center must be 'estimate' or 'bias_corrected'; got "
+            f"{interval_center!r}. 'bias_corrected' centers the interval on the "
+            "jackknife's bias-corrected estimate, for band statistics of biased "
+            "measures such as the spectral Granger family."
+        )
+        raise ValueError(msg)
 
 
 def _validate_jackknife_transformation(transformation: object) -> None:
@@ -451,6 +469,7 @@ def jackknife_confidence_interval(
     transformation: Literal[
         "identity", "log", "fisher", "fisher_squared", "circular"
     ] = "identity",
+    interval_center: Literal["estimate", "bias_corrected"] = "estimate",
 ) -> JackknifeResult:
     """Summarize leave-one-out replicates with a jackknife confidence interval.
 
@@ -476,6 +495,13 @@ def jackknife_confidence_interval(
         spectra, Fisher's ``atanh`` for magnitude coherence in ``[-1, 1]``,
         ``fisher_squared`` (``atanh(sqrt(.))``) for magnitude-squared coherence
         in ``[0, 1]``, and circular for angles in radians.
+    interval_center : {"estimate", "bias_corrected"}, default="estimate"
+        Where the interval is centered on the transformed scale: on the
+        estimate, or on the jackknife's bias-corrected estimate,
+        ``n * g(estimate) - (n - 1) * mean(g(replicates))`` (the
+        ``bias_corrected`` field, with ``g`` the transformation). The half-width
+        is the same. See :meth:`Connectivity.jackknife` for when to center on
+        the bias-corrected estimate.
 
     Returns
     -------
@@ -535,6 +561,7 @@ def jackknife_confidence_interval(
     """
     _validate_confidence_level(confidence_level)
     _validate_jackknife_transformation(transformation)
+    _validate_interval_center(interval_center)
     estimate_array = np.asarray(estimate)
     replicates = np.asarray(leave_one_out)
     if np.iscomplexobj(estimate_array) or np.iscomplexobj(replicates):
@@ -556,6 +583,7 @@ def jackknife_confidence_interval(
         replicates,
         confidence_level=confidence_level,
         transformation=transformation,
+        interval_center=interval_center,
         replicate_is_valid=~is_missing if bool(is_missing.any()) else None,
         describe_too_few=lambda n_too_few, n_elements, threshold: (
             f"jackknife_confidence_interval: {n_too_few} of {n_elements} elements "
@@ -570,6 +598,7 @@ def _jackknife_interval(
     *,
     confidence_level: float,
     transformation: str,
+    interval_center: str = "estimate",
     replicate_is_valid: NDArray[np.bool_] | None = None,
     saturated_by_construction: NDArray[np.bool_] | bool = False,
     describe_too_few: Callable[[int, int, int], str] | None = None,
@@ -583,6 +612,8 @@ def _jackknife_interval(
     replicates : NDArray[floating], shape (n_replicates, ...)
     confidence_level : float
     transformation : {"identity", "log", "fisher", "fisher_squared", "circular"}
+    interval_center : {"estimate", "bias_corrected"}, default="estimate"
+        The point of the transformed scale the interval is centered on.
     replicate_is_valid : NDArray[bool], optional
         Which replicates count in each element, broadcastable against
         ``replicates``; every one when ``None``. An element left with fewer
@@ -692,8 +723,11 @@ def _jackknife_interval(
     # from n replicates, and the normal quantile under-covers at small n.
     critical_value = scipy.stats.t.ppf(0.5 + confidence_level / 2, df=counts - 1)
     half_width = critical_value * transformed_standard_error
-    lower = inverse(transformed_estimate - half_width)
-    upper = inverse(transformed_estimate + half_width)
+    center = (
+        transformed_estimate if interval_center == "estimate" else bias_corrected_transformed
+    )
+    lower = inverse(center - half_width)
+    upper = inverse(center + half_width)
     if transformation == "circular":
         lower, upper = _pin_whole_circle_interval(half_width, lower, upper)
     return JackknifeResult(
@@ -704,6 +738,7 @@ def _jackknife_interval(
         n_observations=counts,
         transformation=transformation,
         replicates=replicates,
+        interval_center=interval_center,
     )
 
 
