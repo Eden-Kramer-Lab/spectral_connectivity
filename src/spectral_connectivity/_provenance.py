@@ -202,6 +202,7 @@ def _shared_provenance_attrs(
         attrs.update(
             n_observations=connectivity.n_observations,
             observations_are_independent=int(connectivity.observations_are_independent),
+            observations_are_time_segments=int(connectivity.observations_are_time_segments),
         )
     estimator = {
         key: value

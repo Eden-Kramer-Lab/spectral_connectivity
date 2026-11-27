@@ -4357,6 +4357,9 @@ class Welch:
 
     _transform_name = "welch"
     is_one_sided = False
+    # The observations are successive segments, not tapers of the same samples
+    # (see SpectralTransform).
+    observations_are_time_segments = True
 
     @reject_sampling_frequency_aliases
     def __init__(
@@ -4593,25 +4596,6 @@ class Welch:
             ``True`` when ``segment_overlap <= 0.5``.
         """
         return self.segment_overlap <= 0.5
-
-    @property
-    def observations_are_time_segments(self) -> bool:
-        """Whether each trial's observations are segments of it in time: ``True``.
-
-        Welch's observations are the periodograms of successive segments, not
-        tapers of the same samples, so their Fourier coefficients are not
-        correlated across nearby frequencies the way different tapers' are.
-        :meth:`Connectivity.jackknife
-        <spectral_connectivity.Connectivity.jackknife>` therefore leaves out one
-        segment at a time for a statistic over a frequency band
-        (``frequency_bands``), as long as the segments overlap by at most
-        half (:attr:`observations_are_independent`).
-
-        Returns
-        -------
-        bool
-        """
-        return True
 
     def fft(self) -> NDArray[np.complexfloating]:
         """Compute the Hann-windowed Fourier coefficients of every segment.

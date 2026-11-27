@@ -114,6 +114,7 @@ def test_transforms_share_known_facts_and_native_settings(data, name, n_observat
     assert result.attrs["expectation_type"] == "trials_tapers"
     assert result.attrs["backend"] in {"cpu", "gpu"}
     assert result.attrs["observations_are_independent"] == 1
+    assert result.attrs["observations_are_time_segments"] == (name == "welch")
     assert result.attrs["is_exact_spectrum"] == 0
     assert result.attrs["time_bins_are_independent"] == (name != "morlet")
     assert result.attrs["nyquist_frequency"] == 32

@@ -619,19 +619,28 @@ def test_welch_segments_are_left_out_one_at_a_time_for_bands(time_series, segmen
     )
 
 
-def test_coefficients_passed_directly_are_taken_as_tapers(time_series):
-    """Without a transform nothing says the observations are segments, so they
-    are taken as tapers, and the refusal says how to record segments."""
+def test_coefficients_passed_directly_are_taken_as_tapers_unless_stated(time_series):
+    """Coefficients passed directly are taken as tapers, and the refusal says
+    how to state that they are segments; stated, they are left out one at a
+    time as from the transform."""
     welch = Welch(time_series, sampling_frequency=_SAMPLING_FREQUENCY, segment_duration=0.5)
-    direct = Connectivity(to_host(welch.fft()), frequencies=welch.frequencies)
+    coefficients = to_host(welch.fft())
+    direct = Connectivity(coefficients, frequencies=welch.frequencies)
     assert not direct.observations_are_time_segments
     with pytest.raises(ValueError, match="cannot leave out one taper at a time") as error:
         direct.jackknife("magnitude_squared_coherence", frequency_bands=_BANDS)
     assert "Connectivity.from_transform(Welch(...))" in str(error.value)
-    # Reassigned coefficients are unknown too.
-    connectivity = Connectivity.from_transform(welch)
-    connectivity.fourier_coefficients = to_host(welch.fft())
-    assert not connectivity.observations_are_time_segments
+    assert "observations_are_time_segments=True" in str(error.value)
+
+    stated = Connectivity(
+        coefficients, frequencies=welch.frequencies, observations_are_time_segments=True
+    )
+    np.testing.assert_array_equal(
+        stated.jackknife("magnitude_squared_coherence", frequency_bands=_BANDS).standard_error,
+        Connectivity.from_transform(welch)
+        .jackknife("magnitude_squared_coherence", frequency_bands=_BANDS)
+        .standard_error,
+    )
 
 
 class _DatasetsAsTimeWindows:

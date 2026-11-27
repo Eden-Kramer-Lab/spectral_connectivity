@@ -1281,6 +1281,7 @@ facts needed to interpret it. Settings use one JSON record:
 | `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. Not recorded for an exact spectrum. |
 | `expectation_type` | Axes averaged to form each spectral estimate. |
 | `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. `observations_are_independent` is not recorded for an exact spectrum. |
+| `observations_are_time_segments` | 1 when a trial's observations are segments of it in time (`Welch`), 0 for tapers of the same samples; stored as 0/1. Not recorded for an exact spectrum. |
 | `is_exact_spectrum` | 1 when the coefficients are one factor of an exact cross-spectral matrix rather than samples (`VARSpectrum`): the values are a model's population values, and the result records no observation count or independence. 0 otherwise. |
 | `backend` | `cpu` or `gpu`, reflecting the imported backend. |
 | `transform_parameters_json` | Remaining settings in `estimator` and `execution` records; optional settings use JSON `null`. |
