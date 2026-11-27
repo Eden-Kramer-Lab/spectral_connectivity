@@ -750,7 +750,8 @@ leave-one-out replicate to the bands, then forms the interval (here on the
 >>> connectivity = Connectivity.from_transform(multitaper)
 >>> bands = {"theta": (4, 8), "beta": (13, 30)}
 >>> result = connectivity.jackknife(
-...     "magnitude_squared_coherence", leave_out="trial", frequency_bands=bands
+...     "magnitude_squared_coherence", leave_out="trial", frequency_bands=bands,
+...     keep_replicates=True,
 ... )
 >>> result.estimate.shape  # (n_time_windows, n_bands, n_signals, n_signals)
 (1, 2, 2, 2)
@@ -771,7 +772,7 @@ interval covered 43-81% of band means and maxima in simulation, against
 >>> connectivity.jackknife("magnitude_squared_coherence", frequency_bands=bands)
 Traceback (most recent call last):
 ...
-ValueError: jackknife(frequency_bands=...) with leave_out='observation' and expectation_type='trials_tapers' leaves out one trial-taper observation at a time, ...
+ValueError: jackknife(frequency_bands=...) cannot leave out one taper at a time (leave_out='observation' with expectation_type='trials_tapers'): ...
 
 ```
 

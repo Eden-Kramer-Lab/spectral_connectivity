@@ -3300,6 +3300,7 @@ class Connectivity:
         leave_out: Literal["observation", "trial"] = "observation",
         frequency_bands: Mapping[str, tuple[float, float]] | None = None,
         frequency_reduction: Literal["mean", "integral"] = "mean",
+        keep_replicates: bool = False,
         **method_kwargs: Any,
     ) -> JackknifeResult:
         """Estimate uncertainty by leaving out one observation or one trial.
@@ -3381,6 +3382,12 @@ class Connectivity:
             of the measure over the bins in the band (circular for
             ``coherence_phase``), or for ``power`` only, its integral over the
             band (band power). Ignored without ``frequency_bands``.
+        keep_replicates : bool, default=False
+            Return the leave-one-out replicates as ``JackknifeResult.replicates``,
+            for an interval on another statistic of the measure through
+            :func:`~spectral_connectivity.statistics.jackknife_confidence_interval`.
+            They take ``n_replicates`` times the memory of the estimate, so
+            they are dropped unless asked for.
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -3389,10 +3396,15 @@ class Connectivity:
         JackknifeResult
             Estimate, bias-corrected estimate, standard error, and confidence
             bounds, each with the measure's own shape (for a pairwise measure
-            ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)``).
-            With ``frequency_bands`` the frequency axis is replaced by a band
-            axis, in the mapping's order: ``(n_time, n_bands, n_signals,
-            n_signals)``. ``replicates`` holds the leave-one-out replicates,
+            and the default expectation, ``(n_time,
+            n_nonnegative_frequencies, n_signals, n_signals)``; with
+            ``expectation_type="trials"`` the taper axis follows time). With
+            ``frequency_bands`` the frequency axis is replaced by a band axis,
+            in the mapping's order (``(n_time, n_bands, n_signals,
+            n_signals)`` for the default expectation), and
+            ``JackknifeResult.frequency_bands`` names it. ``leave_out`` records
+            the unit left out, and with ``keep_replicates=True``
+            ``replicates`` holds the leave-one-out replicates,
             ``(n_replicates, *estimate.shape)``.
             For directed measures ``[..., i, j]`` is the influence ``i -> j``,
             the same order as the xarray wrapper's ``sel(source=i, target=j)``.
@@ -3528,8 +3540,8 @@ class Connectivity:
         ... )
         >>> result.estimate.shape  # (n_time, n_bands, n_signals, n_signals)
         (1, 2, 2, 2)
-        >>> result.replicates.shape  # one replicate per trial left out
-        (10, 1, 2, 2, 2)
+        >>> list(result.frequency_bands)  # the band axis, in order
+        ['theta', 'beta']
         >>> lower, upper = result.confidence_interval
         >>> bool(lower[0, 0, 0, 1] < result.estimate[0, 0, 0, 1] < upper[0, 0, 0, 1])
         True
@@ -3545,6 +3557,7 @@ class Connectivity:
             )
             raise ValueError(msg)
         _validate_confidence_level(confidence_level)
+        keep_replicates = _validated_flag("keep_replicates", keep_replicates)
         if leave_out not in ("observation", "trial"):
             msg = f"leave_out must be 'observation' or 'trial'; got {leave_out!r}."
             raise ValueError(msg)
@@ -3824,7 +3837,12 @@ class Connectivity:
                 bias_corrected=np.maximum(result.bias_corrected, 0.0),
                 confidence_interval=(np.maximum(lower, 0.0), upper),
             )
-        return result
+        return replace(
+            result,
+            replicates=leave_one_out if keep_replicates else None,
+            frequency_bands=None if frequency_bands is None else dict(frequency_bands),
+            leave_out=leave_out,
+        )
 
     @_refused_for_exact_spectrum("surrogate_null")
     def surrogate_test(

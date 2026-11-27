@@ -432,6 +432,7 @@ def test_artifact_samples_run_on_the_device(xp, monkeypatch):
                 leave_out="trial",
                 frequency_bands=bands,
                 frequency_reduction=frequency_reduction,
+                keep_replicates=True,
             )
             results[f"jackknife_bands_{method}"] = band_interval.standard_error
             results[f"jackknife_replicates_{method}"] = band_interval.replicates

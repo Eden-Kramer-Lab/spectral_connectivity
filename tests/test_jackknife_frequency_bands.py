@@ -15,7 +15,7 @@ import xarray as xr
 
 from spectral_connectivity import Connectivity, Multitaper, Welch, frequency_band_reduce
 from spectral_connectivity.simulate import simulate_MVAR
-from spectral_connectivity.statistics import jackknife_confidence_interval
+from spectral_connectivity.statistics import JackknifeResult, jackknife_confidence_interval
 from tests._backend_helpers import to_host
 from tests._expected_spectrum import (
     _expected_multitaper_cross_spectrum,
@@ -136,6 +136,7 @@ def test_band_jackknife_is_the_jackknife_of_band_reduced_trial_replicates(
         leave_out="trial",
         frequency_bands=_BANDS,
         frequency_reduction=frequency_reduction,
+        keep_replicates=True,
     )
 
     estimate = _band_reduced(connectivity, method, frequency_reduction)
@@ -203,8 +204,10 @@ def test_replicates_are_the_measure_without_each_trial_or_observation(time_serie
         n_time, n_trials * n_tapers, 1, *coefficients.shape[3:]
     )
 
-    by_observation = connectivity.jackknife("power", leave_out="observation")
-    by_trial = connectivity.jackknife("power", leave_out="trial")
+    by_observation = connectivity.jackknife(
+        "power", leave_out="observation", keep_replicates=True
+    )
+    by_trial = connectivity.jackknife("power", leave_out="trial", keep_replicates=True)
 
     expected_by_observation = [
         Connectivity(
@@ -239,7 +242,10 @@ def test_replicates_give_an_interval_for_a_custom_statistic(time_series):
     the data without each trial."""
     _, connectivity = _connectivity(time_series)
     result = connectivity.jackknife(
-        "magnitude_squared_coherence", leave_out="trial", frequency_bands=_BANDS
+        "magnitude_squared_coherence",
+        leave_out="trial",
+        frequency_bands=_BANDS,
+        keep_replicates=True,
     )
 
     difference = jackknife_confidence_interval(
@@ -262,6 +268,49 @@ def test_replicates_give_an_interval_for_a_custom_statistic(time_series):
     np.testing.assert_allclose(
         difference.standard_error, expected.standard_error, rtol=1e-10, equal_nan=True
     )
+
+
+def test_replicates_are_kept_only_when_asked_for(time_series):
+    """``replicates`` is None by default; asking for it changes nothing else.
+    The result records the bands, in the order of its band axis, and the unit
+    left out."""
+    _, connectivity = _connectivity(time_series)
+    kwargs = {"leave_out": "trial", "frequency_bands": _BANDS}
+    default = connectivity.jackknife("magnitude_squared_coherence", **kwargs)
+    kept = connectivity.jackknife(
+        "magnitude_squared_coherence", keep_replicates=True, **kwargs
+    )
+
+    assert default.replicates is None
+    assert kept.replicates.shape == (_N_TRIALS, *kept.estimate.shape)
+    for name in ("estimate", "bias_corrected", "standard_error"):
+        np.testing.assert_array_equal(getattr(default, name), getattr(kept, name))
+    assert default.frequency_bands == _BANDS
+    assert list(default.frequency_bands) == ["theta", "alpha", "beta"]
+    assert default.leave_out == "trial"
+    unbanded = connectivity.jackknife("power")
+    assert unbanded.frequency_bands is None
+    assert unbanded.leave_out == "observation"
+    with pytest.raises(TypeError, match="keep_replicates must be a bool"):
+        connectivity.jackknife("power", keep_replicates="yes")
+
+
+def test_jackknife_result_is_built_from_its_original_fields():
+    """The fields added since the first 3.0 builds default to None."""
+    estimate = np.ones(3)
+    result = JackknifeResult(
+        estimate=estimate,
+        bias_corrected=estimate,
+        standard_error=estimate,
+        confidence_interval=(estimate, estimate),
+        n_observations=5,
+        transformation="identity",
+    )
+    assert (result.replicates, result.frequency_bands, result.leave_out) == (None, None, None)
+    replicates = np.ones((5, 3))
+    direct = jackknife_confidence_interval(estimate, replicates)
+    assert direct.replicates is replicates
+    assert (direct.frequency_bands, direct.leave_out) == (None, None)
 
 
 _TAPER_UNITS = [
@@ -375,10 +424,15 @@ def test_bands_accept_observations_that_are_whole_trials(
     connectivity = Connectivity.from_transform(multitaper, expectation_type=expectation_type)
 
     by_observation = connectivity.jackknife(
-        "magnitude_squared_coherence", frequency_bands=_BANDS
+        "magnitude_squared_coherence",
+        frequency_bands=_BANDS,
+        keep_replicates=True,
     )
     by_trial = connectivity.jackknife(
-        "magnitude_squared_coherence", leave_out="trial", frequency_bands=_BANDS
+        "magnitude_squared_coherence",
+        leave_out="trial",
+        frequency_bands=_BANDS,
+        keep_replicates=True,
     )
 
     assert by_observation.replicates.shape[0] == _N_TRIALS
@@ -445,7 +499,9 @@ def test_welch_segments_are_left_out_one_at_a_time_for_bands(time_series, segmen
     connectivity = Connectivity.from_transform(welch)
     assert connectivity.observations_are_time_segments
 
-    result = connectivity.jackknife("magnitude_squared_coherence", frequency_bands=_BANDS)
+    result = connectivity.jackknife(
+        "magnitude_squared_coherence", frequency_bands=_BANDS, keep_replicates=True
+    )
 
     coefficients = to_host(welch.fft())  # (1, n_trials, n_segments, n_fft, n_signals)
     observations = coefficients.reshape(1, -1, 1, *coefficients.shape[3:])
@@ -637,7 +693,9 @@ def test_band_intervals_cover_with_trials_and_not_with_tapers():
         target = np.array([truth[mask].mean() for mask in in_band])
         by_trial = connectivity.jackknife(method, leave_out="trial", frequency_bands=bands)
         # By hand: band-reduce the per-frequency leave-one-taper-out replicates.
-        by_taper = connectivity.jackknife(method, leave_out="observation")
+        by_taper = connectivity.jackknife(
+            method, leave_out="observation", keep_replicates=True
+        )
         taper_interval = jackknife_confidence_interval(
             band_means(by_taper.estimate, axis=1),
             band_means(by_taper.replicates, axis=2),

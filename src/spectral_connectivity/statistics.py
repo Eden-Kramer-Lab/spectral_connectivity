@@ -9,7 +9,7 @@ connectivity analysis.
 
 import math
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -89,30 +89,43 @@ class JackknifeResult:
         that broadcasts against the estimate.
     transformation : str
         Variance-stabilizing transformation used for the interval.
-    replicates : array, shape (n_replicates, *estimate.shape)
+    replicates : array, shape (n_replicates, *estimate.shape), or None
+        Use replicates from ``leave_out="trial"`` for any statistic that
+        combines frequencies, unless its coverage with other units has been
+        checked: different tapers' coefficients are correlated across nearby
+        frequencies, so leave-one-taper-out replicates of a band mean give too
+        narrow an interval (see :meth:`Connectivity.jackknife`).
+
         The leave-one-out replicates the interval summarizes, on the scale of
         ``estimate`` (untransformed), one per left-out unit on the first axis.
-        From :meth:`Connectivity.jackknife`, one per observation
+        ``None`` from :meth:`Connectivity.jackknife` unless it was called with
+        ``keep_replicates=True``; then one per observation
         (``leave_out="observation"``; for ``trials_tapers``, observation ``k``
         is trial ``k // n_tapers``, taper ``k % n_tapers``) or per trial
         (``leave_out="trial"``), in order, without the units that observation
-        weights drop from every bin; with ``frequency_bands`` each replicate is
-        band-reduced. A replicate is NaN in a bin that never had the unit it
-        leaves out (see ``Connectivity.n_valid_observations``), since leaving
-        that unit out removes nothing there. From
+        weights drop from every bin, and band-reduced with
+        ``frequency_bands``. A replicate is NaN in a bin that never had the
+        unit it leaves out (see ``Connectivity.n_valid_observations``), since
+        leaving that unit out removes nothing there;
+        :func:`jackknife_confidence_interval` skips it, so passing
+        ``estimate`` and ``replicates`` back reproduces the interval. The
+        array is the one the interval was computed from, ``n_replicates``
+        times the memory of ``estimate``. From
         :func:`jackknife_confidence_interval`, ``leave_one_out`` itself (not a
-        copy). The result keeps the array the interval was computed from, so
-        it holds ``n_replicates`` times the memory of ``estimate``.
+        copy).
 
         For an interval on another statistic of the measure (a difference
         between bands, a ratio of two pairs), compute it from ``estimate``
         and from each replicate and pass both to
-        :func:`jackknife_confidence_interval`. A statistic that combines
-        several frequencies needs replicates from ``leave_out="trial"``: the
-        DPSS tapers of one trial are uncorrelated at a frequency but correlated
-        at frequencies within their bandwidth, so leave-one-taper-out
-        replicates of such a statistic give too narrow an interval (see
-        :meth:`Connectivity.jackknife`).
+        :func:`jackknife_confidence_interval`.
+    frequency_bands : dict of str to (float, float), or None
+        The bands of :meth:`Connectivity.jackknife`'s ``frequency_bands``, in
+        the order of the estimate's band axis (``list(frequency_bands)`` names
+        its entries); ``None`` when the frequencies were kept, and from
+        :func:`jackknife_confidence_interval`.
+    leave_out : {"observation", "trial"} or None
+        The unit :meth:`Connectivity.jackknife` left out; ``None`` from
+        :func:`jackknife_confidence_interval`, which is given the replicates.
     """
 
     estimate: NDArray[np.floating]
@@ -121,7 +134,9 @@ class JackknifeResult:
     confidence_interval: tuple[NDArray[np.floating], NDArray[np.floating]]
     n_observations: int | NDArray[np.integer]
     transformation: str
-    replicates: NDArray[np.floating]
+    replicates: NDArray[np.floating] | None = None
+    frequency_bands: Mapping[str, tuple[float, float]] | None = None
+    leave_out: str | None = None
 
 
 @dataclass(frozen=True)

@@ -173,7 +173,8 @@ Prefer the wrapper's labeled results so you never index these by hand.
   >>> banded = Connectivity.from_transform(
   ...     Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=2)
   ... ).jackknife(
-  ...     "magnitude_squared_coherence", leave_out="trial", frequency_bands={"theta": (4, 8)}
+  ...     "magnitude_squared_coherence", leave_out="trial", frequency_bands={"theta": (4, 8)},
+  ...     keep_replicates=True,
   ... )
   >>> banded.estimate.shape  # (n_time_windows, n_bands, n_signals, n_signals)
   (1, 1, 2, 2)
