@@ -293,7 +293,10 @@ def _reduce_band(
     # A NaN bin propagates through each reduction.
     if weights is not None:
         # The contraction ``xarray.dot`` makes, so labeled and array results agree.
-        return np.einsum("...a,...a->...", np.moveaxis(values, axis, -1), weights)
+        integral: NDArray[Any] = np.einsum(
+            "...a,...a->...", np.moveaxis(values, axis, -1), weights
+        )
+        return integral
     if reduction == "circular_mean":
         # The angle of the mean unit phasor: phases near -pi and +pi do not
         # cancel toward 0.
