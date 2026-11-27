@@ -183,7 +183,7 @@ The migration guide for code written against 2.x is
   samples: different tapers' coefficients are correlated across frequencies
   within the bandwidth, so in simulation a nominal 95% interval leaving out
   one taper at a time covered only 43-81% of band means (and band maxima very
-  unevenly, 43-95%), while leaving out trials covered 94-96% of band means at
+  unevenly, 43-95%), while leaving out trials covered 92-96% of band means at
   moderate or strong coherence (87% at a weak band-mean coherence of 0.07
   with 5 trials, from the estimate's bias) and 69-96% of band maxima. Allowed
   units are whole trials (`leave_out="trial"`,
@@ -210,14 +210,15 @@ The migration guide for code written against 2.x is
   jackknife's bias-corrected estimate (on the transformed scale, same
   half-width) instead of on the estimate (the default, unchanged). It is for
   band statistics of biased measures: band averaging shrinks the spread but
-  not the bias, and with 10 trials intervals centered on the estimate covered
-  45-78% for band-mean pairwise spectral Granger, 52-82% for conditional
-  Granger and 77-79% for partial coherence in simulation, against
-  97.7-98.8%, 97.0-97.8% and 94.7-96.0% centered on the bias-corrected
-  estimate. It does not help at zero coherence, and lowers band-maximum
-  coverage. At a single frequency the default is already adequate (93-100%
-  coverage) and the bias-corrected center can lower it (to 87.5-97% for
-  Granger), so use it for band statistics, not for per-frequency intervals.
+  not the bias. The gain depends on the model and the pair: with 10 trials
+  intervals centered on the estimate covered 45-78% for band-mean spectral
+  Granger and 40-94% for partial coherence in simulation, against 92-99%
+  centered on the bias-corrected estimate. It does not help at zero
+  coherence, and lowers band-maximum coverage (from 93-96% to 87.5-94%). At a
+  single frequency the default is already adequate (93-100% coverage, except
+  84-87% for magnitude-squared coherence at zero coherence) and the
+  bias-corrected center can lower it (to 87.5-97% for Granger), so use it for
+  band statistics, not for per-frequency intervals.
 - `Multitaper(line_frequencies=[60, 120])` removes line noise and other
   sinusoidal lines (stimulation artifacts) before the coefficients are
   computed, so every measure uses the cleaned data; the wrappers take it in
@@ -1029,6 +1030,10 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* the jackknife's whole-circle and saturated-coherence
+  (Fisher boundary) warnings point at the caller's line, not at the package's
+  internals. They did from `jackknife_confidence_interval`, but from
+  `Connectivity.jackknife` they pointed into `connectivity.py`.
 - *Unreleased:* `Connectivity.jackknife` of a measure defined on a
   `Connectivity` subclass failed with `AttributeError` after computing the
   estimate (the replicates were rebuilt as plain `Connectivity`), and a

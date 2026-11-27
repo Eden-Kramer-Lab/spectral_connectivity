@@ -795,8 +795,9 @@ For a band statistic of a biased measure, such as spectral Granger or
 partial coherence, center the interval on the jackknife's bias-corrected
 estimate: averaging a band shrinks the spread but not the bias, so an interval
 centered on the estimate misses (see the Notes of `Connectivity.jackknife`).
-Use it for band statistics only: at a single frequency, or for a band maximum,
-the default center is adequate and the bias-corrected one can lower coverage.
+Use it for band statistics only: at a single frequency the default center is
+adequate and the bias-corrected one can lower coverage, and for a band maximum
+the bias-corrected one lowers coverage.
 
 ```python
 >>> corrected = connectivity.jackknife(
@@ -814,7 +815,7 @@ Leaving out one taper at a time is refused for bands. Different tapers'
 coefficients are uncorrelated at one frequency but correlated at frequencies
 within the bandwidth, so the tapers of a band are not independent
 observations and the interval would be too narrow: a nominal 95% interval
-covered 43-81% of band means in simulation, against 94-96% leaving out trials
+covered 43-81% of band means in simulation, against 92-96% leaving out trials
 at moderate or strong coherence. (Welch segments, which are not tapers of the
 same samples, may be left out one at a time.)
 

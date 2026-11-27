@@ -3618,7 +3618,7 @@ class Connectivity:
         out one taper at a time (1-20 trials) covered only 43-81% for band
         means. For band maxima it was affected very unevenly: 43-47% in
         long-window single-trial runs, 62-95% in others. Leaving out whole
-        trials (3-20 trials) covered 94-96% for band means at moderate or
+        trials (3-20 trials) covered 92-96% for band means at moderate or
         strong coherence but 87% at a weak band-mean magnitude-squared
         coherence of 0.07 with 5 trials, a shortfall from the estimate's upward
         bias, and 69-96% for band maxima. ``frequency_bands`` therefore refuses
@@ -3632,27 +3632,30 @@ class Connectivity:
         the same half-width. Use it for band statistics of biased measures,
         such as the spectral Granger family and partial coherence: averaging
         over a band shrinks a statistic's spread but not its finite-sample
-        bias, so an interval centered on the estimate misses. With 10 trials
-        (50-70 observations), leaving out trials, a dense 5-signal VAR and an
-        uncoupled pair of a 3-signal one, intervals centered on the estimate
-        covered 45-78% for band-mean pairwise spectral Granger, 52-82% for
-        conditional Granger and 77-79% for partial coherence; centered on the
-        bias-corrected estimate, 97.7-98.8%, 97.0-97.8% and 94.7-96.0%. It
-        raised band-mean coherence from 92-95% to 96.7-97.0%, and the weak
-        band above from 87% to 92%. It does not help at zero coherence, where
-        neither interval covers 0 reliably (0% and 24-38%): test for nonzero
-        coherence with
+        bias, so an interval centered on the estimate misses. The gains
+        depend on the model and the pair. With 10 trials (50-70
+        observations), leaving out trials, in a dense 5-signal VAR and a
+        3-signal one (including an uncoupled pair), intervals centered on the
+        estimate covered 45-78% for band-mean pairwise and conditional
+        spectral Granger and 40-94% for partial coherence (40% for the weakest
+        pair of the dense model); centered on the bias-corrected estimate,
+        92-99%. It raised band-mean coherence from 92-96% to 96.7-97.0%, and
+        the weak band above from 87% to 92%. It does not help at zero
+        coherence, where neither interval covers 0 reliably (0% and 24-38%):
+        test for nonzero coherence with
         :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`.
-        Keep the default for band maxima, whose coverage it lowers (95-96% to
-        87.5-91%). At a single frequency the default center is already
-        adequate and the bias-corrected one can hurt: a single bin's estimate
-        has much more spread than bias (under 0.75 standard deviations, except
-        for magnitude-squared coherence at zero coherence), so the default
-        covered 93-100%, while the bias-corrected center lowered pairwise and
-        conditional Granger coverage to 87.5-97% and partial coherence to
-        90-96%, and left power and nonzero coherence unchanged (three VAR
-        models of 2, 3 and 5 signals, 1024-sample windows, NW = 3, 5 and 10
-        trials, 200-400 datasets per configuration, at a band's center and
+        Keep the default for band maxima, whose coverage it lowers from 93-96%
+        to 87.5-94%, depending on the model. At a single frequency the default
+        center is already adequate and the bias-corrected one can hurt: a
+        single bin's estimate has more spread than bias (under 0.75 standard
+        deviations, and 0.95-1.1 for Granger at zero coupling; 1.7-2.0 for
+        magnitude-squared coherence at zero coherence), so the default covered
+        93-100% (84-87% for coherence at zero), while the bias-corrected
+        center lowered pairwise and conditional Granger coverage to 87.5-97%
+        and partial coherence to 90-96%, and left power and nonzero coherence
+        unchanged (three VAR models of 2, 3 and 5 signals, 1024-sample
+        windows, NW = 3, 5 and 10 trials, 200-400 datasets per configuration,
+        at a band's center and
         edge bins). Use ``interval_center="bias_corrected"`` for band
         statistics, not for per-frequency intervals. Its bounds are clipped
         into the measure's value range: a bias-corrected interval collapsed
