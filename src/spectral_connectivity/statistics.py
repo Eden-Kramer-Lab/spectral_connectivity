@@ -427,6 +427,7 @@ def jackknife_confidence_interval(
     ] = "identity",
     _saturated_by_construction: NDArray[np.bool_] | bool = False,
     _replicate_is_valid: NDArray[np.bool_] | None = None,
+    _skip_nan_replicates: bool = True,
 ) -> JackknifeResult:
     """Summarize leave-one-out replicates with a jackknife confidence interval.
 
@@ -436,7 +437,11 @@ def jackknife_confidence_interval(
         Full-sample estimate of a real-valued measure.
     leave_one_out : array, shape (n_observations, ...)
         Replicates with one observation omitted each, stacked on the first
-        axis; the remaining axes must match ``estimate``.
+        axis; the remaining axes must match ``estimate``. A NaN replicate is
+        missing and skipped: each element's interval is the jackknife of its
+        own non-NaN replicates (see Notes), as for the ``replicates`` of
+        :meth:`Connectivity.jackknife` where observation weights drop a unit
+        from some bins.
     confidence_level : float, default=0.95
         Two-sided coverage of the interval, in (0, 1). The critical value is
         the Student t quantile with ``n_observations - 1`` degrees of freedom,
@@ -455,10 +460,22 @@ def jackknife_confidence_interval(
         Estimate, bias-corrected estimate, standard error, and confidence
         bounds, all on the original scale and with the shape of ``estimate``.
         The standard error is converted back with the local delta method.
-        ``replicates`` is ``leave_one_out``.
+        ``replicates`` is ``leave_one_out``. ``n_observations`` is the number
+        of replicates, or, if any is NaN, each element's count of the non-NaN
+        replicates it used (an array of ``estimate``'s shape; 0 where it is
+        NaN for having too few).
 
     Notes
     -----
+    NaN replicates are skipped element by element: an element with ``n``
+    non-NaN replicates has their jackknife, ``n - 1`` degrees of freedom and a
+    Student t critical value on them, as :meth:`Connectivity.jackknife` forms
+    each bin's interval from the units the bin keeps. An element left with
+    fewer than 3 (fewer than given, if 2 were given) is NaN, with a
+    ``UserWarning``, also as there. An element whose replicates are all NaN
+    is NaN without one. Other non-finite replicates are values: an infinite
+    one makes its element's interval infinite or NaN.
+
     For ``"circular"`` the replicates are unwrapped onto the branch nearest the
     estimate, the interval is formed on that linear scale, and the bounds are
     wrapped back to ``(-pi, pi]``. A bound that wraps past ``+/-pi`` leaves
@@ -584,6 +601,25 @@ def jackknife_confidence_interval(
     # count in each estimate (broadcast against leave_one_out), where zero
     # observation weights drop different observations in different bins. A
     # replicate leaving out an observation the bin never had is not one.
+    # Without it, NaN marks a missing replicate; Connectivity.jackknife turns
+    # that off (_skip_nan_replicates=False), so there a NaN replicate stays a
+    # NaN value of the measure.
+    if _replicate_is_valid is None and _skip_nan_replicates:
+        is_missing = np.isnan(replicates)
+        if bool(is_missing.any()):
+            n_present = np.sum(~is_missing, axis=0)
+            too_few = n_present < min(3, n_observations)
+            n_too_few = int(np.count_nonzero(too_few & (n_present > 0)))
+            if n_too_few:
+                warnings.warn(
+                    f"jackknife_confidence_interval: {n_too_few} of {too_few.size} "
+                    "elements have fewer than 3 non-NaN replicates, too few for a "
+                    "leave-one-out interval, so the bias-corrected estimate, "
+                    "standard error and bounds are NaN there.",
+                    UserWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
+            _replicate_is_valid = ~is_missing & ~too_few
     counts: Any = n_observations
     if _replicate_is_valid is None:
         replicate_mean = np.mean(transformed_replicates, axis=0)

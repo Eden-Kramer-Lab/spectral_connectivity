@@ -3826,6 +3826,8 @@ class Connectivity:
                 else False
             ),
             _replicate_is_valid=replicate_is_valid,
+            # NaN replicates that are not dropped units are NaN values here.
+            _skip_nan_replicates=False,
         )
         if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:
             # tanh maps the atanh-scale interval onto [-1, 1], but a magnitude

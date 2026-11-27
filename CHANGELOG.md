@@ -721,6 +721,14 @@ The migration guide for code written against 2.x is
   maximum of a 74-point coarse phase grid, so near-equal lobes of the objective
   yield a wrong canonical phase only when two lie within about `2 * pi / 74` of
   each other.
+- `jackknife_confidence_interval` skips NaN replicates element by element:
+  each element's interval is the jackknife of its own non-NaN replicates,
+  with a Student t critical value on their count less one, as
+  `Connectivity.jackknife` forms each bin's interval where observation
+  weights drop units. Callers who passed NaN replicates now get intervals
+  instead of NaN; an element left with fewer than 3 is still NaN, with a
+  warning, and `n_observations` is then one count per element. Passing a
+  jackknife's `estimate` and `replicates` back reproduces its interval.
 - `Connectivity.jackknife` and `jackknife_confidence_interval` use a Student t
   critical value with `n_observations - 1` degrees of freedom (Thomson & Chave
   1991), not the normal quantile, which under-covers at small `n` (Monte Carlo

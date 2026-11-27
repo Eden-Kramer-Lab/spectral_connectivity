@@ -313,6 +313,78 @@ def test_jackknife_result_is_built_from_its_original_fields():
     assert (direct.frequency_bands, direct.leave_out) == (None, None)
 
 
+@pytest.mark.parametrize("frequency_bands", [None, _BANDS], ids=["frequencies", "bands"])
+@pytest.mark.parametrize("leave_out", ["observation", "trial"])
+def test_replicates_passed_back_reproduce_the_interval_with_artifacts(
+    time_series, leave_out, frequency_bands
+):
+    """``jackknife_confidence_interval`` skips the NaN replicates of units a
+    window never had, so the estimate and replicates of a jackknife with
+    artifacts give back its interval, window by window."""
+    data = time_series.copy()
+    data[110:118, 2, 0] = np.nan  # a gap in trial 2, window 1
+    # Bands leave out tapers only with one taper per trial.
+    one_taper = frequency_bands is not None and leave_out == "observation"
+    _, connectivity = _connectivity(data, **({"n_tapers": 1} if one_taper else {}))
+    result = connectivity.jackknife(
+        "magnitude_squared_coherence",
+        leave_out=leave_out,
+        frequency_bands=frequency_bands,
+        keep_replicates=True,
+    )
+    assert np.isnan(result.replicates).any()
+
+    passed_back = jackknife_confidence_interval(
+        result.estimate, result.replicates, transformation=result.transformation
+    )
+
+    for name in ("bias_corrected", "standard_error"):
+        np.testing.assert_array_equal(
+            getattr(passed_back, name), getattr(result, name), err_msg=name
+        )
+    for bound, expected in zip(
+        passed_back.confidence_interval, result.confidence_interval, strict=True
+    ):
+        np.testing.assert_array_equal(bound, expected)
+    defined = ~np.isnan(result.standard_error)
+    np.testing.assert_array_equal(
+        passed_back.n_observations[defined],
+        np.broadcast_to(result.n_observations, result.estimate.shape)[defined],
+    )
+
+
+def test_nan_replicates_are_skipped_element_by_element():
+    """Each element's interval is that of its own non-NaN replicates; one
+    left with fewer than 3 is NaN, with a warning, and one with none is NaN."""
+    rng = np.random.default_rng(3)
+    replicates = rng.uniform(0.2, 0.8, (6, 4))
+    estimate = replicates.mean(axis=0)
+    replicates[[0, 3], 1] = np.nan  # 4 left
+    replicates[:4, 2] = np.nan  # 2 left
+    replicates[:, 3] = np.nan  # none left
+
+    with pytest.warns(UserWarning, match="1 of 4 elements have fewer than 3 non-NaN"):
+        result = jackknife_confidence_interval(estimate, replicates, transformation="log")
+
+    for element, kept in ((0, slice(None)), (1, [1, 2, 4, 5])):
+        expected = jackknife_confidence_interval(
+            estimate[element : element + 1],
+            replicates[kept, element : element + 1],
+            transformation="log",
+        )
+        np.testing.assert_allclose(
+            result.standard_error[element], expected.standard_error[0], rtol=1e-14
+        )
+        np.testing.assert_allclose(
+            result.confidence_interval[0][element],
+            expected.confidence_interval[0][0],
+            rtol=1e-14,
+        )
+    assert result.n_observations.tolist() == [6, 4, 0, 0]
+    assert np.isnan(result.standard_error[2:]).all()
+    assert np.isnan(result.confidence_interval[1][2:]).all()
+
+
 _TAPER_UNITS = [
     pytest.param("trials_tapers", _N_TRIALS, id="trials_tapers"),
     pytest.param("tapers", _N_TRIALS, id="tapers"),
