@@ -19,17 +19,20 @@ from spectral_connectivity import (
     Multitaper,
     Welch,
     frequency_band_reduce,
+    list_measures,
     multitaper_connectivity,
 )
 from spectral_connectivity.connectivity import _select_measure_frequencies
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.statistics import JackknifeResult, jackknife_confidence_interval
+from tests._artifact_helpers import quietly
 from tests._backend_helpers import to_host
 from tests._expected_spectrum import (
     _expected_multitaper_cross_spectrum,
     _expected_tapered_cross_spectrum,
 )
 from tests._monte_carlo import replicate_mean_and_limit
+from tests._var_oracle import _coherency
 
 _SAMPLING_FREQUENCY = 200
 # 100-sample windows: 2 Hz bins. The "alpha" edges fall between bins, so its
@@ -43,11 +46,7 @@ _TRANSFORMATIONS = {
     "coherence_phase": "circular",
     "power": "log",
 }
-_DIMS = {
-    "magnitude_squared_coherence": ("time", "frequency", "source", "target"),
-    "coherence_phase": ("time", "frequency", "source", "target"),
-    "power": ("time", "frequency", "source"),
-}
+_DIMS = {measure.name: measure.dims for measure in list_measures()}
 
 # A bivariate VAR(2): signal 0 oscillates and drives signal 1. Across the bands
 # below the coherence of the expected spectrum varies from 0.47 to 0.56 and from
@@ -72,20 +71,62 @@ def _with_artifacts(time_series):
     return masked
 
 
-def _connectivity(time_series, **multitaper_kwargs):
-    """The default ``trials_tapers`` Connectivity of ``time_series`` (3 tapers)."""
-    with warnings.catch_warnings():
-        # Artifacts drop trial windows, with a warning.
-        warnings.simplefilter("ignore", UserWarning)
-        multitaper = Multitaper(
-            time_series,
-            sampling_frequency=_SAMPLING_FREQUENCY,
-            n_time_samples_per_window=100,
-            time_halfbandwidth_product=2,
-            artifact_samples="nonfinite" if np.isnan(time_series).any() else None,
-            **multitaper_kwargs,
+def _connectivity(time_series, expectation_type="trials_tapers", **multitaper_kwargs):
+    """A Multitaper of ``time_series`` (3 tapers; artifacts dropped, which
+    warns) and its Connectivity."""
+    multitaper = quietly(
+        Multitaper,
+        time_series,
+        sampling_frequency=_SAMPLING_FREQUENCY,
+        n_time_samples_per_window=100,
+        time_halfbandwidth_product=2,
+        artifact_samples="nonfinite" if np.isnan(time_series).any() else None,
+        **multitaper_kwargs,
+    )
+    return multitaper, Connectivity.from_transform(
+        multitaper, expectation_type=expectation_type
+    )
+
+
+def _assert_same_interval(result, expected, rtol=0.0, atol=0.0):
+    """``result`` and ``expected`` have the same bias-corrected estimate,
+    standard error and bounds (exactly, by default)."""
+    for name in ("bias_corrected", "standard_error"):
+        np.testing.assert_allclose(
+            getattr(result, name),
+            getattr(expected, name),
+            rtol=rtol,
+            atol=atol,
+            equal_nan=True,
+            err_msg=name,
         )
-    return multitaper, Connectivity.from_transform(multitaper)
+    for bound, expected_bound in zip(
+        result.confidence_interval, expected.confidence_interval, strict=True
+    ):
+        np.testing.assert_allclose(bound, expected_bound, rtol=rtol, atol=atol, equal_nan=True)
+
+
+def _datasets_as_windows(n_time, n_trials, n_datasets, random_state):
+    """``(n_datasets * n_time, n_trials, 2)`` independent segments of the VAR:
+    each window of ``n_time`` samples is one dataset of ``n_trials`` trials."""
+    segments = simulate_MVAR(
+        _VAR_COEFFICIENTS,
+        noise_covariance=_VAR_NOISE_COVARIANCE,
+        n_time_samples=n_time,
+        n_trials=n_datasets * n_trials,
+        n_burnin_samples=200,
+        random_state=random_state,
+    )
+    return (
+        segments.reshape(n_time, n_datasets, n_trials, 2)
+        .transpose(1, 0, 2, 3)
+        .reshape(n_datasets * n_time, n_trials, 2)
+    )
+
+
+def _magnitude_squared_coherence(spectrum):
+    """Of the cross-spectral matrices ``(..., 2, 2)``, between the two signals."""
+    return np.abs(_coherency(spectrum)[..., 0, 1]) ** 2
 
 
 def _band_reduced(connectivity, method, frequency_reduction):
@@ -176,21 +217,15 @@ def test_band_jackknife_is_the_jackknife_of_band_reduced_trial_replicates(
         )
         counts = np.broadcast_to(result.n_observations, result.estimate.shape)
         assert np.all(counts[window] == kept.sum())
-        for name in ("bias_corrected", "standard_error"):
-            np.testing.assert_allclose(
-                getattr(result, name)[window],
-                getattr(expected, name),
-                rtol=1e-11,
-                atol=1e-14,
-                equal_nan=True,
-                err_msg=name,
-            )
-        for bound, expected_bound in zip(
-            result.confidence_interval, expected.confidence_interval, strict=True
-        ):
-            np.testing.assert_allclose(
-                bound[window], expected_bound, rtol=1e-11, atol=1e-14, equal_nan=True
-            )
+        window_interval = JackknifeResult(
+            estimate=result.estimate[window],
+            bias_corrected=result.bias_corrected[window],
+            standard_error=result.standard_error[window],
+            confidence_interval=tuple(bound[window] for bound in result.confidence_interval),
+            n_observations=counts[window],
+            transformation=result.transformation,
+        )
+        _assert_same_interval(window_interval, expected, rtol=1e-11, atol=1e-14)
     if artifacts:
         assert np.isnan(result.replicates[1, 1]).all()  # trial 1 is not in window 1
         # Elsewhere a replicate is NaN only where the measure is.
@@ -234,9 +269,9 @@ def test_replicates_are_the_measure_without_each_trial_or_observation(time_serie
     )
     np.testing.assert_allclose(by_trial.replicates, np.stack(expected_by_trial), rtol=1e-12)
     # With expectation_type="trials" the observations are the trials.
-    by_trials_expectation = Connectivity.from_transform(
-        multitaper, expectation_type="trials"
-    ).jackknife("power", keep_replicates=True)
+    by_trials_expectation = _connectivity(time_series, expectation_type="trials")[1].jackknife(
+        "power", keep_replicates=True
+    )
     np.testing.assert_allclose(
         by_trials_expectation.replicates,
         np.stack(
@@ -378,14 +413,7 @@ def test_replicates_passed_back_reproduce_the_interval_with_artifacts(
         result.estimate, result.replicates, transformation=result.transformation
     )
 
-    for name in ("bias_corrected", "standard_error"):
-        np.testing.assert_array_equal(
-            getattr(passed_back, name), getattr(result, name), err_msg=name
-        )
-    for bound, expected in zip(
-        passed_back.confidence_interval, result.confidence_interval, strict=True
-    ):
-        np.testing.assert_array_equal(bound, expected)
+    _assert_same_interval(passed_back, result)
     defined = ~np.isnan(result.standard_error)
     np.testing.assert_array_equal(
         passed_back.n_observations[defined],
@@ -471,8 +499,7 @@ def test_bands_refuse_leaving_out_tapers(time_series, monkeypatch, expectation_t
     is computed. The message gives the reason and the measured coverage, and
     the fix: leave out whole trials if there are 3, and otherwise that these
     data have no valid band jackknife."""
-    multitaper, _ = _connectivity(time_series[:, :n_trials])
-    connectivity = Connectivity.from_transform(multitaper, expectation_type=expectation_type)
+    _, connectivity = _connectivity(time_series[:, :n_trials], expectation_type)
 
     _refuse_computing(monkeypatch, "magnitude_squared_coherence")
     with pytest.raises(ValueError, match=r"^jackknife\(frequency_bands=\.\.\.\)") as error:
@@ -585,8 +612,7 @@ def test_bands_accept_observations_that_are_whole_trials(time_series):
     whole trial: ``leave_out="observation"`` is accepted and is the same
     jackknife as ``"trial"`` (one taper per trial is tested with the
     oracles below)."""
-    multitaper, _ = _connectivity(time_series)
-    connectivity = Connectivity.from_transform(multitaper, expectation_type="trials")
+    _, connectivity = _connectivity(time_series, expectation_type="trials")
 
     by_observation = connectivity.jackknife(
         "magnitude_squared_coherence",
@@ -775,9 +801,7 @@ def test_welch_segment_band_intervals_cover(segment_overlap, allowance):
         n_segment_samples,
         welch.detrend_type,
     )[: frequencies.size]
-    coherence = np.abs(expected[:, 0, 1]) ** 2 / (
-        expected[:, 0, 0].real * expected[:, 1, 1].real
-    )
+    coherence = _magnitude_squared_coherence(expected)
     in_band = (frequencies >= 4) & (frequencies <= 10)
 
     result = connectivity.jackknife(
@@ -869,19 +893,9 @@ def test_band_intervals_cover_with_trials_and_not_with_tapers():
     so the window's and tapers' bias is not counted as error. Each band is 7
     bins (7 Hz) wide, a little more than the tapers' 6 Hz bandwidth.
     """
-    n_time, n_trials, n_datasets = 64, 4, 3000
-    segments = simulate_MVAR(
-        _VAR_COEFFICIENTS,
-        noise_covariance=_VAR_NOISE_COVARIANCE,
-        n_time_samples=n_time,
-        n_trials=n_datasets * n_trials,
-        n_burnin_samples=200,
-        random_state=20261127,
-    )  # (n_time, n_datasets * n_trials, 2), each segment independent
-    time_series = (
-        segments.reshape(n_time, n_datasets, n_trials, 2)
-        .transpose(1, 0, 2, 3)
-        .reshape(n_datasets * n_time, n_trials, 2)
+    n_time, n_trials = 64, 4
+    time_series = _datasets_as_windows(
+        n_time, n_trials, n_datasets=3000, random_state=20261127
     )
     multitaper = Multitaper(
         time_series,
@@ -899,9 +913,7 @@ def test_band_intervals_cover_with_trials_and_not_with_tapers():
     expected = _expected_multitaper_cross_spectrum(
         multitaper, _VAR_COEFFICIENTS, _VAR_NOISE_COVARIANCE
     )[: frequencies.size]
-    true_coherence = np.abs(expected[:, 0, 1]) ** 2 / (
-        expected[:, 0, 0].real * expected[:, 1, 1].real
-    )
+    true_coherence = _magnitude_squared_coherence(expected)
     # One-sided density: the bins are interior, so doubled.
     true_power = 2 * expected[:, 0, 0].real
 
@@ -977,16 +989,15 @@ def _oracle_data(n_fft, seed=7, anti_phase=False):
 
 def _oracle_connectivity(x, n_fft, expectation_type="trials_tapers", **mt_kwargs):
     """A Multitaper of ``x`` in windows of ``n_fft`` samples, on 1 Hz bins."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        mt = Multitaper(
-            x,
-            sampling_frequency=n_fft,  # 1 Hz bins
-            n_time_samples_per_window=n_fft,
-            n_fft_samples=n_fft,
-            time_halfbandwidth_product=2,
-            **mt_kwargs,
-        )
+    mt = quietly(
+        Multitaper,
+        x,
+        sampling_frequency=n_fft,  # 1 Hz bins
+        n_time_samples_per_window=n_fft,
+        n_fft_samples=n_fft,
+        time_halfbandwidth_product=2,
+        **mt_kwargs,
+    )
     return mt, Connectivity.from_transform(mt, expectation_type=expectation_type)
 
 
@@ -1050,6 +1061,38 @@ def _reduce_all(values, frequencies, bands, reduction, axis, n_fft, circular=Fal
     return np.stack(reduced, axis=axis)
 
 
+def _oracle_band_values(
+    x,
+    method,
+    bands,
+    reduction="mean",
+    *,
+    n_fft=64,
+    axis=1,
+    circular=False,
+    build=None,
+    method_kwargs=None,
+):
+    """The oracles' band values of ``method`` for ``x`` and for ``x`` without
+    each trial: ``(estimate, replicates)``, the replicates stacked first.
+
+    ``build`` makes the Connectivity of a time series (the oracle Multitaper
+    on ``n_fft``-sample windows by default).
+    """
+    build = build or (lambda data: _oracle_connectivity(data, n_fft)[1])
+
+    def band_values(data):
+        connectivity = build(data)
+        values = getattr(connectivity, method)(**(method_kwargs or {}))
+        return _reduce_all(
+            values, connectivity.frequencies, bands, reduction, axis, n_fft, circular
+        )
+
+    return band_values(x), np.stack(
+        [band_values(np.delete(x, k, axis=1)) for k in range(x.shape[1])]
+    )
+
+
 @pytest.mark.parametrize("n_fft", [64, 63], ids=["even_fft", "odd_fft"])
 @pytest.mark.parametrize("reduction", ["integral", "mean"])
 def test_power_band_jackknife_matches_brute_force_on_deleted_trials(n_fft, reduction):
@@ -1059,7 +1102,6 @@ def test_power_band_jackknife_matches_brute_force_on_deleted_trials(n_fft, reduc
     x = _oracle_data(n_fft)
     _, connectivity = _oracle_connectivity(x, n_fft)
     bands = _bands_for(n_fft)
-    frequencies = connectivity.frequencies
 
     with warnings.catch_warnings():
         # The zero-width band (10, 10) integrates to 0, which has no log.
@@ -1073,21 +1115,8 @@ def test_power_band_jackknife_matches_brute_force_on_deleted_trials(n_fft, reduc
             keep_replicates=True,
         )
 
-    estimate = _reduce_all(
-        connectivity.power(one_sided=True), frequencies, bands, reduction, 1, n_fft
-    )
-    replicates = np.stack(
-        [
-            _reduce_all(
-                _oracle_connectivity(np.delete(x, k, axis=1), n_fft)[1].power(one_sided=True),
-                frequencies,
-                bands,
-                reduction,
-                1,
-                n_fft,
-            )
-            for k in range(_N_TRIALS)
-        ]
+    estimate, replicates = _oracle_band_values(
+        x, "power", bands, reduction, n_fft=n_fft, method_kwargs={"one_sided": True}
     )
     assert result.estimate.shape == (_ORACLE_N_WINDOWS, len(bands), 2)
     np.testing.assert_allclose(result.estimate, estimate, rtol=1e-12)
@@ -1109,30 +1138,18 @@ def test_circular_band_mean_of_phase_near_pi_with_trials_expectation():
     x = _oracle_data(n_fft, anti_phase=True)
     _, connectivity = _oracle_connectivity(x, n_fft, expectation_type="trials")
     bands = _bands_for(n_fft)
-    frequencies = connectivity.frequencies
 
     result = connectivity.jackknife(
         "coherence_phase", frequency_bands=bands, keep_replicates=True
     )
 
-    estimate = _reduce_all(
-        connectivity.coherence_phase(), frequencies, bands, "mean", 2, n_fft, circular=True
-    )
-    replicates = np.stack(
-        [
-            _reduce_all(
-                _oracle_connectivity(
-                    np.delete(x, k, axis=1), n_fft, expectation_type="trials"
-                )[1].coherence_phase(),
-                frequencies,
-                bands,
-                "mean",
-                2,
-                n_fft,
-                circular=True,
-            )
-            for k in range(_N_TRIALS)
-        ]
+    estimate, replicates = _oracle_band_values(
+        x,
+        "coherence_phase",
+        bands,
+        axis=2,
+        circular=True,
+        build=lambda data: _oracle_connectivity(data, n_fft, expectation_type="trials")[1],
     )
     assert result.estimate.shape[:3] == (_ORACLE_N_WINDOWS, 3, len(bands))  # 3 tapers kept
     assert result.transformation == "circular"
@@ -1155,29 +1172,13 @@ def test_directed_band_jackknife_matches_deleted_trials():
     x = _oracle_data(n_fft)
     _, connectivity = _oracle_connectivity(x, n_fft)
     bands = {"low": (2, 9), "mid": (9, 20)}
-    frequencies = connectivity.frequencies
     method = "pairwise_spectral_granger_prediction"
 
     result = connectivity.jackknife(
         method, leave_out="trial", frequency_bands=bands, keep_replicates=True
     )
 
-    replicates = np.stack(
-        [
-            _reduce_all(
-                getattr(_oracle_connectivity(np.delete(x, k, axis=1), n_fft)[1], method)(),
-                frequencies,
-                bands,
-                "mean",
-                1,
-                n_fft,
-            )
-            for k in range(_N_TRIALS)
-        ]
-    )
-    estimate = _reduce_all(
-        getattr(connectivity, method)(), frequencies, bands, "mean", 1, n_fft
-    )
+    estimate, replicates = _oracle_band_values(x, method, bands)
     np.testing.assert_allclose(result.estimate, estimate, rtol=1e-9, equal_nan=True)
     np.testing.assert_allclose(result.replicates, replicates, rtol=1e-9, equal_nan=True)
     # 0 -> 1 is driven in this simulation; its band estimate is positive.
@@ -1196,7 +1197,6 @@ def test_missing_data_tapers_replicates_use_the_kept_tapers_weights():
     mt, connectivity = _oracle_connectivity(x, n_fft, **kwargs)
     assert (to_host(mt.observation_weights) == 0).any()  # some tapers are dropped
     bands = {"a": (3, 9), "b": (10, 25)}
-    frequencies = connectivity.frequencies
 
     for method, reduction in (("magnitude_squared_coherence", "mean"), ("power", "integral")):
         result = connectivity.jackknife(
@@ -1206,21 +1206,12 @@ def test_missing_data_tapers_replicates_use_the_kept_tapers_weights():
             frequency_reduction=reduction,
             keep_replicates=True,
         )
-        replicates = np.stack(
-            [
-                _reduce_all(
-                    getattr(
-                        _oracle_connectivity(np.delete(x, k, axis=1), n_fft, **kwargs)[1],
-                        method,
-                    )(),
-                    frequencies,
-                    bands,
-                    reduction,
-                    1,
-                    n_fft,
-                )
-                for k in range(_N_TRIALS)
-            ]
+        _, replicates = _oracle_band_values(
+            x,
+            method,
+            bands,
+            reduction,
+            build=lambda data: _oracle_connectivity(data, n_fft, **kwargs)[1],
         )
         np.testing.assert_allclose(result.replicates, replicates, rtol=1e-10, equal_nan=True)
         # MSC's diagonal is NaN by policy; the rest has an interval.
@@ -1247,22 +1238,8 @@ def test_a_trial_dropped_from_every_window_gives_no_replicate():
         keep_replicates=True,
     )
 
-    clean = np.delete(x, 2, axis=1)
-    frequencies = connectivity.frequencies
-    replicates = np.stack(
-        [
-            _reduce_all(
-                _oracle_connectivity(np.delete(clean, k, axis=1), n_fft)[
-                    1
-                ].magnitude_squared_coherence(),
-                frequencies,
-                bands,
-                "mean",
-                1,
-                n_fft,
-            )
-            for k in range(_N_TRIALS - 1)
-        ]
+    _, replicates = _oracle_band_values(
+        np.delete(x, 2, axis=1), "magnitude_squared_coherence", bands
     )
     assert result.replicates.shape[0] == _N_TRIALS - 1
     assert np.all(np.asarray(result.n_observations) == _N_TRIALS - 1)
@@ -1275,19 +1252,9 @@ def test_a_trial_dropped_from_every_window_gives_no_replicate():
 @pytest.fixture(scope="module")
 def monte_carlo_connectivity():
     """3000 datasets of 6 trials x 64 samples, one per time window."""
-    n_time, n_trials, n_datasets = 64, 6, 3000
-    segments = simulate_MVAR(
-        _VAR_COEFFICIENTS,
-        noise_covariance=_VAR_NOISE_COVARIANCE,
-        n_time_samples=n_time,
-        n_trials=n_datasets * n_trials,
-        n_burnin_samples=200,
-        random_state=20261128,
-    )
-    time_series = (
-        segments.reshape(n_time, n_datasets, n_trials, 2)
-        .transpose(1, 0, 2, 3)
-        .reshape(n_datasets * n_time, n_trials, 2)
+    n_time = 64
+    time_series = _datasets_as_windows(
+        n_time, n_trials=6, n_datasets=3000, random_state=20261128
     )
     multitaper = Multitaper(
         time_series,
@@ -1377,20 +1344,13 @@ def test_a_band_with_an_edge_invalid_bin_is_nan_in_every_replicate():
         "magnitude_squared_coherence", frequency_bands=bands, keep_replicates=True
     )
 
-    def reduced(c):
-        return _reduce_all(
-            c.magnitude_squared_coherence(), frequencies, bands, "mean", 1, None
-        )
-
-    replicates = np.stack(
-        [
-            reduced(
-                Connectivity.from_transform(MorletWavelet(np.delete(x, k, axis=1), **kwargs))
-            )
-            for k in range(_N_TRIALS)
-        ]
+    estimate, replicates = _oracle_band_values(
+        x,
+        "magnitude_squared_coherence",
+        bands,
+        n_fft=None,
+        build=lambda data: Connectivity.from_transform(MorletWavelet(data, **kwargs)),
     )
-    estimate = reduced(connectivity)
     off_diagonal = (..., 0, 1)
     # Some, not all, (time, band) cells are NaN.
     assert 0 < np.isnan(estimate[off_diagonal]).sum() < estimate[off_diagonal].size
