@@ -25,6 +25,7 @@ from spectral_connectivity.statistics import (
 )
 from spectral_connectivity.transforms import Multitaper
 from tests._deprecation_helpers import warns_once_at_the_call
+from tests._monte_carlo import replicate_mean_and_limit
 
 # Two-sided 95% critical values: the standard normal, norm.ppf(0.975), and
 # Student t with n - 1 degrees of freedom for n = 3, 4, and 5 leave-one-out
@@ -605,8 +606,8 @@ def test_log_power_statistics_hold_at_real_valued_bins():
     z = power_fisher_z_transform(estimates, n_observations, true_power, real_valued=True)
     complex_z = power_fisher_z_transform(estimates, n_observations, true_power)
 
-    mean_limit = 5 * log_ratio.std(ddof=1) / np.sqrt(n_rep)
-    assert abs(log_ratio.mean() - bias) < mean_limit
+    mean_log_ratio, mean_limit = replicate_mean_and_limit(log_ratio)
+    assert abs(mean_log_ratio - bias) < mean_limit
     # Variance of a sample variance: 5 SE from the fourth central moment.
     centered = log_ratio - log_ratio.mean()
     variance_limit = 5 * np.sqrt((np.mean(centered**4) - log_ratio.var() ** 2) / n_rep)
@@ -1206,9 +1207,12 @@ def test_bias_and_variance_helpers_reject_invalid_n_observations(function, minim
         r"Connectivity\.n_observations",
     ):
         function(bad_n_obs)
-    # In an array the offending entry is named.
-    with pytest.raises(ValueError, match=rf"got {bad_n_obs!r}"):
-        function(np.array([10, bad_n_obs]))
+    # In an array the offending entry is named; an entry from 0 up to the
+    # minimum is a bin with too few observations, NaN there instead
+    # (test_every_count_argument_is_nan_where_an_array_count_is_too_few).
+    if not 0 <= bad_n_obs < minimum:
+        with pytest.raises(ValueError, match=rf"got {bad_n_obs!r}"):
+            function(np.array([10, bad_n_obs]))
 
 
 def test_bias_and_variance_helpers_accept_arrays_of_counts():
@@ -1393,7 +1397,8 @@ def test_every_count_argument_rejects_a_bad_count_alike(
         ValueError,
         match="^"
         + re.escape(f"{name} must be a finite integer {accepted}, got {bad_count!r}.")
-        + r".*Connectivity\.n_observations\.$",
+        # coherence_significance_pvalue also names n_valid_observations.
+        + r".*Connectivity\.n_observations\b",
     ):
         call(bad_count)
 
@@ -1434,11 +1439,119 @@ def test_fisher_z_transforms_take_one_second_count_per_estimate(function, first,
     np.testing.assert_allclose(result, expected, rtol=1e-14)
 
 
-def test_coherence_significance_pvalue_takes_one_count():
-    """Its real-valued bins take one count for the call, so an array of counts
-    is rejected, saying so, rather than misaligned."""
-    with pytest.raises(ValueError, match=r"must be a single count .* shape \(2,\)"):
-        coherence_significance_pvalue(_COHERENCY, np.array([5, 6]), real_valued=True)
+@pytest.mark.parametrize("real_valued", [False, np.array([False, True])])
+def test_coherence_significance_pvalue_takes_one_count_per_estimate(real_valued):
+    """An array of counts is read entry by entry, in the complex and the real
+    null alike, as the scalar calls read it."""
+    counts = np.array([5, 9])
+    result = coherence_significance_pvalue(_COHERENCY, counts, real_valued=real_valued)
+    is_real = np.broadcast_to(real_valued, counts.shape)
+    expected = [
+        coherence_significance_pvalue(_COHERENCY[index], counts[index], real_valued=real)
+        for index, real in enumerate(is_real)
+    ]
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("real_valued", [False, True])
+def test_coherence_significance_pvalue_is_nan_where_an_array_count_is_below_two(real_valued):
+    """A bin keeping 0 or 1 observations has no test: NaN there, as in the
+    measures, and the other bins are tested as on their own. One count below 2
+    still raises (test_coherence_significance_pvalue_rejects_small_n_observations)."""
+    coherency = np.array([0.6, 1.0, np.nan + 0j, 0.6])
+    counts = np.array([5, 1, 0, 2])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = coherence_significance_pvalue(coherency, counts, real_valued=real_valued)
+    assert np.isnan(result[[1, 2]]).all()
+    for index in (0, 3):
+        assert result[index] == coherence_significance_pvalue(
+            coherency[index], counts[index], real_valued=real_valued
+        )
+
+
+# (count argument, a count below its minimum) for every count argument that
+# has one: n_obs2 of power_fisher_z_transform takes every count from 0 up.
+_TOO_FEW_COUNTS = [
+    pytest.param(key, too_few, id=f"{key}-{too_few}")
+    for key, (_, _, minimum, zero_ok) in _COUNT_ARGUMENTS.items()
+    for too_few in range(int(zero_ok), minimum)
+]
+
+
+@pytest.mark.parametrize(("key", "too_few"), _TOO_FEW_COUNTS)
+def test_every_count_argument_is_nan_where_an_array_count_is_too_few(key, too_few):
+    """One rule for every count argument: an entry of an array of counts below
+    the minimum (a bin that keeps too few observations) is NaN, and the other
+    entries are as the scalar count gives them. A single count below the
+    minimum still raises (test_every_count_argument_rejects_a_bad_count_alike)."""
+    call = _COUNT_ARGUMENTS[key][0]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = np.asarray(call(np.array([10, too_few])))
+    # The bias and variance helpers give one value for a scalar count.
+    expected = np.broadcast_to(call(10), result.shape)
+    assert np.isnan(result[..., 1]).all()
+    np.testing.assert_array_equal(result[..., 0], expected[..., 0])
+
+
+def test_statistics_take_n_valid_observations_where_a_window_keeps_too_few():
+    """The counts from Connectivity.n_valid_observations go to every statistics
+    function: the windows keeping too few observations are NaN, even where
+    their power is NaN, and the others match the scalar call with their count."""
+    rng = np.random.default_rng(1)
+    artifacts = np.zeros((1000, 3), dtype=bool)
+    artifacts[250:260] = True  # window 1 keeps no trial
+    artifacts[600:610, :2] = True  # window 2 keeps one
+    with pytest.warns(UserWarning, match="with no trial"):
+        multitaper = Multitaper(
+            rng.standard_normal((1000, 3, 2)),
+            sampling_frequency=500,
+            time_window_duration=0.5,
+            time_halfbandwidth_product=1,
+            artifact_samples=artifacts,
+        )
+    connectivity = Connectivity.from_transform(multitaper)
+    counts = connectivity.n_valid_observations  # (n_time_windows, n_frequencies)
+    assert counts[:, 0].tolist() == [3, 0, 1, 3]  # 3 trials x 1 taper
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the single-observation warning
+        coherency = connectivity.coherency()[..., 0, 1]
+    power = connectivity.power(one_sided=True)[..., 0]
+    calls = {
+        "coherence_significance_pvalue": (
+            2,
+            lambda n, c, _: coherence_significance_pvalue(c, n),
+        ),
+        "coherence_fisher_z_transform": (
+            2,
+            lambda n, c, _: coherence_fisher_z_transform(c, n, c / 2, n),
+        ),
+        "coherence_bias": (2, lambda n, c, _: coherence_bias(n)),
+        "power_bias": (1, lambda n, c, _: power_bias(n)),
+        "power_variance": (1, lambda n, c, _: power_variance(n)),
+        "power_confidence_intervals": (
+            1,
+            lambda n, c, p: power_confidence_intervals(n, p)[0],
+        ),
+        "power_fisher_z_transform": (1, lambda n, c, p: power_fisher_z_transform(p, n)),
+    }
+    kept = (0, 3)
+    for name, (minimum, call) in calls.items():
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = np.asarray(call(counts, coherency, power))
+        np.testing.assert_array_equal(np.isnan(result), counts < minimum, err_msg=name)
+        for window in kept:
+            expected = call(3, coherency[window], power[window])
+            # Within rounding: an array count is a NumPy integer, a scalar a
+            # Python int, and the powers they raise to can differ in the last bit.
+            np.testing.assert_allclose(result[window], expected, rtol=1e-14, err_msg=name)
+
+
+def test_coherence_significance_pvalue_rejects_counts_that_do_not_broadcast():
+    with pytest.raises(ValueError, match=r"n_observations has shape \(3,\)"):
+        coherence_significance_pvalue(_COHERENCY, np.array([5, 6, 7]))
 
 
 @pytest.mark.parametrize("bad_power", [-1.0, np.nan, np.inf])

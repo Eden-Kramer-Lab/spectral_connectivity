@@ -46,6 +46,27 @@ def is_positive_integer(value: Any, minimum: int = 1) -> bool:
     )
 
 
+def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
+    """Return ``random_state`` if it is a Generator, else a Generator seeded by it."""
+    if isinstance(random_state, np.random.Generator):
+        return random_state
+    return np.random.default_rng(random_state)
+
+
+def _real_scalar(value: Any) -> float | None:
+    """``value`` as a Python ``float`` if it is one real number, else ``None``.
+
+    Any real scalar counts, including a NumPy scalar or a 0-d array such as
+    ``dataset["fs"].values``; booleans (dtype kind ``"b"``), strings and arrays
+    with dimensions do not. Shared by the validators of positive scalar
+    settings so they accept and refuse the same values.
+    """
+    array = np.asarray(value)
+    if array.ndim != 0 or array.dtype.kind not in "iuf":
+        return None
+    return float(array)
+
+
 def _validate_sampling_frequency(sampling_frequency: Any) -> float:
     """Validate a sampling rate and return it as a Python ``float``.
 
@@ -72,8 +93,8 @@ def _validate_sampling_frequency(sampling_frequency: Any) -> float:
     ValueError
         If the rate is not finite and positive.
     """
-    array = np.asarray(sampling_frequency)
-    if array.ndim != 0 or array.dtype.kind not in "iuf":
+    rate = _real_scalar(sampling_frequency)
+    if rate is None:
         if isinstance(sampling_frequency, str):
             how = "Pass it as a number, e.g. sampling_frequency=1000 rather than '1000'."
         else:
@@ -88,7 +109,6 @@ def _validate_sampling_frequency(sampling_frequency: Any) -> float:
             f"{how}"
         )
         raise TypeError(msg)
-    rate = float(array)
     if not np.isfinite(rate) or rate <= 0:
         msg = (
             f"sampling_frequency must be finite and positive, got "
@@ -612,3 +632,81 @@ def _validated_flag(name: str, value: Any) -> bool:
         )
         raise TypeError(msg)
     return bool(value)
+
+
+# The VAR model x(t) = sum_k A_k x(t - k) + e(t) of simulate_MVAR and
+# VARSpectrum, with coefficients[k - 1] = A_k.
+
+#: Appended to the shape error for 2-D coefficients, a single lag's matrix.
+VAR_SINGLE_LAG_HINT = "; for a single lag, pass coefficients[np.newaxis]"
+
+
+def reject_complex_var(array: Any, name: str, reason: str) -> None:
+    """Raise ``TypeError`` if ``array`` (a VAR's ``name``) is complex; ``reason``
+    says why the caller takes real values only."""
+    if np.iscomplexobj(array):
+        msg = f"{name} must be real, got dtype {array.dtype}. {reason}"
+        raise TypeError(msg)
+
+
+def var_companion_matrices(coefficients: NDArray[np.floating]) -> NDArray[np.float64]:
+    """Companion matrices ``[[A_1 ... A_p], [I 0]]`` of VAR coefficients.
+
+    ``coefficients`` is ``(..., n_lags, n_signals, n_signals)``; the result is
+    ``(..., n_lags * n_signals, n_lags * n_signals)``, the transition matrix
+    of the state ``[x(t - 1), ..., x(t - n_lags)]``.
+    """
+    *batch, n_lags, n_signals, _ = coefficients.shape
+    dimension = n_lags * n_signals
+    companion = np.zeros((*batch, dimension, dimension))
+    if n_lags == 0:
+        return companion
+    companion[..., n_signals:, :-n_signals] = np.eye(dimension - n_signals)
+    companion[..., :n_signals, :] = np.concatenate(
+        [coefficients[..., lag, :, :] for lag in range(n_lags)], axis=-1
+    )
+    return companion
+
+
+def var_spectral_radius(companion: NDArray[np.floating]) -> NDArray[np.float64]:
+    """Largest eigenvalue modulus of each companion matrix, ``(...)``; 0 for no lags.
+
+    The VAR is stable when it is below 1 (see :func:`var_is_unstable`).
+    """
+    return np.abs(np.linalg.eigvals(companion)).max(axis=-1, initial=0.0)
+
+
+def var_is_unstable(spectral_radius: Any) -> NDArray[np.bool_]:
+    """Whether a spectral radius is above 1, or within a relative 1e-12 of it
+    (a unit root): the process then has no stationary state."""
+    radius = np.asarray(spectral_radius)
+    return (radius > 1) | np.isclose(radius, 1, rtol=1e-12, atol=0)
+
+
+def var_stabilizing_advice(spectral_radius: float) -> str:
+    """How to scale unstable coefficients to a spectral radius of 0.9."""
+    # Scaling A_k by c**k scales every companion eigenvalue by c.
+    return (
+        "Scale the coefficients until the radius is below 1: multiplying each "
+        "lag's matrix A_k (coefficients[k - 1]) by c**k multiplies the radius by "
+        "c, so coefficients * c ** np.arange(1, n_lags + 1)[:, np.newaxis, "
+        f"np.newaxis] with c = {0.9 / spectral_radius:.6g} gives a radius of 0.9."
+    )
+
+
+# Provenance is copied onto every result variable, so an array in it (an
+# input attribute, a VAR model) larger than this is recorded by shape and
+# dtype instead of by value.
+MAX_PROVENANCE_ARRAY_SIZE = 100
+
+
+def summarized_if_large(value: Any) -> Any:
+    """Replace an array with more than ``MAX_PROVENANCE_ARRAY_SIZE`` elements
+    by ``{"summarized_array": {"shape": ..., "dtype": ...}}``."""
+    if isinstance(value, (np.ndarray, list, tuple)):
+        array = np.asarray(value)
+        if array.size > MAX_PROVENANCE_ARRAY_SIZE:
+            return {
+                "summarized_array": {"shape": list(array.shape), "dtype": str(array.dtype)}
+            }
+    return value

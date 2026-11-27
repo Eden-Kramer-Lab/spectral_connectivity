@@ -14,6 +14,7 @@ from spectral_connectivity import (
     MorletWavelet,
     Multitaper,
     ShortTimeFourierTransform,
+    VARSpectrum,
     Welch,
     estimate_frequency_resolution,
     list_measures,
@@ -113,6 +114,7 @@ def test_transforms_share_known_facts_and_native_settings(data, name, n_observat
     assert result.attrs["expectation_type"] == "trials_tapers"
     assert result.attrs["backend"] in {"cpu", "gpu"}
     assert result.attrs["observations_are_independent"] == 1
+    assert result.attrs["is_exact_spectrum"] == 0
     assert result.attrs["time_bins_are_independent"] == (name != "morlet")
     assert result.attrs["nyquist_frequency"] == 32
     assert not any(
@@ -232,6 +234,8 @@ def test_only_released_multitaper_attributes_are_compatibility_copies(data):
             "adaptive_tolerance": 1e-8,
             "detrend_type": None,
             "is_low_bias": True,
+            "line_frequencies": [],
+            "line_significance_threshold": None,
             "n_fft_samples": 32,
             "n_tapers": 3,
             "n_time_samples_per_step": 32,
@@ -290,6 +294,8 @@ def test_stft_has_no_multitaper_only_settings(data):
         "taper_eigenvalues",
         "taper_weighting",
         "is_low_bias",
+        "line_frequencies",
+        "line_significance_threshold",
         "adaptive_max_iterations",
         "adaptive_tolerance",
     }
@@ -977,6 +983,8 @@ def _probe_results(data):
             if info.name == "subset_pairwise_spectral_granger_prediction":
                 settings["connectivity_kwargs"] = {"pairs": [(0, 1)]}
             yield connectivity_to_xarray(transform, info.name, **settings)
+    var = VARSpectrum(np.array([[[0.5, 0.0], [0.4, 0.5]]]), sampling_frequency=64)
+    yield connectivity_to_xarray(var, "magnitude_squared_coherence")
 
     common = {"sampling_frequency": 64, "time_window_duration": 0.5}
     yield multitaper_connectivity(

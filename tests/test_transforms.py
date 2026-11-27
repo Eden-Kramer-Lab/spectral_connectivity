@@ -202,6 +202,25 @@ def test_multitaper_and_stft_time_bins_are_independent_up_to_half_overlap(
     assert stft.time_bins_are_independent is expected
 
 
+@pytest.mark.parametrize(
+    ("n_time_samples_per_step", "expected"), [(32, True), (16, False), (31, False)]
+)
+def test_multitaper_and_stft_time_bins_are_disjoint_only_without_overlap(
+    n_time_samples_per_step, expected
+):
+    """Windows are disjoint only when the step is at least the window length:
+    even half overlap, which still counts as independent, shares samples."""
+    data = np.zeros((256, 1, 2))
+    for transform_class in (Multitaper, ShortTimeFourierTransform):
+        transform = transform_class(
+            data,
+            sampling_frequency=64,
+            n_time_samples_per_window=32,
+            n_time_samples_per_step=n_time_samples_per_step,
+        )
+        assert transform.time_bins_are_disjoint is expected
+
+
 def test_multitaper_single_window_time_bins_are_independent():
     assert Multitaper(np.zeros((256, 1, 2)), sampling_frequency=64).time_bins_are_independent
 
@@ -1109,7 +1128,7 @@ def test_windowed_transforms_require_3d_input(construct):
     rng = np.random.default_rng(42)
     time_series = rng.standard_normal((100, 2, 2))
     np.testing.assert_array_equal(
-        construct(time_series.tolist()).fft(), construct(time_series).fft()
+        to_host(construct(time_series.tolist()).fft()), to_host(construct(time_series).fft())
     )
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 1D"):
         construct(rng.standard_normal(100))
@@ -2051,9 +2070,10 @@ def test_delay_significance_rejects_non_uniform_weights(measure):
         getattr(weighted, measure)(frequency_range=(10, 40))
 
 
-def test_morlet_boxcar_edge_mask_error_names_edge_mode():
-    """The debiased-measure guard must point at the knob that actually made the
-    weights non-uniform (edge masking), not at a kernel already in use."""
+def test_morlet_boxcar_edge_mask_counts_the_valid_bins_of_each_frequency():
+    """A boxcar edge mask only drops observations, so a measure that counts
+    them pools time with each frequency's count of valid bins: the result is
+    the one computed from those bins alone."""
     data = np.random.default_rng(925).standard_normal((400, 1, 2))
     with _short_smoothing_window():
         transform = MorletWavelet(
@@ -2067,8 +2087,23 @@ def test_morlet_boxcar_edge_mask_error_names_edge_mode():
     connectivity = Connectivity.from_transform(
         transform, expectation_type="time_trials_tapers"
     )
-    with pytest.raises(ValueError, match="edge_mode"):
-        connectivity.pairwise_phase_consistency()
+    valid = to_host(transform.valid_time_frequency)
+    assert (valid.sum(axis=0) < valid.shape[0]).all()  # every frequency drops bins
+    # The smoothing neighborhood's samples are correlated, which it reports.
+    with pytest.warns(UserWarning, match="assumes independent observations"):
+        ppc = connectivity.pairwise_phase_consistency()
+    coefficients = to_host(transform.fft())
+    n_kept = connectivity.n_valid_observations
+    for frequency in range(valid.shape[1]):
+        kept = Connectivity(
+            coefficients[valid[:, frequency]][..., [frequency], :],
+            expectation_type="time_trials_tapers",
+            is_one_sided=True,
+        )
+        assert n_kept[frequency] == kept.n_observations
+        np.testing.assert_allclose(
+            ppc[frequency], kept.pairwise_phase_consistency()[0], rtol=1e-12, atol=1e-15
+        )
 
 
 def test_morlet_frequency_smoothing_is_local_cross_spectral_average():
@@ -2515,8 +2550,8 @@ def test_welch_default_segment_warns_on_coarse_resolution():
 def test_welch_default_segment_reads_the_length_of_a_nested_list():
     time_series = np.random.default_rng(918).standard_normal((600, 2, 2))
     np.testing.assert_array_equal(
-        Welch(time_series.tolist(), sampling_frequency=100).fft(),
-        Welch(time_series, sampling_frequency=100).fft(),
+        to_host(Welch(time_series.tolist(), sampling_frequency=100).fft()),
+        to_host(Welch(time_series, sampling_frequency=100).fft()),
     )
 
 

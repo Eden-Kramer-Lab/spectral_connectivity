@@ -388,6 +388,116 @@ def test_multitaper_transform_runs_on_the_device(xp):
     assert np.isfinite(coherence[..., 0, 1]).all()
 
 
+def test_artifact_samples_run_on_the_device(xp, monkeypatch):
+    """The mask, the zero-filled samples, the drop weights, and the measures
+    that count each bin's kept observations (the jackknife among them) stay on
+    the device and match the host."""
+    from spectral_connectivity import Multitaper
+
+    rng = np.random.default_rng(11)
+    time_series = rng.standard_normal((200, 4, 2))
+    time_series[60, 1, 0] = np.nan
+    measures = (
+        "pairwise_phase_consistency",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+        "canonical_coherence",
+    )
+
+    def compute():
+        multitaper = Multitaper(
+            time_series, 200, n_time_samples_per_window=50, artifact_samples="nonfinite"
+        )
+        connectivity = Connectivity.from_transform(multitaper)
+        results = {
+            measure: (
+                connectivity.canonical_coherence(["a", "b"])[0]
+                if measure == "canonical_coherence"
+                else getattr(connectivity, measure)()
+            )
+            for measure in measures
+        }
+        results["n_valid_observations"] = connectivity.n_valid_observations
+        results["jackknife"] = connectivity.jackknife(
+            "magnitude_squared_coherence"
+        ).standard_error
+        results["delay"] = connectivity.group_delay()[0]
+        return multitaper, results
+
+    multitaper, on_device = compute()
+    assert isinstance(multitaper.fft(), _DeviceArray)
+    assert isinstance(multitaper.observation_weights, _DeviceArray)
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    _, host = compute()
+    for name, value in on_device.items():
+        assert isinstance(value, np.ndarray), name
+        np.testing.assert_allclose(value, host[name], rtol=1e-12, equal_nan=True, err_msg=name)
+
+
+@pytest.mark.parametrize("taper_weighting", ["uniform", "eigen", "adaptive"])
+def test_missing_data_tapers_run_on_the_device(xp, monkeypatch, taper_weighting):
+    """The missing-data tapers (computed on the host), their coefficients,
+    weights, and taper counts reach the device and match the host."""
+    from spectral_connectivity import Multitaper
+
+    rng = np.random.default_rng(12)
+    time_series = rng.standard_normal((200, 4, 2))
+    time_series[60:64, 1, 0] = np.nan
+    time_series[[110, 112, 130], 2, 1] = np.nan
+
+    def compute():
+        multitaper = Multitaper(
+            time_series,
+            200,
+            n_time_samples_per_window=50,
+            artifact_samples="nonfinite",
+            artifact_handling="missing_data_tapers",
+            taper_weighting=taper_weighting,
+            detrend_type="linear",
+        )
+        connectivity = Connectivity.from_transform(multitaper)
+        return multitaper, {
+            "fft": multitaper.fft(),
+            "pairwise_phase_consistency": connectivity.pairwise_phase_consistency(),
+            "n_valid_observations": connectivity.n_valid_observations,
+        }
+
+    multitaper, on_device = compute()
+    assert isinstance(on_device.pop("fft"), _DeviceArray)
+    assert isinstance(multitaper.observation_weights, _DeviceArray)
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    _, host = compute()
+    host.pop("fft")
+    for name, value in on_device.items():
+        assert isinstance(value, np.ndarray), name
+        np.testing.assert_allclose(value, host[name], rtol=1e-12, equal_nan=True, err_msg=name)
+    assert (host["n_valid_observations"][1:3, 0] < 20).all()  # tapers were dropped
+
+
+@pytest.mark.parametrize("line_significance_threshold", [None, 1e-3])
+def test_line_removal_and_the_harmonic_f_test_run_on_the_device(
+    xp, line_significance_threshold
+):
+    """The line fit's small tables are built on the host and the windows stay
+    on the device; the harmonic F-test returns host arrays."""
+    from spectral_connectivity import Multitaper
+
+    time = np.arange(512) / 256
+    signals = np.random.default_rng(7).standard_normal((512, 2, 2))
+    signals += np.cos(2 * np.pi * 60 * time)[:, np.newaxis, np.newaxis]
+    multitaper = Multitaper(
+        signals,
+        sampling_frequency=256,
+        time_window_duration=1.0,
+        line_frequencies=[60.0],
+        line_significance_threshold=line_significance_threshold,
+    )
+    assert isinstance(multitaper.fft(), _DeviceArray)
+    result = multitaper.harmonic_f_test()
+    assert isinstance(result.f_statistic, np.ndarray)
+    assert np.isfinite(result.f_statistic[:, :, result.frequencies == 30.0]).all()
+
+
 def test_phase_lag_family_runs_on_the_device(xp, monkeypatch):
     """The phase-lag tile loop (ufunc ``out=``, ``count_nonzero`` over an axis
     tuple, ``einsum``) runs on device arrays and matches the host result."""
@@ -435,6 +545,33 @@ def test_weighted_phase_lag_family_runs_on_the_device(xp, monkeypatch):
         np.testing.assert_allclose(on_device[measure], getattr(host, measure)(), rtol=1e-12)
 
 
+def test_partial_coherence_shrinkage_runs_on_the_device(xp, monkeypatch):
+    """The ``"auto"`` intensity (one observation layout, a real and a complex
+    matmul, the in-place conjugate, uniform weights) and the shrunk inverse run
+    on device arrays and match the host result."""
+    rng = np.random.default_rng(11)
+    coefficients = _coefficients(rng, shape=(2, 6, 2, 16, 4))
+    weights = np.full((2, 6, 2, 16, 1), 0.5)
+
+    def run(asarray):
+        connectivity = Connectivity(
+            asarray(coefficients),
+            expectation_type="time_tapers",
+            observation_weights=asarray(weights),
+        )
+        return (
+            connectivity.partial_coherence_shrinkage(),
+            connectivity.partial_coherence(shrinkage="auto"),
+            connectivity.partial_coherence(shrinkage=0.3),
+        )
+
+    on_device = run(xp.asarray)
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    for actual, reference in zip(on_device, run(np.asarray), strict=True):
+        assert isinstance(actual, np.ndarray)
+        np.testing.assert_allclose(actual, reference, rtol=1e-12, equal_nan=True)
+
+
 def test_fourier_connectivity_accepts_device_frequencies_and_time(xp, monkeypatch):
     """On the GPU, ``Multitaper.frequencies`` and ``.time`` are device arrays;
     passing them straight to ``fourier_connectivity`` must not convert them
@@ -474,3 +611,55 @@ def test_minimum_phase_decomposition_accepts_host_arrays(xp, monkeypatch):
         minimum_phase_decomposition.minimum_phase_decomposition(cross_spectrum),
         rtol=1e-12,
     )
+
+
+def test_var_spectrum_runs_on_the_device(xp, monkeypatch):
+    """VARSpectrum builds its coefficients with the backend's FFT and linear
+    algebra, and the directed measures of them stay on the device."""
+    from spectral_connectivity import VARSpectrum
+
+    coefficients = np.stack([np.array([[0.5, 0.0], [0.4, 0.5]]), -0.6 * np.eye(2)])
+    noise_covariance = np.array([[1.0, 0.3], [0.3, 2.0]])
+
+    def compute():
+        var = VARSpectrum(coefficients, noise_covariance, sampling_frequency=100)
+        connectivity = Connectivity.from_transform(var)
+        return var.fft(), connectivity.pairwise_spectral_granger_prediction()
+
+    device_fft, device_granger = compute()
+    assert isinstance(device_fft, _DeviceArray)
+    monkeypatch.undo()
+    host_fft, host_granger = compute()
+    np.testing.assert_array_equal(device_fft.get(), host_fft)
+    np.testing.assert_array_equal(device_granger, host_granger)
+
+
+@pytest.mark.parametrize(
+    ("kind", "measure"),
+    [
+        ("trial_shuffle", "magnitude_squared_coherence"),
+        ("phase_rotation", "magnitude_squared_coherence"),
+        ("conjugation", "magnitude_squared_coherence"),
+        ("phase_rotation", "pairwise_spectral_granger_prediction"),
+    ],
+)
+def test_surrogate_test_runs_on_the_device(xp, monkeypatch, kind, measure):
+    """Surrogates are drawn on the host and applied to device coefficients;
+    the p-values match the host computation exactly (same random numbers),
+    including a Wilson-factorized directed measure on rotated real signals."""
+    rng = np.random.default_rng(13)
+    if "granger" in measure:
+        # Coefficients of real signals, whose rotated surrogates stay
+        # conjugate-symmetric and keep the factorization's real-FFT path.
+        coefficients = scipy.fft.fft(rng.standard_normal((2, 6, 3, 16, 3)), axis=-2)
+    else:
+        coefficients = _coefficients(rng, shape=(2, 6, 3, 16, 3))
+    extra = {"half_bandwidth": 0.07} if kind == "phase_rotation" else {}
+    kwargs = {"kind": kind, "n_surrogates": 9, "random_state": 0, **extra}
+    on_device = Connectivity(xp.asarray(coefficients)).surrogate_test(measure, **kwargs)
+
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    host = Connectivity(coefficients).surrogate_test(measure, **kwargs)
+    assert isinstance(on_device.p_value, np.ndarray)
+    np.testing.assert_array_equal(on_device.p_value, host.p_value)
+    np.testing.assert_array_equal(on_device.fwer_p_value, host.fwer_p_value)

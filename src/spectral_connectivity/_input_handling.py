@@ -13,6 +13,7 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
+from spectral_connectivity.transforms import SpectralTransform
 from spectral_connectivity.utils import (
     TIME_SERIES_RAGGED_FIX,
     BackendArray,
@@ -70,6 +71,9 @@ class _SignalMetadata(NamedTuple):
     n_trials: int | None = None
     # The input DataArray's signal dimension; None for a plain array.
     signal_dimension: Hashable | None = None
+    # The input DataArray's dimensions in (time[, trial], signal) order, as it
+    # was transposed; None for a plain array.
+    dimension_order: tuple[Hashable, ...] | None = None
 
 
 class _UnwrappedInput(NamedTuple):
@@ -723,6 +727,26 @@ def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
         raise TypeError(msg)
 
 
+def _reject_transform(value: Any, caller: str, argument: str, takes: str) -> None:
+    """Raise, naming ``connectivity_to_xarray``, if ``value`` is a spectral transform.
+
+    A transform (``Multitaper``, ``VARSpectrum``, any ``SpectralTransform``)
+    passed where data is expected would otherwise fail as a non-numeric array,
+    with advice to convert it. ``caller`` is the public function and ``takes``
+    what it does with ``argument``.
+    """
+    if not isinstance(value, SpectralTransform):
+        return
+    msg = (
+        f"{caller} {takes}, but {argument} is a spectral transform "
+        f"({type(value).__name__}), which already holds the Fourier "
+        "coefficients. For a transform, including VARSpectrum, call "
+        "connectivity_to_xarray(transform, method) for a labeled result, once per "
+        "measure, or Connectivity.from_transform(transform) for the arrays."
+    )
+    raise TypeError(msg)
+
+
 _TIME_SERIES_LAYOUTS = "(n_time, n_signals) or (n_time, n_trials, n_signals)"
 _FOURIER_LAYOUTS = (
     "(observation, frequency, signal), (trial, taper, frequency, signal), "
@@ -757,6 +781,12 @@ def _unwrap_xarray_input(
     sampling frequency and start time inferred from the time index, the input's
     attrs, and its per-signal metadata (the last four ``None`` for a plain array).
     """
+    _reject_transform(
+        time_series,
+        "multitaper_connectivity",
+        "time_series",
+        "estimates the spectrum from a time series",
+    )
     if not isinstance(time_series, xr.DataArray):
         if any(dimension is not None for dimension in (time_dim, trial_dim, signal_dim)):
             msg = (
@@ -797,6 +827,7 @@ def _unwrap_xarray_input(
             units=_stated_units(time_series.attrs.get("units")),
             recording_coordinates=_scalar_coordinates_from_dataarray(time_series),
             signal_dimension=signal_dimension,
+            dimension_order=dimension_order,
         ),
     )
 
@@ -849,6 +880,12 @@ def _unwrap_fourier_input(
     _SignalMetadata,
 ]:
     """Normalize external coefficients to the core's five-dimensional layout."""
+    _reject_transform(
+        fourier_coefficients,
+        "fourier_connectivity",
+        "fourier_coefficients",
+        "takes an array of Fourier coefficients",
+    )
     dimension_arguments = {
         "time": time_dim,
         "trial": trial_dim,

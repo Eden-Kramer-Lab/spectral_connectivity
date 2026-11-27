@@ -6,10 +6,11 @@ import numpy as np
 import pytest
 
 from spectral_connectivity.connectivity import Connectivity
-from spectral_connectivity.transforms import Multitaper
+from spectral_connectivity.transforms import Multitaper, VARSpectrum
 from spectral_connectivity.wrapper import (
     UnsupportedMeasureError,
     connectivity_to_xarray,
+    fourier_connectivity,
     multitaper_connectivity,
 )
 
@@ -208,3 +209,32 @@ def test_connectivity_to_xarray_rejected_call_does_not_warn(transform, kwargs, m
                 transform(time_series, sampling_frequency=100), method, **kwargs
             )
     assert record == []
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        lambda transform: multitaper_connectivity(transform, sampling_frequency=100),
+        fourier_connectivity,
+    ],
+    ids=["multitaper_connectivity", "fourier_connectivity"],
+)
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: VARSpectrum(np.array([[[0.5, 0.0], [0.4, 0.5]]]), sampling_frequency=100),
+        lambda: Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100),
+    ],
+    ids=["VARSpectrum", "Multitaper"],
+)
+def test_a_transform_given_as_data_points_to_connectivity_to_xarray(wrapper, make):
+    """A transform passed where data goes names the route for transforms,
+    not a conversion with np.asarray."""
+    transform = make()
+    with pytest.raises(
+        TypeError, match=rf"is a spectral transform \({type(transform).__name__}\)"
+    ) as info:
+        wrapper(transform)
+    message = str(info.value)
+    assert "connectivity_to_xarray(transform, method)" in message
+    assert "np.asarray" not in message

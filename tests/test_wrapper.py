@@ -422,7 +422,7 @@ def test_nested_list_input_matches_the_array_input():
     # A contiguous copy, which the list's array is: a strided view can change
     # the summation order, and so the last bit.
     coefficients = np.ascontiguousarray(
-        Multitaper(data[:, np.newaxis, :], sampling_frequency=500).fft()[0]
+        to_host(Multitaper(data[:, np.newaxis, :], sampling_frequency=500).fft()[0])
     )
     frequencies = np.fft.fftfreq(coefficients.shape[-2], d=1 / 500)
     for layout in (coefficients[0], coefficients):  # 3-D and 4-D
@@ -2285,6 +2285,7 @@ def test_from_transform_supports_subclass_overriding_init():
     sub = LegacyConnectivity.from_transform(m)
     assert isinstance(sub, LegacyConnectivity)
     assert sub.marker == "subclass"
+    assert sub.half_bandwidth == m.half_bandwidth  # recorded without the new keyword
     # Fell back to the defensive-copy path (owns its data), and works normally.
     assert sub._fourier_coefficients.base is None
     base = Connectivity.from_transform(m)

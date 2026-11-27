@@ -26,18 +26,10 @@ from spectral_connectivity.wrapper import (
     connectivity_to_xarray,
     frequency_band_reduce,
 )
+from tests._measure_helpers import measure_kwargs
 
 _GROUPS = ["a", "a", "b", "b"]
-_MEASURE_KWARGS = {
-    "canonical_coherence": {"group_labels": _GROUPS},
-    "maximized_imaginary_coherency": {"group_labels": _GROUPS},
-    "multivariate_interaction_measure": {"group_labels": _GROUPS},
-    "blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
-    "time_reversed_blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
-    "canonical_coherency": {"group_labels": _GROUPS},
-    "maximized_imaginary_coherency_components": {"group_labels": _GROUPS},
-    "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
-}
+_MEASURE_KWARGS = measure_kwargs(_GROUPS)
 
 
 def _engine(name):
