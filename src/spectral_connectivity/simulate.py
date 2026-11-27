@@ -15,10 +15,16 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from spectral_connectivity.utils import (
+    VAR_SINGLE_LAG_HINT,
     _generator,
     _validate_sampling_frequency,
     is_positive_integer,
+    reject_complex_var,
     stacklevel_outside_package,
+    var_companion_matrices,
+    var_is_unstable,
+    var_spectral_radius,
+    var_stabilizing_advice,
 )
 
 
@@ -138,19 +144,14 @@ def simulate_MVAR(
 
     """
     coefficients = np.asarray(coefficients)
-    if np.iscomplexobj(coefficients):
-        msg = (
-            f"coefficients must be real, got dtype {coefficients.dtype}. "
-            "simulate_MVAR draws real Gaussian innovations, so it simulates real "
-            "processes only; pass the real coefficient matrices."
-        )
-        raise TypeError(msg)
+    reject_complex_var(
+        coefficients,
+        "coefficients",
+        "simulate_MVAR draws real Gaussian innovations, so it simulates real "
+        "processes only; pass the real coefficient matrices.",
+    )
     if coefficients.ndim != 3 or coefficients.shape[1] != coefficients.shape[2]:
-        hint = (
-            "; for a single lag, pass coefficients[np.newaxis]"
-            if coefficients.ndim == 2
-            else ""
-        )
+        hint = VAR_SINGLE_LAG_HINT if coefficients.ndim == 2 else ""
         msg = (
             "coefficients must have shape (n_lags, n_signals, n_signals), one "
             "square matrix A_k per lag; got shape "
@@ -173,32 +174,23 @@ def simulate_MVAR(
     if not is_positive_integer(n_burnin_samples, minimum=0):
         msg = f"n_burnin_samples must be a non-negative integer; got {n_burnin_samples!r}"
         raise ValueError(msg)
-    if n_lags > 0:
-        # x(t) = sum_k A_k x(t - k) is stable when every eigenvalue of its
-        # companion matrix [[A_1 ... A_p], [I 0]] lies inside the unit circle.
-        companion = np.eye(n_lags * n_signals, k=-n_signals)
-        companion[:n_signals] = np.concatenate(coefficients, axis=1)
-        spectral_radius = float(np.max(np.abs(np.linalg.eigvals(companion))))
-        unit_root = bool(np.isclose(spectral_radius, 1, rtol=1e-12, atol=0))
-        if unit_root or spectral_radius > 1:
-            radius = (
-                "1 (a unit root: the series wanders like a random walk)"
-                if unit_root
-                else f"{spectral_radius:.4g} (above 1: the series grows without bound)"
-            )
-            # Scaling A_k by c**k scales every companion eigenvalue by c.
-            scale = 0.9 / spectral_radius
-            warnings.warn(
-                "The MVAR coefficients are unstable: the spectral radius of their "
-                f"companion matrix is {radius}, so the process has no stationary "
-                "state and its spectrum and connectivity are undefined. Scale the "
-                "coefficients until the radius is below 1: multiplying each lag's "
-                "matrix A_k (coefficients[k - 1]) by c**k multiplies the radius by "
-                "c, so coefficients * c ** np.arange(1, n_lags + 1)[:, np.newaxis, "
-                f"np.newaxis] with c = {scale:.6g} gives a radius of 0.9.",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
+    # x(t) = sum_k A_k x(t - k) is stable when every eigenvalue of its
+    # companion matrix [[A_1 ... A_p], [I 0]] lies inside the unit circle.
+    spectral_radius = float(var_spectral_radius(var_companion_matrices(coefficients)))
+    if var_is_unstable(spectral_radius):
+        radius = (
+            f"{spectral_radius:.4g} (above 1: the series grows without bound)"
+            if spectral_radius > 1 and not np.isclose(spectral_radius, 1, rtol=1e-12, atol=0)
+            else "1 (a unit root: the series wanders like a random walk)"
+        )
+        warnings.warn(
+            "The MVAR coefficients are unstable: the spectral radius of their "
+            f"companion matrix is {radius}, so the process has no stationary "
+            "state and its spectrum and connectivity are undefined. "
+            + var_stabilizing_advice(spectral_radius),
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
 
     rng = _generator(random_state)
 

@@ -53,6 +53,15 @@ The migration guide for code written against 2.x is
   `multitaper_connectivity` takes it in `transform_kwargs`. New
   `artifact_samples`, `valid_windows` (`True` at the kept trial windows), and
   `observation_weights` properties of both transforms.
+- `Multitaper(artifact_handling="missing_data_tapers")` estimates a trial
+  window containing artifacts from its valid samples with missing-data Slepian
+  tapers (Bronez 1988; Chave 2019) instead of dropping it (`"drop"`, the
+  default); a window keeping fewer than 2 tapers concentrated above 0.9 is
+  still dropped. New `n_kept_tapers` property of both windowed transforms.
+  With the multithreaded OpenBLAS of NumPy 1.24 and SciPy 1.11-era wheels on
+  many cores, each window's taper solve can be 190-840 times slower; set
+  `OPENBLAS_NUM_THREADS=1`, or build the transform within
+  `threadpoolctl.threadpool_limits(1)`.
 - `Connectivity.n_valid_observations`: the observations each bin (time window
   and frequency, by default) averages; `n_observations` stays the raw count.
   Where zero observation weights drop observations, the debiased squared
@@ -75,6 +84,21 @@ The migration guide for code written against 2.x is
   coherence statistics, 1 for the power statistics), a bin that keeps too
   few, gives NaN there, where the others raised; the power statistics accept
   the NaN power of such a bin. A single count below that still raises.
+- `VARSpectrum(coefficients, noise_covariance=None, sampling_frequency=...)`,
+  a transform whose spectrum is exactly that of a vector autoregressive model
+  (coefficients as for `simulate_MVAR` and statsmodels' `VARResults.coefs`,
+  optionally one model per time window), and `Connectivity.from_var(...)`, the
+  shortcut for `Connectivity.from_transform(VARSpectrum(...))`. Label its
+  results with `connectivity_to_xarray`; `multitaper_connectivity` and
+  `fourier_connectivity` now name that route when given a transform. See the
+  `VARSpectrum` docstring for which measures are defined and how exact they
+  are.
+- `is_exact_spectrum`, an optional `SpectralTransform` attribute and a
+  keyword-only `Connectivity` argument and property, for coefficients that
+  are one factorization of a cross-spectral matrix rather than samples. The
+  measures that need samples, `jackknife`, `surrogate_test`,
+  `partial_coherence(shrinkage="auto")`, and `observation_weights` are then
+  refused. Labeled results record `is_exact_spectrum`.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working
@@ -87,6 +111,16 @@ The migration guide for code written against 2.x is
   the time-reversed data (the transposed cross-spectral matrix), the
   counterparts of `time_reversed_spectral_granger_prediction` for checking
   whether a direction reverses under time reversal (Winkler et al., 2016).
+- `partial_coherence(shrinkage=...)` shrinks each cross-spectral matrix
+  toward its diagonal before inverting it, multiplying every coherency by
+  `1 - lambda`: a fixed `lambda` in [0, 1], or `"auto"`, the analytic
+  intensity of Ledoit and Wolf for Schäfer and Strimmer's correlation-scale
+  diagonal target, estimated for each time window and frequency.
+  `Connectivity.partial_coherence_shrinkage()` returns those intensities, for
+  reporting. The default, `None`, does not shrink; the wrappers take it in
+  `connectivity_kwargs`. Use `"auto"` with at most about 2.5 trials x tapers
+  per signal; with more it can raise the error (see the `partial_coherence`
+  Notes).
 - `adjust_for_multiple_comparisons(..., axis=...)`: the axes whose tests form
   one family, as in `scipy.stats.false_discovery_control`, so each slice
   along the other axes (each time window, say) is corrected on its own. The
@@ -128,6 +162,14 @@ The migration guide for code written against 2.x is
   too narrow when coupling varies across trials. It needs an expectation that
   averages trials and at least 3 trials, and is allowed when the tapers within
   a trial are correlated. The default (`"observation"`) is unchanged.
+- `Multitaper.harmonic_f_test()`: Thomson's harmonic F-test for a sinusoid at
+  each frequency of every window, trial, and signal, returning a
+  `HarmonicFTestResult` with the F statistic, its p-value under
+  F(2, 2K - 2), and the fitted line's amplitude and phase (at each window's
+  center). Frequencies within the tapers' half-bandwidth of 0 Hz and Nyquist,
+  where the test does not hold, are NaN. By default each window is zero-padded
+  to four times its length, so a line between the window's frequency bins is
+  still found; `n_fft_samples=` sets another grid.
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided
@@ -1257,6 +1299,20 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   tolerance.
 - *Unreleased:* Subset spectral Granger restores `NaN` on the global
   self-Granger diagonal.
+- *Unreleased:* `partial_coherence` loads each signal's power by
+  `regularization` times itself before inverting, instead of every signal by
+  `regularization` times the matrix's RMS entry, which perturbed a signal far
+  weaker than the others by far more than `regularization` of its own size.
+  It inverts the coherency matrix, so it is invariant under rescaling the
+  signals to rounding; before, signal amplitudes
+  from 1e-6 to 1e6 moved the default result by up to 0.98 from that of the
+  same data at one scale (simulated dense 8-signal VARs with 10 to 100
+  observations). For signals of comparable power the default result changed
+  by about 1e-11 or less; with fewer observations than signals, where it
+  warns, the loading sets the estimate and it changed by up to 0.45. There,
+  without shrinkage, the estimate is sensitive to rounding (perturbing the
+  data by one unit in the last place moved it by up to 4e-4), and rescaling
+  moves it by about as much.
 - Wilson initialization and solves isolate rank-deficient sub-spectra instead of
   poisoning a whole batch. A unit whose Cholesky start fails starts from the
   Cholesky factor of `n_signals * I`, which is deterministic; healthy units

@@ -196,6 +196,44 @@ def _companion_matrix(coefficients):
     return companion
 
 
+def _normalized_inverse(matrices, loading=None):
+    """``|P_ij|^2 / (P_ii P_jj)`` for ``P = inv(matrices + diag(loading))``.
+
+    The partial coherence of a cross-spectral matrix, ``(..., n, n)``;
+    ``loading``, ``(..., n)``, is added to the diagonal first (none by
+    default)."""
+    identity = np.eye(matrices.shape[-1])
+    if loading is not None:
+        matrices = matrices + loading[..., None, :] * identity
+    precision = np.linalg.solve(matrices, np.broadcast_to(identity, matrices.shape))
+    diagonal = np.real(np.diagonal(precision, axis1=-2, axis2=-1))
+    return np.abs(precision) ** 2 / (diagonal[..., :, None] * diagonal[..., None, :])
+
+
+def _coherency(spectrum):
+    """Coherency ``S_ij / sqrt(S_ii S_jj)`` of a cross-spectral matrix ``(..., n, n)``."""
+    power = np.real(np.diagonal(spectrum, axis1=-2, axis2=-1))
+    return spectrum / np.sqrt(power[..., :, None] * power[..., None, :])
+
+
+def _gaussian_coefficients(spectrum, n_replicates, n_trials, n_tapers=1, seed=0):
+    """Complex Gaussian coefficients ``(n_replicates, n_trials, n_tapers,
+    n_frequencies, n_signals)`` with covariance ``E[x x^H] = spectrum``
+    ``(n_frequencies, n_signals, n_signals)`` at each frequency, one replicate
+    dataset per time window."""
+    rng = np.random.default_rng(seed)
+    shape = (n_replicates, n_trials, n_tapers, *spectrum.shape[:-1])
+    white = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / np.sqrt(2)
+    return np.einsum("fij,...fj->...fi", np.linalg.cholesky(spectrum), white)
+
+
+def _mean_and_limit(values):
+    """Replicate mean of ``values`` (replicates on the first axis) and five
+    standard errors of it, for each of its other entries."""
+    values = np.asarray(values)
+    return values.mean(axis=0), 5 * values.std(axis=0, ddof=1) / np.sqrt(len(values))
+
+
 def _companion_spectral_radius(coefficients):
     """Largest eigenvalue modulus of a VAR's companion matrix (< 1 is stable)."""
     return np.max(np.abs(np.linalg.eigvals(_companion_matrix(coefficients))))
@@ -278,6 +316,46 @@ def _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft):
     block measure with every signal a block of its own."""
     blocks = [[signal] for signal in range(coefficients.shape[-1])]
     return _block_granger_from_state_space(coefficients, noise_covariance, n_fft, blocks)
+
+
+def _state_space_conditional_granger(coefficients, noise_covariance, n_fft, target, source):
+    """Conditional spectral Granger ``source -> target | others`` via state space.
+
+    Independent oracle following Barnett & Seth (2015): the VAR is written in
+    innovations form, the reduced model without ``source`` is obtained from the
+    discrete algebraic Riccati equation (no reduced regression and no spectral
+    factorization), and Geweke's conditional formula is evaluated with the
+    reduced model's inverse transfer function. Returns values on the
+    non-negative FFT grid.
+    """
+    n_lags, n_signals, _ = coefficients.shape
+    A, C, K, Q = _state_space_form(coefficients, noise_covariance)
+    V = noise_covariance
+    reduced = [i for i in range(n_signals) if i != source]
+    C_r, R, S = _observed_subsystem(C, K, V, reduced)
+    P = _prediction_error_covariance(A, C_r, Q, R, S)
+    V_r = C_r @ P @ C_r.conj().T + R
+    K_r = (A @ P @ C_r.conj().T + S) @ np.linalg.inv(V_r)
+    target_r = reduced.index(target)
+    others = [i for i in range(n_signals) if i != target]
+    partial = (
+        V[np.ix_(others, others)]
+        - np.outer(V[others, target], V[target, others]) / V[target, target]
+    )
+    L = np.linalg.cholesky(partial)
+    identity = np.eye(n_signals * n_lags)
+    omegas = 2 * np.pi * np.arange(n_fft // 2 + 1) / n_fft
+    values = np.empty(omegas.size)
+    for k, omega in enumerate(omegas):
+        z = np.exp(1j * omega)
+        H = np.eye(n_signals) + C @ np.linalg.solve(z * identity - A, K)
+        B_r = np.eye(len(reduced)) - C_r @ np.linalg.solve(z * identity - (A - K_r @ C_r), K_r)
+        H_r = B_r[target_r] @ H[np.ix_(reduced, others)] @ L
+        reduced_variance = np.real(V_r[target_r, target_r])
+        values[k] = np.log(reduced_variance) - np.log(
+            reduced_variance - np.real(H_r @ H_r.conj())
+        )
+    return values
 
 
 def _var_autocovariance(coefficients, noise_covariance, max_lag):

@@ -129,8 +129,8 @@ Prefer the wrapper's labeled results so you never index these by hand.
   [Pitfalls](choosing_a_measure.md#pitfalls) cover the mistakes common to
   every measure.
 - **Use the shared result schema.** Common attrs include `transform`,
-  `sampling_frequency` when known, `n_observations`, independence flags, and
-  `output_schema_version=1`. Remaining settings are in
+  `sampling_frequency` when known, `n_observations`, independence flags,
+  `is_exact_spectrum`, and `output_schema_version=1`. Remaining settings are in
   `transform_parameters_json`, with `estimator`/`execution` records. The 15
   released `mt_*` attributes are compatibility copies scheduled for removal
   in 4.0. Multitaper's `frequency_resolution` property and helper names remain
@@ -145,6 +145,10 @@ Prefer the wrapper's labeled results so you never index these by hand.
   For a two-sided spectrum
   (`Connectivity.power(one_sided=False)`; the wrappers do not return one) pass
   `is_one_sided=False`. Omitting the keyword warns and assumes one-sided.
+- **Partial coherence with few trials.** With at most about 2.5 trials x
+  tapers per signal pass `connectivity_kwargs={"shrinkage": "auto"}` and
+  report `Connectivity.partial_coherence_shrinkage()`, which the wrapper does
+  not return; with more, leave `shrinkage` unset.
 - **Group measures need labels.** Pass `group_labels=...` (one label per
   signal, e.g. `["CA1", "CA1", "PFC"]`) directly to `multitaper_connectivity`
   or `fourier_connectivity` for `canonical_coherence`,
@@ -171,11 +175,12 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `DeprecationWarning`.
 - **Artifacts and NaN.** Do not let NaN reach the transform: pass
   `transform_kwargs={"artifact_samples": "nonfinite"}`, or a boolean mask that
-  is `True` at the artifacts, the samples to leave out (invert a mask of
-  valid samples with `~`). A trial's
-  window touching an artifact is dropped whole, so use windows that fit
-  between artifacts. The outputs mark what is kept: `Multitaper.valid_windows`,
-  and `Connectivity.n_valid_observations`, the per-bin counts to give the
+  is `True` at the artifacts, the samples to leave out (invert a mask of valid
+  samples with `~`). A trial's window touching an artifact is dropped whole,
+  so use windows that fit between artifacts, or see the recipe for
+  `"artifact_handling": "missing_data_tapers"`. The outputs mark what is kept:
+  `Multitaper.valid_windows`, `Multitaper.n_kept_tapers`, and
+  `Connectivity.n_valid_observations`, the per-bin counts to give the
   statistics functions instead of `n_observations`; a bin keeping too few
   (fewer than 2 for coherence, none for power) is NaN in their results. See
   the [recipe](cookbook.md#leave-out-artifacts-and-missing-samples).
@@ -265,4 +270,8 @@ True
 - Each `Connectivity` measure's docstring has a runnable example.
 - `help(spectral_connectivity.SpectralTransform)` for the interface a custom
   transform needs to work with `Connectivity.from_transform`.
+- `help(spectral_connectivity.VARSpectrum)` for the exact connectivity of a
+  VAR model (label it with `connectivity_to_xarray`, not
+  `multitaper_connectivity`; see the
+  [cookbook recipe](cookbook.md#exact-connectivity-of-a-var-model)).
 - The [Cookbook](cookbook.md) has recipes for common tasks.

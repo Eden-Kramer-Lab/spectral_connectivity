@@ -80,7 +80,7 @@ tapers by default). Their names say which quantity they hold:
 | `imaginary_coherence` | magnitude | \|Im(S_st)\| / sqrt(S_ss * S_tt), where S_st = E[X_s * conj(X_t)], averaged over the expectation_type axes |
 | `coherency` | complex | S_st / sqrt(S_ss * S_tt), where S_st = E[X_s * conj(X_t)], averaged over the expectation_type axes |
 | `imaginary_coherency` | signed | Im(S_st) / sqrt(S_ss * S_tt), where S_st = E[X_s * conj(X_t)], averaged over the expectation_type axes |
-| `partial_coherence` | squared magnitude | \|P_st\|^2 / (P_ss * P_tt), where P is the (regularized) inverse of the cross-spectral matrix |
+| `partial_coherence` | squared magnitude | \|P_st\|^2 / (P_ss * P_tt), where P is the (regularized) inverse of the cross-spectral matrix, optionally shrunk toward its diagonal first (shrinkage) |
 | `canonical_coherence` | squared magnitude | max over complex weights a, b of \|a^H S_st b\|^2 / ((a^H S_ss a) * (b^H S_tt b)), with S_st the cross-spectral matrix from the source group's signals to the target group's |
 | `canonical_coherency` | complex | max over a phase phi and real weights a, b of a^T Re(exp(-1j * phi) * S_st) b / sqrt((a^T Re(S_ss) a) * (b^T Re(S_tt) b)), times exp(-1j * phi), with S_st the cross-spectral matrix from the source group's signals to the target group's |
 <!-- formula-table:end -->
