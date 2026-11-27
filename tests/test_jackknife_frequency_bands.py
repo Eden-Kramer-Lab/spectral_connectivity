@@ -917,8 +917,6 @@ def _reduce_all(values, frequencies, bands, reduction, axis, n_fft, circular=Fal
 
 @pytest.mark.parametrize("n_fft", [64, 63], ids=["even_fft", "odd_fft"])
 @pytest.mark.parametrize("reduction", ["integral", "mean"])
-# The zero-width band (10, 10) integrates to 0, which has no log.
-@pytest.mark.filterwarnings("ignore:Jackknife log transform:UserWarning")
 def test_power_band_jackknife_matches_brute_force_on_deleted_trials(n_fft, reduction):
     """Band means and integrals of power, with edges between bins, a one-bin
     and a zero-width band, overlapping bands, and the DC and Nyquist bins
@@ -928,14 +926,17 @@ def test_power_band_jackknife_matches_brute_force_on_deleted_trials(n_fft, reduc
     bands = _bands_for(n_fft)
     frequencies = connectivity.frequencies
 
-    result = connectivity.jackknife(
-        "power",
-        leave_out="trial",
-        frequency_bands=bands,
-        frequency_reduction=reduction,
-        one_sided=True,
-        keep_replicates=True,
-    )
+    with warnings.catch_warnings():
+        # The zero-width band (10, 10) integrates to 0, which has no log.
+        warnings.filterwarnings("ignore", "Jackknife log transform", UserWarning)
+        result = connectivity.jackknife(
+            "power",
+            leave_out="trial",
+            frequency_bands=bands,
+            frequency_reduction=reduction,
+            one_sided=True,
+            keep_replicates=True,
+        )
 
     estimate = _reduce_all(
         connectivity.power(one_sided=True), frequencies, bands, reduction, 1, n_fft
