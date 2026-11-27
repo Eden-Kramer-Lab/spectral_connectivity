@@ -109,7 +109,10 @@ class JackknifeResult:
         unit it leaves out (see ``Connectivity.n_valid_observations``), since
         leaving that unit out removes nothing there;
         :func:`jackknife_confidence_interval` skips it, so passing
-        ``estimate`` and ``replicates`` back reproduces the interval. The
+        ``estimate`` and ``replicates`` back reproduces the interval wherever
+        the measure is defined in every replicate of a unit the bin has (where
+        it is not, the jackknife's interval is NaN and the function's skips
+        that replicate). The
         array is the one the interval was computed from, ``n_replicates``
         times the memory of ``estimate``. From
         :func:`jackknife_confidence_interval`, ``leave_one_out`` itself (not a
@@ -423,6 +426,27 @@ def _validate_confidence_level(confidence_level: float) -> None:
         raise ValueError(msg)
 
 
+# A leave-one-out interval needs this many replicates (fewer only when fewer
+# are given to jackknife_confidence_interval).
+_MIN_JACKKNIFE_REPLICATES = 3
+# The end of every warning that elements have fewer than that.
+_TOO_FEW_REPLICATES_CONSEQUENCE = (
+    ", too few for a leave-one-out interval, so the bias-corrected estimate, "
+    "standard error and bounds are NaN there."
+)
+_JACKKNIFE_TRANSFORMATIONS = ("identity", "log", "fisher", "fisher_squared", "circular")
+
+
+def _validate_jackknife_transformation(transformation: object) -> None:
+    """Reject a ``transformation`` that is not one of ``_JACKKNIFE_TRANSFORMATIONS``."""
+    if transformation not in _JACKKNIFE_TRANSFORMATIONS:
+        msg = (
+            "transformation must be 'identity', 'log', 'fisher', "
+            f"'fisher_squared', or 'circular'; got {transformation!r}."
+        )
+        raise ValueError(msg)
+
+
 def jackknife_confidence_interval(
     estimate: NDArray[np.floating],
     leave_one_out: NDArray[np.floating],
@@ -431,9 +455,6 @@ def jackknife_confidence_interval(
     transformation: Literal[
         "identity", "log", "fisher", "fisher_squared", "circular"
     ] = "identity",
-    _saturated_by_construction: NDArray[np.bool_] | bool = False,
-    _replicate_is_valid: NDArray[np.bool_] | None = None,
-    _skip_nan_replicates: bool = True,
 ) -> JackknifeResult:
     """Summarize leave-one-out replicates with a jackknife confidence interval.
 
@@ -479,7 +500,9 @@ def jackknife_confidence_interval(
     each bin's interval from the units the bin keeps. An element left with
     fewer than 3 (fewer than given, if 2 were given) is NaN, with a
     ``UserWarning``, also as there. An element whose replicates are all NaN
-    is NaN without one. Other non-finite replicates are values: an infinite
+    is NaN without one. :meth:`Connectivity.jackknife` skips only the
+    replicates of units a bin never had: a replicate left NaN by the measure
+    itself makes its interval NaN, where this function skips it. Other non-finite replicates are values: an infinite
     one makes its element's interval infinite or NaN.
 
     For ``"circular"`` the replicates are unwrapped onto the branch nearest the
@@ -515,13 +538,7 @@ def jackknife_confidence_interval(
            Bootstrap. Chapman & Hall.
     """
     _validate_confidence_level(confidence_level)
-    valid_transformations = {"identity", "log", "fisher", "fisher_squared", "circular"}
-    if transformation not in valid_transformations:
-        msg = (
-            "transformation must be 'identity', 'log', 'fisher', "
-            f"'fisher_squared', or 'circular'; got {transformation!r}."
-        )
-        raise ValueError(msg)
+    _validate_jackknife_transformation(transformation)
     estimate_array = np.asarray(estimate)
     replicates = np.asarray(leave_one_out)
     if np.iscomplexobj(estimate_array) or np.iscomplexobj(replicates):
@@ -533,22 +550,64 @@ def jackknife_confidence_interval(
     ):
         msg = "leave_one_out must have shape (n_observations, *estimate.shape)."
         raise ValueError(msg)
-    n_observations = replicates.shape[0]
-    if n_observations < 2:
+    if replicates.shape[0] < 2:
         msg = "Jackknife inference requires at least 2 observations."
         raise ValueError(msg)
+    # A NaN replicate is a missing one.
+    is_missing = np.isnan(replicates)
+    return _jackknife_interval(
+        estimate_array,
+        replicates,
+        confidence_level=confidence_level,
+        transformation=transformation,
+        replicate_is_valid=~is_missing if bool(is_missing.any()) else None,
+        describe_too_few=lambda n_too_few, n_elements, threshold: (
+            f"jackknife_confidence_interval: {n_too_few} of {n_elements} elements "
+            f"have fewer than {threshold} non-NaN replicates"
+        ),
+    )
 
-    # _saturated_by_construction is private to Connectivity.jackknife: it marks
-    # entries that sit at |coherence| == 1 by definition (phase_locking_value's
-    # diagonal), which the saturation warning must not count.
+
+def _jackknife_interval(
+    estimate: NDArray[np.floating],
+    replicates: NDArray[np.floating],
+    *,
+    confidence_level: float,
+    transformation: str,
+    replicate_is_valid: NDArray[np.bool_] | None = None,
+    saturated_by_construction: NDArray[np.bool_] | bool = False,
+    describe_too_few: Callable[[int, int, int], str] | None = None,
+) -> JackknifeResult:
+    """The jackknife interval of validated replicates: the one core of
+    :func:`jackknife_confidence_interval` and ``Connectivity.jackknife``.
+
+    Parameters
+    ----------
+    estimate : NDArray[floating], shape (...)
+    replicates : NDArray[floating], shape (n_replicates, ...)
+    confidence_level : float
+    transformation : {"identity", "log", "fisher", "fisher_squared", "circular"}
+    replicate_is_valid : NDArray[bool], optional
+        Which replicates count in each element, broadcastable against
+        ``replicates``; every one when ``None``. An element left with fewer
+        than ``min(_MIN_JACKKNIFE_REPLICATES, n_replicates)`` is NaN.
+    saturated_by_construction : NDArray[bool] or bool, default=False
+        Entries at ``|coherence| == 1`` by definition (phase_locking_value's
+        diagonal), which the saturation warning does not count.
+    describe_too_few : callable, optional
+        ``(n_elements_with_too_few, n_elements, threshold) -> str``, the
+        caller's opening of the warning that elements have too few replicates
+        (elements with none are not counted); no warning when ``None``.
+    """
+    n_replicates = replicates.shape[0]
     if transformation == "identity":
-        transformed_estimate = estimate_array
+        transformed_estimate = estimate
         transformed_replicates = replicates
         inverse = _identity
-        derivative = np.ones_like(estimate_array)
+        derivative = np.ones_like(estimate)
     elif transformation == "log":
         n_nonpositive = int(
-            np.count_nonzero(estimate_array <= 0) + np.count_nonzero(replicates <= 0)
+            np.count_nonzero(estimate <= 0) + np.count_nonzero(replicates <= 0)
         )
         if n_nonpositive:
             warnings.warn(
@@ -557,24 +616,24 @@ def jackknife_confidence_interval(
                 "(a single non-positive replicate makes its whole bin NaN). This "
                 "usually indicates a spectral null or a non-power measure.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
         with np.errstate(divide="ignore", invalid="ignore"):
-            transformed_estimate = np.where(estimate_array > 0, np.log(estimate_array), np.nan)
+            transformed_estimate = np.where(estimate > 0, np.log(estimate), np.nan)
             transformed_replicates = np.where(replicates > 0, np.log(replicates), np.nan)
         inverse = _exponential
-        derivative = estimate_array
+        derivative = estimate
     elif transformation == "fisher":
         epsilon = np.finfo(float).eps
         # Count every value the atanh clip below pins: a saturated estimate often
         # lands a few ulp below 1 rather than exactly on it.
         _warn_fisher_boundary(
-            (np.abs(estimate_array) >= 1 - epsilon) & ~np.asarray(_saturated_by_construction)
+            (np.abs(estimate) >= 1 - epsilon) & ~np.asarray(saturated_by_construction)
         )
-        transformed_estimate = np.arctanh(np.clip(estimate_array, -1 + epsilon, 1 - epsilon))
+        transformed_estimate = np.arctanh(np.clip(estimate, -1 + epsilon, 1 - epsilon))
         transformed_replicates = np.arctanh(np.clip(replicates, -1 + epsilon, 1 - epsilon))
         inverse = _hyperbolic_tangent
-        derivative = 1 - np.clip(estimate_array, -1, 1) ** 2
+        derivative = 1 - np.clip(estimate, -1, 1) ** 2
     elif transformation == "fisher_squared":
         # Variance-stabilizing transform for magnitude-squared coherence in
         # [0, 1] (Enochson & Goodman 1965): atanh(sqrt(MSC)) = atanh(|coherence|).
@@ -583,10 +642,9 @@ def jackknife_confidence_interval(
         # MSC scale is d(MSC)/d(atanh(sqrt(MSC))) = 2 * sqrt(MSC) * (1 - MSC),
         # which vanishes at both ends of [0, 1].
         epsilon = np.finfo(float).eps
-        clipped_estimate = np.clip(estimate_array, 0, 1)
+        clipped_estimate = np.clip(estimate, 0, 1)
         _warn_fisher_boundary(
-            (np.sqrt(clipped_estimate) >= 1 - epsilon)
-            & ~np.asarray(_saturated_by_construction)
+            (np.sqrt(clipped_estimate) >= 1 - epsilon) & ~np.asarray(saturated_by_construction)
         )
         transformed_estimate = np.arctanh(np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon))
         transformed_replicates = np.arctanh(
@@ -596,43 +654,32 @@ def jackknife_confidence_interval(
         derivative = 2 * np.sqrt(clipped_estimate) * (1 - clipped_estimate)
     else:
         # Unwrap every replicate onto the branch nearest the full estimate.
-        transformed_estimate = estimate_array
-        transformed_replicates = estimate_array + np.angle(
-            np.exp(1j * (replicates - estimate_array))
-        )
+        transformed_estimate = estimate
+        transformed_replicates = estimate + np.angle(np.exp(1j * (replicates - estimate)))
         inverse = _wrap_phase
-        derivative = np.ones_like(estimate_array)
+        derivative = np.ones_like(estimate)
 
-    # _replicate_is_valid is private to Connectivity.jackknife: which replicates
-    # count in each estimate (broadcast against leave_one_out), where zero
-    # observation weights drop different observations in different bins. A
-    # replicate leaving out an observation the bin never had is not one.
-    # Without it, NaN marks a missing replicate; Connectivity.jackknife turns
-    # that off (_skip_nan_replicates=False), so there a NaN replicate stays a
-    # NaN value of the measure.
-    if _replicate_is_valid is None and _skip_nan_replicates:
-        is_missing = np.isnan(replicates)
-        if bool(is_missing.any()):
-            n_present = np.sum(~is_missing, axis=0)
-            too_few = n_present < min(3, n_observations)
-            n_too_few = int(np.count_nonzero(too_few & (n_present > 0)))
-            if n_too_few:
-                warnings.warn(
-                    f"jackknife_confidence_interval: {n_too_few} of {too_few.size} "
-                    "elements have fewer than 3 non-NaN replicates, too few for a "
-                    "leave-one-out interval, so the bias-corrected estimate, "
-                    "standard error and bounds are NaN there.",
-                    UserWarning,
-                    stacklevel=stacklevel_outside_package(),
-                )
-            _replicate_is_valid = ~is_missing & ~too_few
-    counts: Any = n_observations
-    if _replicate_is_valid is None:
+    counts: Any = n_replicates
+    if replicate_is_valid is None:
         replicate_mean = np.mean(transformed_replicates, axis=0)
         squared_deviations = np.sum((transformed_replicates - replicate_mean) ** 2, axis=0)
     else:
-        valid = np.broadcast_to(_replicate_is_valid, replicates.shape)
-        counts = np.sum(_replicate_is_valid, axis=0)
+        n_valid = np.sum(replicate_is_valid, axis=0)
+        threshold = min(_MIN_JACKKNIFE_REPLICATES, n_replicates)
+        too_few = n_valid < threshold
+        # An element without any replicate is undefined anyway: not counted.
+        n_too_few = int(np.count_nonzero(too_few & (n_valid > 0)))
+        if n_too_few and describe_too_few is not None:
+            warnings.warn(
+                describe_too_few(n_too_few, too_few.size, threshold)
+                + _TOO_FEW_REPLICATES_CONSEQUENCE,
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        if too_few.any():
+            replicate_is_valid = replicate_is_valid & ~too_few
+        valid = np.broadcast_to(replicate_is_valid, replicates.shape)
+        counts = np.sum(replicate_is_valid, axis=0)
         with np.errstate(invalid="ignore", divide="ignore"):
             replicate_mean = (
                 np.sum(np.where(valid, transformed_replicates, 0.0), axis=0) / counts
@@ -654,7 +701,7 @@ def jackknife_confidence_interval(
     if transformation == "circular":
         lower, upper = _pin_whole_circle_interval(half_width, lower, upper)
     return JackknifeResult(
-        estimate=estimate_array,
+        estimate=estimate,
         bias_corrected=inverse(bias_corrected_transformed),
         standard_error=np.abs(derivative) * transformed_standard_error,
         confidence_interval=(lower, upper),

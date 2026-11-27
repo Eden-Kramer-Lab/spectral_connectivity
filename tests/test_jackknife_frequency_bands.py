@@ -391,6 +391,38 @@ def test_replicates_passed_back_reproduce_the_interval_with_artifacts(
     )
 
 
+def test_a_replicate_the_measure_leaves_undefined_is_nan_only_in_the_jackknife():
+    """The one difference between the two: where the measure is NaN without a
+    unit the bin has (here coherence, when the only trial in which signal 1 has
+    power is left out), the jackknife's interval is NaN, while the replicates
+    passed back get the interval of the others."""
+    rng = np.random.default_rng(0)
+    shape = (1, 5, 1, 8, 2)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    coefficients[:, 1:, :, :, 1] = 0  # signal 1 has power in trial 0 only
+    with pytest.warns(UserWarning, match="near-.zero power"):
+        result = Connectivity(coefficients).jackknife(
+            "magnitude_squared_coherence", leave_out="trial", keep_replicates=True
+        )
+    element = (0, 1, 0, 1)
+    assert np.isnan(result.replicates[(0, *element)])
+    assert np.isnan(result.standard_error[element])
+
+    passed_back = jackknife_confidence_interval(
+        result.estimate, result.replicates, transformation=result.transformation
+    )
+
+    expected = jackknife_confidence_interval(
+        result.estimate[element][np.newaxis],
+        result.replicates[1:][(slice(None), *element)][:, np.newaxis],
+        transformation=result.transformation,
+    )
+    assert passed_back.n_observations[element] == 4
+    np.testing.assert_array_equal(
+        passed_back.standard_error[element], expected.standard_error[0]
+    )
+
+
 def test_nan_replicates_are_skipped_element_by_element():
     """Each element's interval is that of its own non-NaN replicates; one
     left with fewer than 3 is NaN, with a warning, and one with none is NaN."""
@@ -1260,10 +1292,10 @@ def test_a_band_with_an_edge_invalid_bin_is_nan_in_every_replicate():
     connectivity = Connectivity.from_transform(MorletWavelet(x, **kwargs))
     bands = {"low": (4, 12), "high": (20, 38)}
 
-    with pytest.warns(UserWarning, match="leave fewer than 3 observations in 1 of 12 bins"):
-        result = connectivity.jackknife(
-            "magnitude_squared_coherence", frequency_bands=bands, keep_replicates=True
-        )
+    # A time bin without support keeps no trial: it is NaN, without a warning.
+    result = connectivity.jackknife(
+        "magnitude_squared_coherence", frequency_bands=bands, keep_replicates=True
+    )
 
     def reduced(c):
         return _reduce_all(

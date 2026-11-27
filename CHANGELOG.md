@@ -752,7 +752,9 @@ The migration guide for code written against 2.x is
   weights drop units. Callers who passed NaN replicates now get intervals
   instead of NaN; an element left with fewer than 3 is still NaN, with a
   warning, and `n_observations` is then one count per element. Passing a
-  jackknife's `estimate` and `replicates` back reproduces its interval.
+  jackknife's `estimate` and `replicates` back reproduces its interval
+  wherever the measure is defined in every replicate (the jackknife's
+  interval is NaN where a replicate is NaN for the measure's own reasons).
 - `Connectivity.jackknife` and `jackknife_confidence_interval` use a Student t
   critical value with `n_observations - 1` degrees of freedom (Thomson & Chave
   1991), not the normal quantile, which under-covers at small `n` (Monte Carlo

@@ -56,14 +56,15 @@ from spectral_connectivity.minimum_phase_decomposition import (
 from spectral_connectivity.statistics import (
     JackknifeResult,
     SurrogateTestResult,
+    _jackknife_interval,
     _normalized_axes,
     _surrogate_statistic,
     _SurrogateTally,
     _validate_alpha,
     _validate_confidence_level,
+    _validate_jackknife_transformation,
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
-    jackknife_confidence_interval,
 )
 from spectral_connectivity.transforms import VARSpectrum, _var_settings_by_keyword
 from spectral_connectivity.utils import (
@@ -3575,6 +3576,8 @@ class Connectivity:
             )
             raise ValueError(msg)
         _validate_confidence_level(confidence_level)
+        if transformation != "auto":
+            _validate_jackknife_transformation(transformation)
         keep_replicates = _validated_flag("keep_replicates", keep_replicates)
         if leave_out not in ("observation", "trial"):
             msg = f"leave_out must be 'observation' or 'trial'; got {leave_out!r}."
@@ -3818,34 +3821,24 @@ class Connectivity:
             )
             # Leaving out a unit a bin never had gives no replicate there.
             leave_one_out[~np.broadcast_to(replicate_is_valid, leave_one_out.shape)] = np.nan
-            too_few = unit_is_valid.sum(axis=0) < 3
-            if too_few.any():
-                warnings.warn(
-                    f"jackknife: observation_weights leave fewer than 3 {units} "
-                    f"in {int(too_few.sum())} of {too_few.size} bins (see "
-                    "n_valid_observations), too few for a leave-one-out interval, so "
-                    "the bias-corrected estimate, standard error and bounds are NaN "
-                    "there.",
-                    UserWarning,
-                    stacklevel=stacklevel_outside_package(),
-                )
-                replicate_is_valid = replicate_is_valid & ~too_few.reshape(
-                    replicate_is_valid.shape[1:]
-                )
-        result = jackknife_confidence_interval(
+        result = _jackknife_interval(
             full_estimate,
             leave_one_out,
             confidence_level=confidence_level,
             transformation=resolved_transformation,
+            # A NaN replicate of a unit the bin has is a NaN value of the
+            # measure, which makes the bin's interval NaN.
+            replicate_is_valid=replicate_is_valid,
             # PLV's diagonal is 1 by definition, not a saturated estimate.
-            _saturated_by_construction=(
+            saturated_by_construction=(
                 np.eye(self.n_signals, dtype=bool)
                 if method == "phase_locking_value"
                 else False
             ),
-            _replicate_is_valid=replicate_is_valid,
-            # NaN replicates that are not dropped units are NaN values here.
-            _skip_nan_replicates=False,
+            describe_too_few=lambda n_too_few, n_bins, threshold: (
+                f"jackknife: observation_weights leave fewer than {threshold} "
+                f"{units} in {n_too_few} of {n_bins} bins (see n_valid_observations)"
+            ),
         )
         if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:
             # tanh maps the atanh-scale interval onto [-1, 1], but a magnitude
