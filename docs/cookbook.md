@@ -795,6 +795,8 @@ For a band statistic of a biased measure, such as spectral Granger or
 partial coherence, center the interval on the jackknife's bias-corrected
 estimate: averaging a band shrinks the spread but not the bias, so an interval
 centered on the estimate misses (see the Notes of `Connectivity.jackknife`).
+Use it for band statistics only: at a single frequency, or for a band maximum,
+the default center is adequate and the bias-corrected one can lower coverage.
 
 ```python
 >>> corrected = connectivity.jackknife(

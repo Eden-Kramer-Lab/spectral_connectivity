@@ -500,8 +500,8 @@ def jackknife_confidence_interval(
         estimate, or on the jackknife's bias-corrected estimate,
         ``n * g(estimate) - (n - 1) * mean(g(replicates))`` (the
         ``bias_corrected`` field, with ``g`` the transformation). The half-width
-        is the same. See :meth:`Connectivity.jackknife` for when to center on
-        the bias-corrected estimate.
+        is the same. It is for band statistics of biased measures, not for
+        per-frequency intervals or band maxima: see :meth:`Connectivity.jackknife`.
 
     Returns
     -------

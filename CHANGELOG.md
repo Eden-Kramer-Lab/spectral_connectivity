@@ -215,7 +215,9 @@ The migration guide for code written against 2.x is
   Granger and 77-79% for partial coherence in simulation, against
   97.7-98.8%, 97.0-97.8% and 94.7-96.0% centered on the bias-corrected
   estimate. It does not help at zero coherence, and lowers band-maximum
-  coverage.
+  coverage. At a single frequency the default is already adequate (93-100%
+  coverage) and the bias-corrected center can lower it (to 87.5-97% for
+  Granger), so use it for band statistics, not for per-frequency intervals.
 - `Multitaper(line_frequencies=[60, 120])` removes line noise and other
   sinusoidal lines (stimulation artifacts) before the coefficients are
   computed, so every measure uses the cleaned data; the wrappers take it in

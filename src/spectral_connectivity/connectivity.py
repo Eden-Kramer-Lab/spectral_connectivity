@@ -3490,7 +3490,8 @@ class Connectivity:
             Where the interval is centered, on the transformed scale: on the
             estimate, or on the jackknife's bias-corrected estimate (the
             ``bias_corrected`` field), with the same half-width. The second is
-            for band statistics of biased measures; see Notes.
+            for band statistics (band means and integrals) of biased measures,
+            not for per-frequency intervals or band maxima; see Notes.
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -3641,8 +3642,17 @@ class Connectivity:
         coherence with
         :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`.
         Keep the default for band maxima, whose coverage it lowers (95-96% to
-        87.5-91%). [Placeholder: its effect on single-frequency intervals is
-        being measured.]
+        87.5-91%). At a single frequency the default center is already
+        adequate and the bias-corrected one can hurt: a single bin's estimate
+        has much more spread than bias (under 0.75 standard deviations, except
+        for magnitude-squared coherence at zero coherence), so the default
+        covered 93-100%, while the bias-corrected center lowered pairwise and
+        conditional Granger coverage to 87.5-97% and partial coherence to
+        90-96%, and left power and nonzero coherence unchanged (three VAR
+        models of 2, 3 and 5 signals, 1024-sample windows, NW = 3, 5 and 10
+        trials, 200-400 datasets per configuration, at a band's center and
+        edge bins). Use ``interval_center="bias_corrected"`` for band
+        statistics, not for per-frequency intervals.
 
         ``phase_slope_index``, which combines adjacent bins inside its own fit
         over ``frequency_range``, is less affected by leaving out tapers. With
