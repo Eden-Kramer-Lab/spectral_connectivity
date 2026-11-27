@@ -3410,7 +3410,8 @@ class Connectivity:
             ``frequency_bands`` the frequency axis is replaced by a band axis,
             in the mapping's order (``(n_time, n_bands, n_signals,
             n_signals)`` for the default expectation), and
-            ``JackknifeResult.frequency_bands`` names it. ``leave_out`` records
+            ``JackknifeResult.frequency_bands`` names it
+            (``frequency_reduction`` records the reduction). ``leave_out`` records
             the unit left out, and with ``keep_replicates=True``
             ``replicates`` holds the leave-one-out replicates,
             ``(n_replicates, *estimate.shape)``.
@@ -3860,6 +3861,7 @@ class Connectivity:
             result,
             replicates=leave_one_out if keep_replicates else None,
             frequency_bands=None if frequency_bands is None else dict(frequency_bands),
+            frequency_reduction=None if frequency_bands is None else frequency_reduction,
             leave_out=leave_out,
         )
 

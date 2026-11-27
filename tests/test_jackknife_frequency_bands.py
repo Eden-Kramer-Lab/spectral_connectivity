@@ -311,9 +311,14 @@ def test_replicates_are_kept_only_when_asked_for(time_series):
         np.testing.assert_array_equal(getattr(default, name), getattr(kept, name))
     assert default.frequency_bands == _BANDS
     assert list(default.frequency_bands) == ["theta", "alpha", "beta"]
+    assert default.frequency_reduction == "mean"
     assert default.leave_out == "trial"
-    unbanded = connectivity.jackknife("power")
-    assert unbanded.frequency_bands is None
+    integral = connectivity.jackknife(
+        "power", frequency_reduction="integral", one_sided=True, **kwargs
+    )
+    assert integral.frequency_reduction == "integral"
+    unbanded = connectivity.jackknife("power", frequency_reduction="integral")
+    assert (unbanded.frequency_bands, unbanded.frequency_reduction) == (None, None)
     assert unbanded.leave_out == "observation"
     with pytest.raises(TypeError, match="keep_replicates must be a bool"):
         connectivity.jackknife("power", keep_replicates="yes")
@@ -330,11 +335,20 @@ def test_jackknife_result_is_built_from_its_original_fields():
         n_observations=5,
         transformation="identity",
     )
-    assert (result.replicates, result.frequency_bands, result.leave_out) == (None, None, None)
+    assert (
+        result.replicates,
+        result.frequency_bands,
+        result.frequency_reduction,
+        result.leave_out,
+    ) == (None, None, None, None)
     replicates = np.ones((5, 3))
     direct = jackknife_confidence_interval(estimate, replicates)
     assert direct.replicates is replicates
-    assert (direct.frequency_bands, direct.leave_out) == (None, None)
+    assert (direct.frequency_bands, direct.frequency_reduction, direct.leave_out) == (
+        None,
+        None,
+        None,
+    )
 
 
 @pytest.mark.parametrize("frequency_bands", [None, _BANDS], ids=["frequencies", "bands"])

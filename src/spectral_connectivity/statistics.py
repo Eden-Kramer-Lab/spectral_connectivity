@@ -124,6 +124,10 @@ class JackknifeResult:
         the order of the estimate's band axis (``list(frequency_bands)`` names
         its entries); ``None`` when the frequencies were kept, and from
         :func:`jackknife_confidence_interval`.
+    frequency_reduction : {"mean", "integral"} or None
+        How :meth:`Connectivity.jackknife` combined each band's bins (its
+        ``frequency_reduction``); ``None`` when the frequencies were kept, and
+        from :func:`jackknife_confidence_interval`.
     leave_out : {"observation", "trial"} or None
         The unit :meth:`Connectivity.jackknife` left out; ``None`` from
         :func:`jackknife_confidence_interval`, which is given the replicates.
@@ -137,6 +141,7 @@ class JackknifeResult:
     transformation: str
     replicates: NDArray[np.floating] | None = None
     frequency_bands: Mapping[str, tuple[float, float]] | None = None
+    frequency_reduction: str | None = None
     leave_out: str | None = None
 
 
