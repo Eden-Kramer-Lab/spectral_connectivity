@@ -357,8 +357,37 @@ def test_replicates_are_kept_only_when_asked_for(time_series):
     unbanded = connectivity.jackknife("power", frequency_reduction="integral")
     assert (unbanded.frequency_bands, unbanded.frequency_reduction) == (None, None)
     assert unbanded.leave_out == "observation"
-    with pytest.raises(TypeError, match="keep_replicates must be a bool"):
-        connectivity.jackknife("power", keep_replicates="yes")
+    for value in ("yes", 1):
+        with pytest.raises(TypeError, match="keep_replicates must be a bool") as error:
+            connectivity.jackknife("power", keep_replicates=value)
+        assert "spectrum" not in str(error.value)
+
+
+@pytest.mark.parametrize("transformation", ["circular", "fisher"])
+def test_public_interval_warnings_point_at_the_caller(transformation):
+    """The whole-circle and saturated-coherence warnings of
+    jackknife_confidence_interval are attributed to the caller's line, through
+    the interval core."""
+    estimate = np.array([0.0, 1.0])
+    replicates = np.array([[3.0, 1.0], [-3.0, 1.0], [2.9, 1.0]])
+    with pytest.warns(UserWarning, match="Jackknife circular|Fisher jackknife") as caught:
+        jackknife_confidence_interval(estimate, replicates, transformation=transformation)
+    assert {record.filename for record in caught} == {__file__}
+
+
+def test_two_replicates_with_a_nan_keep_elements_with_both():
+    """With 2 replicates given, the too-few threshold is 2, not 3: an element
+    with both keeps its interval, one with a single replicate is NaN with a
+    warning."""
+    estimate = np.array([0.5, 0.5])
+    replicates = np.array([[0.4, 0.4], [0.6, np.nan]])
+    with pytest.warns(UserWarning, match="1 of 2 elements have fewer than 2 non-NaN"):
+        result = jackknife_confidence_interval(estimate, replicates)
+    np.testing.assert_array_equal(result.n_observations, [2, 0])
+    assert np.isfinite(result.standard_error[0])
+    assert np.isnan(result.standard_error[1])
+    plain = jackknife_confidence_interval(estimate[:1], replicates[:, :1])
+    np.testing.assert_array_equal(result.standard_error[:1], plain.standard_error)
 
 
 def test_jackknife_result_is_built_from_its_original_fields():

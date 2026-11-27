@@ -357,7 +357,7 @@ def _pin_whole_circle_interval(
             "the whole circle and the phase is not resolved there. Those bounds are "
             "reported as (-pi, pi).",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
         lower = np.where(whole_circle, -np.pi, lower)
         upper = np.where(whole_circle, np.pi, upper)
@@ -397,7 +397,7 @@ def _warn_fisher_boundary(at_boundary: NDArray[np.bool_]) -> None:
             "error is exactly 0 and the interval degenerates there. This reflects "
             "a boundary, not perfect certainty; interpret those values with care.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
 
 
