@@ -13,7 +13,13 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from spectral_connectivity import Connectivity, Multitaper, Welch, frequency_band_reduce
+from spectral_connectivity import (
+    Connectivity,
+    MorletWavelet,
+    Multitaper,
+    Welch,
+    frequency_band_reduce,
+)
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.statistics import JackknifeResult, jackknife_confidence_interval
 from tests._backend_helpers import to_host
@@ -225,6 +231,24 @@ def test_replicates_are_the_measure_without_each_trial_or_observation(time_serie
         by_observation.replicates, np.stack(expected_by_observation), rtol=1e-12
     )
     np.testing.assert_allclose(by_trial.replicates, np.stack(expected_by_trial), rtol=1e-12)
+    # With expectation_type="trials" the observations are the trials.
+    by_trials_expectation = Connectivity.from_transform(
+        multitaper, expectation_type="trials"
+    ).jackknife("power", keep_replicates=True)
+    np.testing.assert_allclose(
+        by_trials_expectation.replicates,
+        np.stack(
+            [
+                Connectivity(
+                    np.delete(coefficients, trial, axis=1),
+                    frequencies=multitaper.frequencies,
+                    expectation_type="trials",
+                ).power()
+                for trial in range(n_trials)
+            ]
+        ),
+        rtol=1e-12,
+    )
     # On the scale of the estimate, and the interval is theirs.
     assert by_trial.replicates.shape == (n_trials, *by_trial.estimate.shape)
     np.testing.assert_array_equal(
@@ -481,19 +505,13 @@ def test_a_two_sided_band_integral_is_refused(time_series):
     )
 
 
-@pytest.mark.parametrize(
-    ("expectation_type", "n_tapers"),
-    [("trials_tapers", 1), ("trials", 3)],
-    ids=["one_taper_per_trial", "trials"],
-)
-def test_bands_accept_observations_that_are_whole_trials(
-    time_series, expectation_type, n_tapers
-):
-    """With one taper per trial, or an expectation over trials only, each
-    observation left out is a whole trial: ``leave_out="observation"`` is
-    accepted and is the same jackknife as ``"trial"``."""
-    multitaper, _ = _connectivity(time_series, n_tapers=n_tapers)
-    connectivity = Connectivity.from_transform(multitaper, expectation_type=expectation_type)
+def test_bands_accept_observations_that_are_whole_trials(time_series):
+    """With an expectation over trials only, each observation left out is a
+    whole trial: ``leave_out="observation"`` is accepted and is the same
+    jackknife as ``"trial"`` (one taper per trial is tested with the
+    oracles below)."""
+    multitaper, _ = _connectivity(time_series)
+    connectivity = Connectivity.from_transform(multitaper, expectation_type="trials")
 
     by_observation = connectivity.jackknife(
         "magnitude_squared_coherence",
@@ -799,3 +817,477 @@ def test_band_intervals_cover_with_trials_and_not_with_tapers():
                 name,
                 taper_coverage,
             )
+
+
+# Oracles written from the definitions, not from the package's helpers: a mean
+# over the bins in [low, high] (edges included), a circular mean as the angle
+# of the mean unit phasor, and the integral of one-sided power as that of the
+# two-sided piecewise-constant density over [low, high] and [-high, -low].
+# Each replicate is recomputed from the time series without the trial.
+
+_ORACLE_N_WINDOWS = 3
+
+
+def _oracle_data(n_fft, seed=7, anti_phase=False):
+    """``(3 * n_fft, 5, 2)``: three windows of five coupled trials."""
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((_ORACLE_N_WINDOWS * n_fft, _N_TRIALS, 2))
+    if anti_phase:
+        # Phase near +/-pi everywhere: a linear mean would land near 0.
+        x[..., 1] = -x[..., 0] + 0.4 * x[..., 1]
+    else:
+        x[..., 1] += 0.6 * np.roll(x[..., 0], 2, axis=0)
+    return x
+
+
+def _oracle_connectivity(x, n_fft, expectation_type="trials_tapers", **mt_kwargs):
+    """A Multitaper of ``x`` in windows of ``n_fft`` samples, on 1 Hz bins."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        mt = Multitaper(
+            x,
+            sampling_frequency=n_fft,  # 1 Hz bins
+            n_time_samples_per_window=n_fft,
+            n_fft_samples=n_fft,
+            time_halfbandwidth_product=2,
+            **mt_kwargs,
+        )
+    return mt, Connectivity.from_transform(mt, expectation_type=expectation_type)
+
+
+def _brute_mean(values, frequencies, low, high, axis, circular=False):
+    """Mean (or circular mean) of ``values`` over the bins in ``[low, high]``."""
+    mask = (frequencies >= low - 1e-9) & (frequencies <= high + 1e-9)
+    selected = np.compress(mask, values, axis=axis)
+    if circular:
+        return np.angle(np.mean(np.exp(1j * selected), axis=axis))
+    return np.mean(selected, axis=axis)
+
+
+def _overlap(a0, a1, b0, b1):
+    return max(0.0, min(a1, b1) - max(a0, b0))
+
+
+def _brute_integral(power, n_fft, low, high, axis):
+    """Integral over the band of the two-sided density behind one-sided ``power``.
+
+    ``power`` is one-sided on bins 0..n_fft//2 (1 Hz apart): interior bins
+    hold twice the two-sided density, DC and (even n_fft) Nyquist hold it
+    once. Each two-sided bin owns a 1 Hz cell; the Nyquist cell wraps around
+    to -Nyquist.
+    """
+    low = max(low, 0.0)
+    nyquist_bin = n_fft // 2 if n_fft % 2 == 0 else None
+    weights = np.zeros(n_fft // 2 + 1)
+    for k in range(n_fft):
+        f = k if k <= n_fft // 2 else k - n_fft
+        # The Nyquist cell wraps around to -Nyquist.
+        cells = [(f - 0.5, f), (-f, -f + 0.5)] if k == nyquist_bin else [(f - 0.5, f + 0.5)]
+        covered = sum(
+            _overlap(c0, c1, low, high) + _overlap(c0, c1, -high, -low) for c0, c1 in cells
+        )
+        density_scale = 1.0 if k == 0 or k == nyquist_bin else 0.5
+        weights[abs(f)] += density_scale * covered
+    return np.tensordot(np.moveaxis(power, axis, -1), weights, axes=([-1], [0]))
+
+
+def _bands_for(n_fft):
+    top = n_fft // 2
+    return {
+        "dc": (0, 2.5),
+        "edges_between_bins": (3.3, 7.6),
+        "single_bin": (10, 10),
+        "overlap_a": (8, 14),
+        "overlap_b": (12, 20),
+        "top": (top - 4, top),
+        "everything": (0, top),
+    }
+
+
+def _reduce_all(values, frequencies, bands, reduction, axis, n_fft, circular=False):
+    """Every band of ``bands`` by the oracles, on a band axis at ``axis``."""
+    reduced = []
+    for low, high in bands.values():
+        if reduction == "integral":
+            reduced.append(_brute_integral(values, n_fft, low, high, axis))
+        else:
+            reduced.append(_brute_mean(values, frequencies, low, high, axis, circular))
+    return np.stack(reduced, axis=axis)
+
+
+@pytest.mark.parametrize("n_fft", [64, 63], ids=["even_fft", "odd_fft"])
+@pytest.mark.parametrize("reduction", ["integral", "mean"])
+# The zero-width band (10, 10) integrates to 0, which has no log.
+@pytest.mark.filterwarnings("ignore:Jackknife log transform:UserWarning")
+def test_power_band_jackknife_matches_brute_force_on_deleted_trials(n_fft, reduction):
+    """Band means and integrals of power, with edges between bins, a one-bin
+    and a zero-width band, overlapping bands, and the DC and Nyquist bins
+    (folded as a one-sided density), on even and odd FFT lengths."""
+    x = _oracle_data(n_fft)
+    _, connectivity = _oracle_connectivity(x, n_fft)
+    bands = _bands_for(n_fft)
+    frequencies = connectivity.frequencies
+
+    result = connectivity.jackknife(
+        "power",
+        leave_out="trial",
+        frequency_bands=bands,
+        frequency_reduction=reduction,
+        one_sided=True,
+        keep_replicates=True,
+    )
+
+    estimate = _reduce_all(
+        connectivity.power(one_sided=True), frequencies, bands, reduction, 1, n_fft
+    )
+    replicates = np.stack(
+        [
+            _reduce_all(
+                _oracle_connectivity(np.delete(x, k, axis=1), n_fft)[1].power(one_sided=True),
+                frequencies,
+                bands,
+                reduction,
+                1,
+                n_fft,
+            )
+            for k in range(_N_TRIALS)
+        ]
+    )
+    assert result.estimate.shape == (_ORACLE_N_WINDOWS, len(bands), 2)
+    np.testing.assert_allclose(result.estimate, estimate, rtol=1e-12)
+    np.testing.assert_allclose(result.replicates, replicates, rtol=1e-12)
+    if reduction == "integral" and n_fft % 2 == 0:
+        # Parseval: the whole grid integrates to the sum of the two-sided
+        # density over every FFT bin (power(one_sided=False) holds its
+        # non-negative half; each interior bin has a mirror image).
+        half = connectivity.power(one_sided=False)
+        two_sided_total = 2 * half.sum(axis=1) - half[:, 0] - half[:, -1]
+        np.testing.assert_allclose(result.estimate[:, -1], two_sided_total, rtol=1e-12)
+
+
+def test_circular_band_mean_of_phase_near_pi_with_trials_expectation():
+    """``expectation_type="trials"`` keeps the taper axis, so the frequency
+    axis is third; leaving out an observation is leaving out a trial. The
+    phase sits near +/-pi, where a linear mean would be near 0."""
+    n_fft = 64
+    x = _oracle_data(n_fft, anti_phase=True)
+    _, connectivity = _oracle_connectivity(x, n_fft, expectation_type="trials")
+    bands = _bands_for(n_fft)
+    frequencies = connectivity.frequencies
+
+    result = connectivity.jackknife(
+        "coherence_phase", frequency_bands=bands, keep_replicates=True
+    )
+
+    estimate = _reduce_all(
+        connectivity.coherence_phase(), frequencies, bands, "mean", 2, n_fft, circular=True
+    )
+    replicates = np.stack(
+        [
+            _reduce_all(
+                _oracle_connectivity(
+                    np.delete(x, k, axis=1), n_fft, expectation_type="trials"
+                )[1].coherence_phase(),
+                frequencies,
+                bands,
+                "mean",
+                2,
+                n_fft,
+                circular=True,
+            )
+            for k in range(_N_TRIALS)
+        ]
+    )
+    assert result.estimate.shape[:3] == (_ORACLE_N_WINDOWS, 3, len(bands))  # 3 tapers kept
+    assert result.transformation == "circular"
+    off_diagonal = (..., 0, 1)
+    assert np.all(np.abs(result.estimate[off_diagonal]) > 2.5)  # near +/-pi
+    np.testing.assert_allclose(
+        np.exp(1j * result.estimate[off_diagonal]),
+        np.exp(1j * estimate[off_diagonal]),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.exp(1j * result.replicates[off_diagonal]),
+        np.exp(1j * replicates[off_diagonal]),
+        atol=1e-12,
+    )
+
+
+def test_directed_band_jackknife_matches_deleted_trials():
+    n_fft = 64
+    x = _oracle_data(n_fft)
+    _, connectivity = _oracle_connectivity(x, n_fft)
+    bands = {"low": (2, 9), "mid": (9, 20)}
+    frequencies = connectivity.frequencies
+    method = "pairwise_spectral_granger_prediction"
+
+    result = connectivity.jackknife(
+        method, leave_out="trial", frequency_bands=bands, keep_replicates=True
+    )
+
+    replicates = np.stack(
+        [
+            _reduce_all(
+                getattr(_oracle_connectivity(np.delete(x, k, axis=1), n_fft)[1], method)(),
+                frequencies,
+                bands,
+                "mean",
+                1,
+                n_fft,
+            )
+            for k in range(_N_TRIALS)
+        ]
+    )
+    estimate = _reduce_all(
+        getattr(connectivity, method)(), frequencies, bands, "mean", 1, n_fft
+    )
+    np.testing.assert_allclose(result.estimate, estimate, rtol=1e-9, equal_nan=True)
+    np.testing.assert_allclose(result.replicates, replicates, rtol=1e-9, equal_nan=True)
+    # 0 -> 1 is driven in this simulation; its band estimate is positive.
+    assert np.all(result.estimate[:, :, 0, 1] > 0)
+
+
+def test_missing_data_tapers_replicates_use_the_kept_tapers_weights():
+    """Under ``missing_data_tapers`` a trial window with an artifact keeps only
+    its concentrated tapers (others weight 0). Each trial replicate is the
+    measure of the same masked data without that trial."""
+    n_fft = 64
+    x = _oracle_data(n_fft)
+    x[70:74, 1, 0] = np.nan  # trial 1, window 1
+    x[5:8, 3, 1] = np.nan  # trial 3, window 0
+    kwargs = {"artifact_samples": "nonfinite", "artifact_handling": "missing_data_tapers"}
+    mt, connectivity = _oracle_connectivity(x, n_fft, **kwargs)
+    assert (to_host(mt.observation_weights) == 0).any()  # some tapers are dropped
+    bands = {"a": (3, 9), "b": (10, 25)}
+    frequencies = connectivity.frequencies
+
+    for method, reduction in (("magnitude_squared_coherence", "mean"), ("power", "integral")):
+        result = connectivity.jackknife(
+            method,
+            leave_out="trial",
+            frequency_bands=bands,
+            frequency_reduction=reduction,
+            keep_replicates=True,
+        )
+        replicates = np.stack(
+            [
+                _reduce_all(
+                    getattr(
+                        _oracle_connectivity(np.delete(x, k, axis=1), n_fft, **kwargs)[1],
+                        method,
+                    )(),
+                    frequencies,
+                    bands,
+                    reduction,
+                    1,
+                    n_fft,
+                )
+                for k in range(_N_TRIALS)
+            ]
+        )
+        np.testing.assert_allclose(result.replicates, replicates, rtol=1e-10, equal_nan=True)
+        # MSC's diagonal is NaN by policy; the rest has an interval.
+        assert np.isfinite(
+            result.standard_error[..., 0, 1] if method != "power" else result.standard_error
+        ).all()
+
+
+def test_a_trial_dropped_from_every_window_gives_no_replicate():
+    """``replicates`` omits a unit the weights drop from every bin; the
+    others are the measure without each remaining trial."""
+    n_fft = 64
+    x = _oracle_data(n_fft)
+    for window in range(_ORACLE_N_WINDOWS):
+        x[window * n_fft + 3, 2, 0] = np.nan  # trial 2 dropped everywhere
+    mt_kwargs = {"artifact_samples": "nonfinite"}
+    _, connectivity = _oracle_connectivity(x, n_fft, **mt_kwargs)
+    bands = {"a": (3, 9), "b": (10, 25)}
+
+    result = connectivity.jackknife(
+        "magnitude_squared_coherence",
+        leave_out="trial",
+        frequency_bands=bands,
+        keep_replicates=True,
+    )
+
+    clean = np.delete(x, 2, axis=1)
+    frequencies = connectivity.frequencies
+    replicates = np.stack(
+        [
+            _reduce_all(
+                _oracle_connectivity(np.delete(clean, k, axis=1), n_fft)[
+                    1
+                ].magnitude_squared_coherence(),
+                frequencies,
+                bands,
+                "mean",
+                1,
+                n_fft,
+            )
+            for k in range(_N_TRIALS - 1)
+        ]
+    )
+    assert result.replicates.shape[0] == _N_TRIALS - 1
+    assert np.all(np.asarray(result.n_observations) == _N_TRIALS - 1)
+    np.testing.assert_allclose(result.replicates, replicates, rtol=1e-11, equal_nan=True)
+
+
+# --- Monte Carlo: band power integral (log) and circular band phase --------------
+
+
+@pytest.fixture(scope="module")
+def monte_carlo_connectivity():
+    """3000 datasets of 6 trials x 64 samples, one per time window."""
+    n_time, n_trials, n_datasets = 64, 6, 3000
+    segments = simulate_MVAR(
+        _VAR_COEFFICIENTS,
+        noise_covariance=_VAR_NOISE_COVARIANCE,
+        n_time_samples=n_time,
+        n_trials=n_datasets * n_trials,
+        n_burnin_samples=200,
+        random_state=20261128,
+    )
+    time_series = (
+        segments.reshape(n_time, n_datasets, n_trials, 2)
+        .transpose(1, 0, 2, 3)
+        .reshape(n_datasets * n_time, n_trials, 2)
+    )
+    multitaper = Multitaper(
+        time_series,
+        sampling_frequency=n_time,
+        n_time_samples_per_window=n_time,
+        time_halfbandwidth_product=3,
+    )
+    return multitaper, Connectivity.from_transform(multitaper)
+
+
+def test_band_power_integral_interval_covers_the_expected_band_power(monte_carlo_connectivity):
+    """95% log-scale intervals for band power (an integral with fractional
+    edge cells) cover the integral of the expected multitaper spectrum."""
+    multitaper, connectivity = monte_carlo_connectivity
+    bands = {"low": (3.5, 10.5), "high": (12.25, 19.75)}
+    frequencies = connectivity.frequencies
+    expected = _expected_multitaper_cross_spectrum(
+        multitaper, _VAR_COEFFICIENTS, _VAR_NOISE_COVARIANCE
+    )
+    true_power = 2 * expected[: frequencies.size, 0, 0].real  # interior bins
+    n_fft = 2 * (frequencies.size - 1)
+    result = connectivity.jackknife(
+        "power", leave_out="trial", frequency_bands=bands, frequency_reduction="integral"
+    )
+    nominal = 0.95
+    for band, (low, high) in enumerate(bands.values()):
+        target = _brute_integral(true_power[np.newaxis], n_fft, low, high, axis=1)[0]
+        lower, upper = (bound[:, band, 0] for bound in result.confidence_interval)
+        covered = ((lower <= target) & (target <= upper)).astype(float)
+        coverage, limit = replicate_mean_and_limit(covered)
+        # Beyond sampling error, the jackknife and Student t approximations
+        # with 6 trials: measured 93.7-95.3% over both bands and seeds
+        # 20261128 and 1-3.
+        allowance = 0.01
+        assert abs(coverage - nominal) <= limit + allowance, (band, coverage, limit)
+
+
+def test_circular_band_phase_interval_covers_the_expected_band_phase(monte_carlo_connectivity):
+    """95% circular intervals of the band-mean coherence phase cover the
+    circular band mean of the expected spectrum's phase where coherence is
+    strong."""
+    multitaper, connectivity = monte_carlo_connectivity
+    bands = {"low": (4, 10)}
+    frequencies = connectivity.frequencies
+    expected = _expected_multitaper_cross_spectrum(
+        multitaper, _VAR_COEFFICIENTS, _VAR_NOISE_COVARIANCE
+    )[: frequencies.size]
+    phase = np.angle(expected[:, 0, 1])
+    in_band = (frequencies >= 4) & (frequencies <= 10)
+    target = np.angle(np.mean(np.exp(1j * phase[in_band])))
+    result = connectivity.jackknife(
+        "coherence_phase", leave_out="trial", frequency_bands=bands
+    )
+    lower, upper = (bound[:, 0, 0, 1] for bound in result.confidence_interval)
+    # The interval [lower, upper] on the circle (lower > upper wraps).
+    covered = np.where(
+        lower <= upper,
+        (lower <= target) & (target <= upper),
+        (target >= lower) | (target <= upper),
+    ).astype(float)
+    coverage, limit = replicate_mean_and_limit(covered)
+    # Measured 94.6-94.9% over seeds 20261128 and 1-3.
+    allowance = 0.01
+    assert abs(coverage - 0.95) <= limit + allowance, (coverage, limit)
+
+
+def test_a_band_with_an_edge_invalid_bin_is_nan_in_every_replicate():
+    """``MorletWavelet(edge_mode="nan")`` leaves the low frequencies of the
+    first and last time bins without support: a band containing any such bin
+    is NaN there in the estimate and in every replicate (no NaN-skipping),
+    and a band with full support has an interval."""
+    rng = np.random.default_rng(3)
+    x = rng.standard_normal((600, _N_TRIALS, 2))
+    x[..., 1] += 0.6 * np.roll(x[..., 0], 2, axis=0)
+    frequencies = np.arange(4.0, 40.0, 2.0)
+    kwargs = {
+        "sampling_frequency": 200.0,
+        "frequencies": frequencies,
+        "edge_mode": "nan",
+        "decimation": 50,
+    }
+    connectivity = Connectivity.from_transform(MorletWavelet(x, **kwargs))
+    bands = {"low": (4, 12), "high": (20, 38)}
+
+    with pytest.warns(UserWarning, match="leave fewer than 3 observations in 1 of 12 bins"):
+        result = connectivity.jackknife(
+            "magnitude_squared_coherence", frequency_bands=bands, keep_replicates=True
+        )
+
+    def reduced(c):
+        return _reduce_all(
+            c.magnitude_squared_coherence(), frequencies, bands, "mean", 1, None
+        )
+
+    replicates = np.stack(
+        [
+            reduced(
+                Connectivity.from_transform(MorletWavelet(np.delete(x, k, axis=1), **kwargs))
+            )
+            for k in range(_N_TRIALS)
+        ]
+    )
+    estimate = reduced(connectivity)
+    off_diagonal = (..., 0, 1)
+    # Some, not all, (time, band) cells are NaN.
+    assert 0 < np.isnan(estimate[off_diagonal]).sum() < estimate[off_diagonal].size
+    np.testing.assert_array_equal(
+        np.isnan(result.estimate[off_diagonal]), np.isnan(estimate[off_diagonal])
+    )
+    np.testing.assert_allclose(result.estimate, estimate, rtol=1e-11, equal_nan=True)
+    np.testing.assert_allclose(result.replicates, replicates, rtol=1e-11, equal_nan=True)
+    finite = ~np.isnan(estimate[off_diagonal])
+    assert np.isfinite(result.standard_error[off_diagonal][finite]).all()
+
+
+def test_one_taper_per_trial_with_artifacts_observation_equals_trial():
+    """With one taper per trial each observation is a trial, also when
+    artifacts drop trials from some windows: ``leave_out="observation"``
+    gives the same replicates (NaN where the window lacks the trial) and
+    interval as ``"trial"``."""
+    n_fft = 64
+    x = _oracle_data(n_fft)
+    x[70, 1, 0] = np.nan  # trial 1 dropped from window 1
+    x[5, 3, 1] = np.nan  # trial 3 dropped from window 0
+    _, connectivity = _oracle_connectivity(x, n_fft, artifact_samples="nonfinite", n_tapers=1)
+    bands = {"a": (3, 9), "b": (10, 25)}
+    kwargs = {
+        "frequency_bands": bands,
+        "frequency_reduction": "integral",
+        "keep_replicates": True,
+    }
+    by_observation = connectivity.jackknife("power", **kwargs)
+    by_trial = connectivity.jackknife("power", leave_out="trial", **kwargs)
+    assert np.isnan(by_trial.replicates[1, 1]).all()
+    assert np.isnan(by_trial.replicates[3, 0]).all()
+    for name in ("estimate", "standard_error", "replicates", "bias_corrected"):
+        np.testing.assert_array_equal(
+            getattr(by_observation, name), getattr(by_trial, name), err_msg=name
+        )
