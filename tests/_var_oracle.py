@@ -318,6 +318,46 @@ def _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft):
     return _block_granger_from_state_space(coefficients, noise_covariance, n_fft, blocks)
 
 
+def _state_space_conditional_granger(coefficients, noise_covariance, n_fft, target, source):
+    """Conditional spectral Granger ``source -> target | others`` via state space.
+
+    Independent oracle following Barnett & Seth (2015): the VAR is written in
+    innovations form, the reduced model without ``source`` is obtained from the
+    discrete algebraic Riccati equation (no reduced regression and no spectral
+    factorization), and Geweke's conditional formula is evaluated with the
+    reduced model's inverse transfer function. Returns values on the
+    non-negative FFT grid.
+    """
+    n_lags, n_signals, _ = coefficients.shape
+    A, C, K, Q = _state_space_form(coefficients, noise_covariance)
+    V = noise_covariance
+    reduced = [i for i in range(n_signals) if i != source]
+    C_r, R, S = _observed_subsystem(C, K, V, reduced)
+    P = _prediction_error_covariance(A, C_r, Q, R, S)
+    V_r = C_r @ P @ C_r.conj().T + R
+    K_r = (A @ P @ C_r.conj().T + S) @ np.linalg.inv(V_r)
+    target_r = reduced.index(target)
+    others = [i for i in range(n_signals) if i != target]
+    partial = (
+        V[np.ix_(others, others)]
+        - np.outer(V[others, target], V[target, others]) / V[target, target]
+    )
+    L = np.linalg.cholesky(partial)
+    identity = np.eye(n_signals * n_lags)
+    omegas = 2 * np.pi * np.arange(n_fft // 2 + 1) / n_fft
+    values = np.empty(omegas.size)
+    for k, omega in enumerate(omegas):
+        z = np.exp(1j * omega)
+        H = np.eye(n_signals) + C @ np.linalg.solve(z * identity - A, K)
+        B_r = np.eye(len(reduced)) - C_r @ np.linalg.solve(z * identity - (A - K_r @ C_r), K_r)
+        H_r = B_r[target_r] @ H[np.ix_(reduced, others)] @ L
+        reduced_variance = np.real(V_r[target_r, target_r])
+        values[k] = np.log(reduced_variance) - np.log(
+            reduced_variance - np.real(H_r @ H_r.conj())
+        )
+    return values
+
+
 def _var_autocovariance(coefficients, noise_covariance, max_lag):
     """``Gamma(h) = E[x(t + h) x(t)^T]`` of a VAR for ``h = 0 ... max_lag``,
     shape ``(max_lag + 1, n_signals, n_signals)``.

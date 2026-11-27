@@ -376,6 +376,11 @@ attributes, the `fft()` ownership rule, and the scaling that makes `power()` a
 density; the cookbook has a
 [worked example](docs/cookbook.md#plug-in-your-own-transform).
 
+For the exact connectivity of a VAR model, `VARSpectrum(coefficients,
+noise_covariance=None, sampling_frequency=...)` is a transform with the model's
+own spectrum; see the
+[cookbook recipe](docs/cookbook.md#exact-connectivity-of-a-var-model).
+
 For DPSS transforms, `taper_weighting="uniform"` preserves the historical
 behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies
 Thomson's frequency- and signal-specific iterative weights (useful when high

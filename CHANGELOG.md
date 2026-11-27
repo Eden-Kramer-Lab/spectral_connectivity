@@ -84,6 +84,21 @@ The migration guide for code written against 2.x is
   coherence statistics, 1 for the power statistics), a bin that keeps too
   few, gives NaN there, where the others raised; the power statistics accept
   the NaN power of such a bin. A single count below that still raises.
+- `VARSpectrum(coefficients, noise_covariance=None, sampling_frequency=...)`,
+  a transform whose spectrum is exactly that of a vector autoregressive model
+  (coefficients as for `simulate_MVAR` and statsmodels' `VARResults.coefs`,
+  optionally one model per time window), and `Connectivity.from_var(...)`, the
+  shortcut for `Connectivity.from_transform(VARSpectrum(...))`. Label its
+  results with `connectivity_to_xarray`; `multitaper_connectivity` and
+  `fourier_connectivity` now name that route when given a transform. See the
+  `VARSpectrum` docstring for which measures are defined and how exact they
+  are.
+- `is_exact_spectrum`, an optional `SpectralTransform` attribute and a
+  keyword-only `Connectivity` argument and property, for coefficients that
+  are one factorization of a cross-spectral matrix rather than samples. The
+  measures that need samples, `jackknife`, `surrogate_test`,
+  `partial_coherence(shrinkage="auto")`, and `observation_weights` are then
+  refused. Labeled results record `is_exact_spectrum`.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working

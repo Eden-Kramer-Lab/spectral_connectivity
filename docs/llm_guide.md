@@ -129,8 +129,8 @@ Prefer the wrapper's labeled results so you never index these by hand.
   [Pitfalls](choosing_a_measure.md#pitfalls) cover the mistakes common to
   every measure.
 - **Use the shared result schema.** Common attrs include `transform`,
-  `sampling_frequency` when known, `n_observations`, independence flags, and
-  `output_schema_version=1`. Remaining settings are in
+  `sampling_frequency` when known, `n_observations`, independence flags,
+  `is_exact_spectrum`, and `output_schema_version=1`. Remaining settings are in
   `transform_parameters_json`, with `estimator`/`execution` records. The 15
   released `mt_*` attributes are compatibility copies scheduled for removal
   in 4.0. Multitaper's `frequency_resolution` property and helper names remain
@@ -270,4 +270,8 @@ True
 - Each `Connectivity` measure's docstring has a runnable example.
 - `help(spectral_connectivity.SpectralTransform)` for the interface a custom
   transform needs to work with `Connectivity.from_transform`.
+- `help(spectral_connectivity.VARSpectrum)` for the exact connectivity of a
+  VAR model (label it with `connectivity_to_xarray`, not
+  `multitaper_connectivity`; see the
+  [cookbook recipe](cookbook.md#exact-connectivity-of-a-var-model)).
 - The [Cookbook](cookbook.md) has recipes for common tasks.

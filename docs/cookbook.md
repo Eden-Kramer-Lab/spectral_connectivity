@@ -954,6 +954,122 @@ True
 
 ```
 
+## Exact connectivity of a VAR model
+
+`VARSpectrum` is a transform whose spectrum is that of a vector autoregressive
+(VAR) model, `x(t) = sum_k A_k x(t - k) + e(t)`, so every measure of the
+cross-spectral matrix it gives is the model's population value, with no
+estimation error: what an estimate of data simulated from the model should
+find, or the connectivity of a model fitted elsewhere. Label its results with
+`connectivity_to_xarray(transform, method)`, one measure per call
+(`multitaper_connectivity` estimates from a time series and does not take a
+transform); `Connectivity.from_var(...)`, the shortcut for
+`Connectivity.from_transform(VARSpectrum(...))`, gives the arrays.
+`coefficients[k - 1]` is `A_k`, with the lag on the first axis (for MVGC's
+MATLAB layout `A(:, :, k)`, pass `np.moveaxis(A, -1, 0)`), and its entry
+`[i, j]` is the effect of signal `j` on signal `i`, as in `simulate_MVAR`: it
+appears in the results as `source=j`, `target=i`. `noise_covariance` is the
+covariance of `e(t)` (the identity by default).
+
+```python
+>>> from spectral_connectivity import Connectivity, VARSpectrum
+>>> from spectral_connectivity.simulate import simulate_MVAR
+>>> from spectral_connectivity.wrapper import connectivity_to_xarray
+>>> coefficients = np.array(
+...     [[[0.5, 0.0], [0.4, 0.5]], [[-0.6, 0.0], [0.0, -0.6]]]
+... )  # (n_lags, n_signals, n_signals): signal "a" drives "b", never the reverse
+>>> var = VARSpectrum(coefficients, sampling_frequency=500)
+>>> granger = connectivity_to_xarray(
+...     var, "pairwise_spectral_granger_prediction", signal_names=["a", "b"]
+... )
+>>> bool(granger.sel(source="a", target="b").max() > 0.1)
+True
+>>> bool(granger.sel(source="b", target="a").max() < 1e-9)  # exactly 0 up to rounding
+True
+
+```
+
+`power` is the model's one-sided power spectral density, in the units a
+multitaper estimate of the simulated process converges to. Give the model the
+estimate's frequency grid (an `n_fft_samples` equal to the estimate's, or a
+multiple of it), and, without detrending (which removes 0 Hz), 200 trials of
+one-second windows agree with it to within their sampling error, 3% per bin:
+
+```python
+>>> simulated = simulate_MVAR(coefficients, n_time_samples=500, n_trials=200, random_state=0)
+>>> estimate = multitaper_connectivity(
+...     simulated, sampling_frequency=500, method="power", detrend_type=None
+... ).isel(time=0)
+>>> on_its_grid = VARSpectrum(coefficients, sampling_frequency=500, n_fft_samples=500)
+>>> true_power = connectivity_to_xarray(on_its_grid, "power").isel(time=0)
+>>> ratio = estimate / true_power
+>>> bool(abs(float(ratio.mean()) - 1) < 0.02), bool(abs(ratio - 1).max() < 0.15)
+(True, True)
+
+```
+
+The same comparison for spectral Granger prediction shows how far an estimate
+of these 200 trials lies from the model's value (0.75 at its peak):
+
+```python
+>>> granger_estimate = multitaper_connectivity(
+...     simulated,
+...     sampling_frequency=500,
+...     method="pairwise_spectral_granger_prediction",
+...     detrend_type=None,
+...     signal_names=["a", "b"],
+... ).isel(time=0)
+>>> true_granger = connectivity_to_xarray(
+...     on_its_grid, "pairwise_spectral_granger_prediction", signal_names=["a", "b"]
+... ).isel(time=0)
+>>> error = abs(granger_estimate - true_granger)
+>>> bool(error.sel(source="a", target="b").max() < 0.1)
+True
+>>> bool(error.sel(source="b", target="a").max() < 0.01)
+True
+
+```
+
+The coefficients that `VARSpectrum.fft()` returns are one factorization of the
+model's spectrum, not samples, so the measures computed from each trial and
+taper or from their count (the phase-locking and phase-lag families, pairwise
+phase consistency, `delay`, `group_delay`) raise rather than return values that
+depend on that choice, as do `jackknife`, `surrogate_test`, and
+`partial_coherence(shrinkage="auto")`, which estimate sampling error. Estimate those from simulated data.
+
+```python
+>>> Connectivity.from_var(coefficients, sampling_frequency=500).phase_locking_value()
+Traceback (most recent call last):
+...
+ValueError: phase_locking_value is not defined for an exact spectrum ...
+
+```
+
+A model fitted by statsmodels (not a dependency of this package) has the same
+convention. `fitted.coefs` is `(n_lags, n_signals, n_signals)` and
+`fitted.sigma_u` the innovation covariance. The fitted intercept is ignored
+(it sets the mean, not the spectrum), and `VARSpectrum` refuses an unstable
+fit, which `fitted.is_stable()` reports beforehand:
+
+```python
+from statsmodels.tsa.api import VAR
+
+fitted = VAR(simulated[:, 0, :]).fit(maxlags=2)  # one trial: (n_time_samples, n_signals)
+assert fitted.is_stable()
+connectivity = Connectivity.from_var(fitted.coefs, fitted.sigma_u, sampling_frequency=500)
+```
+
+Give `coefficients` a leading `n_time_windows` axis for a time-varying model
+(one model per window, with `noise_covariance` shared or per window, and
+`time=` the window times in seconds). The frequency grid defaults to the
+shortest one that does not limit the directed measures' accuracy
+(`VARSpectrum.minimum_n_fft_samples`), which grows as the model's poles near
+the unit circle. A shorter `n_fft_samples` warns: power and the coherence
+family stay exact on any grid, the directed measures do not. On the default
+grid the directed measures are exact to the Wilson factorization's tolerance
+(`minimum_phase_tolerance`, 1e-8 by default), and to float64 rounding where
+the spectrum is nearly singular.
+
 ## Result schema and transform bandwidth
 
 The xarray interfaces share `output_schema_version=1`. Common provenance is on
@@ -965,12 +1081,13 @@ facts needed to interpret it. Settings use one JSON record:
 | `output_schema_version` | `1`: the version of the layout this table describes. |
 | `package`, `package_version` | `spectral_connectivity` and the installed version that computed the result. |
 | `input_attrs_json` | The attributes of an input `xarray.DataArray` (e.g. subject or session metadata), as one canonical JSON record, so arbitrary keys keep their names; an array value of more than 100 elements is recorded as its shape and dtype. Present only when the input had attributes. |
-| `transform` | `multitaper`, `stft`, `welch`, `morlet`, or `external_fourier`. |
+| `transform` | `multitaper`, `stft`, `welch`, `morlet`, `var_spectrum`, or `external_fourier`. |
 | `sampling_frequency` | Physical sampling rate in Hz, included only when known. |
 | `n_trials`, `n_signals` | Known trial and signal counts; an arbitrary external observation axis is not labeled as trials. |
-| `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. |
+| `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. Not recorded for an exact spectrum. |
 | `expectation_type` | Axes averaged to form each spectral estimate. |
-| `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. |
+| `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. `observations_are_independent` is not recorded for an exact spectrum. |
+| `is_exact_spectrum` | 1 when the coefficients are one factor of an exact cross-spectral matrix rather than samples (`VARSpectrum`): the values are a model's population values, and the result records no observation count or independence. 0 otherwise. |
 | `backend` | `cpu` or `gpu`, reflecting the imported backend. |
 | `transform_parameters_json` | Remaining settings in `estimator` and `execution` records; optional settings use JSON `null`. |
 | `spectral_bandwidth`, `spectral_bandwidth_definition`, `spectral_bandwidth_units` | Qualified estimator bandwidth, when defined. |

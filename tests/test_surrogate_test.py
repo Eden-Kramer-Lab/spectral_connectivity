@@ -937,12 +937,17 @@ def test_rotation_edges_use_the_frequency_range_rule_for_boundary_bins():
     assert np.isfinite(psi.p_value[0, 0, 1])
 
 
-def test_an_exact_spectrum_is_refused(small_connectivity, monkeypatch):
+def test_an_exact_spectrum_is_refused():
     """An exact spectrum (pseudo-observations from a VAR model) has no sampling
-    error to test against. ``_is_exact_spectrum`` is set by Connectivity where
-    exact spectra exist; set it here so the refusal is tested on every branch."""
-    monkeypatch.setattr(small_connectivity, "_is_exact_spectrum", True, raising=False)
-    with pytest.raises(ValueError, match="exact spectrum"):
-        small_connectivity.surrogate_test(
-            "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=3
-        )
+    error to test against, so the test refuses it before drawing surrogates."""
+    connectivity = Connectivity.from_var(
+        np.array([[[0.5, 0.0], [0.4, 0.5]]]), np.eye(2), sampling_frequency=100
+    )
+    for kind in ("trial_shuffle", "phase_rotation", "conjugation"):
+        with pytest.raises(
+            ValueError, match=r"^surrogate_test is not defined for an exact spectrum"
+        ) as info:
+            connectivity.surrogate_test(
+                "magnitude_squared_coherence", kind=kind, n_surrogates=3
+            )
+        assert "simulate_MVAR" in str(info.value)
