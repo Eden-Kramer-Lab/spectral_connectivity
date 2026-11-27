@@ -230,7 +230,9 @@ covering functional and directed connectivity, reading the labeled output,
 frequency bands, and using your own Fourier coefficients. To check a recording
 for line noise first, `Multitaper.harmonic_f_test()` tests every frequency for
 a sinusoid
-([recipe](docs/cookbook.md#find-line-noise-with-the-harmonic-f-test)).
+([recipe](docs/cookbook.md#find-line-noise-with-the-harmonic-f-test)), and
+`line_frequencies` removes the lines
+([recipe](docs/cookbook.md#remove-line-noise-before-computing-connectivity)).
 
 Crop, decimate, or aggregate the frequency coordinate without losing labels:
 
@@ -369,8 +371,12 @@ segment-averaged estimate, and `MorletWavelet` for time-resolved analysis at
 specific frequencies. `Welch`'s spectral bandwidth
 (`equivalent_noise_bandwidth`) is `1.5 / segment_duration` Hz for its Hann
 window, so set `segment_duration` explicitly for electrophysiology data.
-`MorletWavelet.valid_time_frequency` identifies bins with full in-record support;
-the xarray wrapper carries it as a two-dimensional coordinate.
+`MorletWavelet.valid_time_frequency` identifies bins with full in-record support.
+For labeled results from any of these transforms, use
+`spectral_connectivity.connectivity_to_xarray(transform, method)`, which
+takes one measure name or a list of them and the same frequency options as
+`multitaper_connectivity`; it carries `valid_time_frequency` as a
+two-dimensional coordinate.
 
 `Connectivity.from_transform` also accepts your own transform: any object
 satisfying the `SpectralTransform` protocol (an `fft()` method plus

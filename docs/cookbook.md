@@ -258,8 +258,9 @@ go in `connectivity_kwargs`:
 Each setting has one route, so a common setting placed in `transform_kwargs`
 raises `ValueError` instead of silently competing with its named argument, and
 a misspelled key in either mapping raises `TypeError`. `connectivity_to_xarray`
-takes an existing transform, so it has `connectivity_kwargs` (and the named
-`group_labels` and `frequency_range`) but no `transform_kwargs`. The working
+takes an existing transform, so it has `connectivity_kwargs` and the named
+`group_labels`, `frequency_range`, `frequency_decimation`, `frequency_bands`,
+and `frequency_reduction`, but no `transform_kwargs`. The working
 precision `dtype` and the Wilson factorization's `minimum_phase_tolerance` and
 `minimum_phase_max_iterations`, used by the directed measures, are named
 arguments of every wrapper; in `connectivity_kwargs` they raise `ValueError`.
@@ -734,6 +735,26 @@ bands. The `frequency` axis is replaced by a labeled `band` axis.
 
 ```
 
+For `Welch`, `ShortTimeFourierTransform`, `MorletWavelet`, or your own
+transform, `connectivity_to_xarray` takes the transform, a list of measures,
+and the same frequency options:
+
+```python
+>>> from spectral_connectivity import Welch
+>>> from spectral_connectivity import connectivity_to_xarray
+>>> welch = Welch(time_series, sampling_frequency=500, segment_duration=0.5)
+>>> welch_bands = connectivity_to_xarray(
+...     welch,
+...     ["power", "magnitude_squared_coherence"],
+...     frequency_bands={"theta": (4, 8), "gamma": (30, 50)},
+... )
+>>> list(welch_bands.data_vars)
+['power', 'magnitude_squared_coherence']
+>>> welch_bands["power"].dims
+('time', 'band', 'source')
+
+```
+
 For a confidence interval on a band value, see
 [Intervals for band statistics](#intervals-for-band-statistics).
 
@@ -908,11 +929,12 @@ band whose edge falls between the last kept bin and its dropped neighbour
 comes out low by the part of the band in that neighbour's cell (up to half a
 bin's cell at each end: 2.5% of a 20 Hz band per end on 1 Hz bins). A band
 limits itself, so reduce the uncropped
-result, or crop at least one bin wider than the bands. `multitaper_connectivity`
-and `fourier_connectivity` integrate the uncropped grid themselves when given
-`frequency_range` together with `frequency_bands`; for
-`ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` results, which go
-through `connectivity_to_xarray`, leave its `frequency_range` unset.
+result, or crop at least one bin wider than the bands. The wrappers
+(`multitaper_connectivity`, `fourier_connectivity`, and `connectivity_to_xarray`,
+the route for `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` results)
+integrate the uncropped grid themselves when given `frequency_range` together
+with `frequency_bands`, so pass the bands to the wrapper rather than reducing
+its cropped result.
 
 Before 3.0 these three measures took `frequencies_of_interest=(low, high)`,
 which excludes a bin lying on either edge. It still works through 3.x, with
@@ -1022,7 +1044,47 @@ of 0 Hz and Nyquist are NaN, because there a line overlaps its mirror image.
 A narrow rhythm in the background also tests as line-like. The Notes of
 `Multitaper.harmonic_f_test` give the sizes of these effects. For a false
 discovery rate over the frequencies of each window, trial, and signal, pass
-the p-values to `adjust_for_multiple_comparisons` with `axis=2`.
+the p-values to `adjust_for_multiple_comparisons` with `axis=2`. To remove
+the lines found, see the next recipe.
+
+## Remove line noise before computing connectivity
+
+`line_frequencies` makes the transform fit the named lines in every window,
+trial, and signal (at exactly those frequencies, by the same harmonic
+regression) and subtract them before the coefficients are computed, so every
+measure uses the cleaned data. Through the wrappers it is a `transform_kwargs`
+setting:
+
+```python
+>>> settings = dict(
+...     sampling_frequency=sampling_frequency, time_window_duration=1.0,
+...     time_halfbandwidth_product=4, method="power",
+... )
+>>> raw = multitaper_connectivity(recording, **settings)
+>>> cleaned = multitaper_connectivity(
+...     recording, transform_kwargs={"line_frequencies": [60, 120]}, **settings
+... )
+>>> def power_at(result, frequency):
+...     return float(result.sel(frequency=frequency).isel(source=0).mean())
+>>> # Before, 60 and 120 Hz stand far above the noise (at 90 Hz); after, they do not
+>>> [power_at(raw, f) > 5 * power_at(raw, 90) for f in (60, 120)]
+[True, True]
+>>> [power_at(cleaned, f) < 1.5 * power_at(cleaned, 90) for f in (60, 120)]
+[True, True]
+>>> cleaned.attrs["mt_n_tapers"], "line_frequencies" in cleaned.attrs["transform_parameters_json"]
+(7, True)
+
+```
+
+Name the lines the previous recipe finds. Three things to know, with their
+sizes in the `line_frequencies` docs of `Multitaper`: a line must lie close to
+its named frequency; the fit also takes about `1 / n_tapers` of the noise near
+each line (a shallow notch in the spectrum); and a test there that counts
+`n_observations`, such as `coherence_significance_pvalue`, is then too liberal,
+so count `n_observations - n_trials` within the half-bandwidth of a removed
+line. To subtract a line only where it is present, add
+`line_significance_threshold` (a strict level such as `1e-3`, since each
+window, trial, and signal is a test).
 
 ## Bring your own Fourier coefficients
 

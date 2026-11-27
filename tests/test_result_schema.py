@@ -28,6 +28,7 @@ from spectral_connectivity.wrapper import (
     frequency_band_reduce,
     multitaper_connectivity,
 )
+from tests._spectral_transforms import PrecomputedTransform
 
 # Exact estimator settings of the Hann-window transforms: none are multitaper-only.
 _HANN_ESTIMATOR_KEYS = {
@@ -87,18 +88,6 @@ def _multitaper_without(field):
         )
 
     return Trimmed
-
-
-class PrecomputedTransform:
-    """Only the public SpectralTransform interface; a coordinate may be ``None``."""
-
-    def __init__(self, coefficients, frequencies, time):
-        self._coefficients = coefficients
-        self.frequencies = frequencies
-        self.time = time
-
-    def fft(self):
-        return self._coefficients.copy()
 
 
 def _fourier_dataarray(data, frequency, units=None, trial_dimension="trial"):
@@ -245,6 +234,8 @@ def test_only_released_multitaper_attributes_are_compatibility_copies(data):
             "adaptive_tolerance": 1e-8,
             "detrend_type": None,
             "is_low_bias": True,
+            "line_frequencies": [],
+            "line_significance_threshold": None,
             "n_fft_samples": 32,
             "n_tapers": 3,
             "n_time_samples_per_step": 32,
@@ -303,6 +294,8 @@ def test_stft_has_no_multitaper_only_settings(data):
         "taper_eigenvalues",
         "taper_weighting",
         "is_low_bias",
+        "line_frequencies",
+        "line_significance_threshold",
         "adaptive_max_iterations",
         "adaptive_tolerance",
     }
