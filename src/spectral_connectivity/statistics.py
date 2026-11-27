@@ -90,15 +90,12 @@ class JackknifeResult:
     transformation : str
         Variance-stabilizing transformation used for the interval.
     replicates : array, shape (n_replicates, *estimate.shape), or None
-        Use replicates from ``leave_out="trial"`` for any statistic that
-        combines frequencies, unless its coverage with other units has been
-        checked: different tapers' coefficients are correlated across nearby
-        frequencies, and leaving out one taper at a time covered 43-81% for
-        band means and maxima of a measure at a nominal 95% (see
-        :meth:`Connectivity.jackknife`).
-
         The leave-one-out replicates the interval summarizes, on the scale of
         ``estimate`` (untransformed), one per left-out unit on the first axis.
+        For any statistic that combines frequencies, use replicates from
+        ``leave_out="trial"``: leaving out tapers gives too narrow a band
+        interval (see the Notes of :meth:`Connectivity.jackknife`).
+
         ``None`` from :meth:`Connectivity.jackknife` unless it was called with
         ``keep_replicates=True``; then one per observation
         (``leave_out="observation"``; for ``trials_tapers``, observation ``k``
@@ -107,14 +104,13 @@ class JackknifeResult:
         weights drop from every bin, and band-reduced with
         ``frequency_bands``. A replicate is NaN in a bin that never had the
         unit it leaves out (see ``Connectivity.n_valid_observations``), since
-        leaving that unit out removes nothing there;
+        leaving that unit out removes nothing there.
         :func:`jackknife_confidence_interval` skips it, so passing
         ``estimate`` and ``replicates`` back reproduces the interval wherever
-        the measure is defined in every replicate of a unit the bin has (where
-        it is not, the jackknife's interval is NaN and the function's skips
-        that replicate). The
-        array is the one the interval was computed from, ``n_replicates``
-        times the memory of ``estimate``. From
+        the measure is defined in every replicate of a unit the bin has
+        (where it is not, the jackknife's interval is NaN and the function's
+        skips that replicate). The array is the one the interval was computed
+        from, ``n_replicates`` times the memory of ``estimate``. From
         :func:`jackknife_confidence_interval`, ``leave_one_out`` itself (not a
         copy).
 

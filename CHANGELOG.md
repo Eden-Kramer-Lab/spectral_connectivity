@@ -184,8 +184,11 @@ The migration guide for code written against 2.x is
   trials. Allowed units are whole trials (`leave_out="trial"`,
   `expectation_type="trials"`, or one taper per trial) and Welch segments,
   which a new optional `SpectralTransform` attribute,
-  `observations_are_time_segments`, records (`Welch` sets it; coefficients
-  passed directly are taken as tapers).
+  `observations_are_time_segments`, records (`Welch` sets it, labeled
+  results record it, and `Connectivity(..., observations_are_time_segments=
+  True)` states it for coefficients passed directly, which are otherwise
+  taken as tapers). `delay` is reduced on the bins of its
+  `frequency_range`, as in the wrappers.
 - `Connectivity.jackknife(..., keep_replicates=True)` returns the
   leave-one-out replicates as `JackknifeResult.replicates`,
   `(n_replicates, *estimate.shape)`, untransformed, for an interval on any
@@ -194,8 +197,9 @@ The migration guide for code written against 2.x is
   replicate is NaN in a bin that never had the unit it leaves out. They take
   `n_replicates` times the memory of the estimate, so they are `None` unless
   requested. `JackknifeResult` also gains `frequency_bands` (the mapping that
-  names the band axis) and `leave_out`; the three new fields default to
-  `None`, and `jackknife_confidence_interval` sets `replicates` to its input.
+  names the band axis), `frequency_reduction` and `leave_out`; the four new
+  fields default to `None`, and `jackknife_confidence_interval` sets
+  `replicates` to its input.
 - `Multitaper(line_frequencies=[60, 120])` removes line noise and other
   sinusoidal lines (stimulation artifacts) before the coefficients are
   computed, so every measure uses the cleaned data; the wrappers take it in

@@ -3469,8 +3469,9 @@ class Connectivity:
             ``"trials_tapers"`` with one taper per trial), or observations
             that are segments in time (:attr:`observations_are_time_segments`,
             recorded by ``Connectivity.from_transform(Welch(...))``, or passed
-            to the constructor). ``None``
-            (the default) keeps every frequency.
+            to the constructor). ``delay`` is reduced on the bins of its
+            ``frequency_range``, as in the wrappers. ``None`` (the default)
+            keeps every frequency.
         frequency_reduction : {"mean", "integral"}, default="mean"
             How ``frequency_bands`` combine a band's bins, as in
             :func:`~spectral_connectivity.frequency_band_reduce`: the mean
@@ -3526,21 +3527,11 @@ class Connectivity:
             ``"trial"``, or is ``"trial"`` with an expectation that does not
             average trials or with fewer than 3 trials.
 
-            With ``frequency_bands``, in this order after ``method`` is
-            checked: for the bands and reductions
-            :func:`~spectral_connectivity.frequency_band_reduce` refuses (a
-            band containing no bin, ``"integral"`` of a measure other than
-            ``power``), and ``"integral"`` with ``one_sided=False``, which
-            would give half the band power; for a measure that combines the
-            bins of its own ``frequency_range`` (``delay``, ``group_delay``,
-            ``phase_slope_index``: call it once per band with
-            ``frequency_range=(low, high)`` instead); and if
-            ``leave_out="observation"`` leaves out tapers
-            (``expectation_type="tapers"``, or ``"trials_tapers"`` with more
-            than one taper per trial, unless
-            :attr:`observations_are_time_segments`), since the interval would
-            be too narrow (see Notes). All are raised before any measure is
-            computed.
+            With ``frequency_bands``, before any measure is computed: for a
+            band request :func:`~spectral_connectivity.frequency_band_reduce`
+            refuses, ``"integral"`` with ``one_sided=False``, a measure
+            without a frequency axis (``phase_slope_index``, ``group_delay``),
+            and leaving out tapers of the same samples (see Notes).
 
         Notes
         -----

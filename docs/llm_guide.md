@@ -164,7 +164,8 @@ Prefer the wrapper's labeled results so you never index these by hand.
   interval. Do not average a per-frequency jackknife over a band: the default
   `leave_out="observation"` leaves out tapers, whose coefficients are
   correlated across nearby frequencies, so the band interval is too narrow
-  (43-81% coverage of a nominal 95%), and `frequency_bands` refuses it.
+  (see the Notes of `Connectivity.jackknife`), and `frequency_bands` refuses
+  it.
   For another statistic over frequencies, compute it from the replicates of
   `leave_out="trial"` (`keep_replicates=True`) and pass them to
   `statistics.jackknife_confidence_interval`. Leaving out trials needs at
