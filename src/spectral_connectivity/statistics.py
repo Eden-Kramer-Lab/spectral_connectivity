@@ -93,8 +93,9 @@ class JackknifeResult:
         Use replicates from ``leave_out="trial"`` for any statistic that
         combines frequencies, unless its coverage with other units has been
         checked: different tapers' coefficients are correlated across nearby
-        frequencies, so leave-one-taper-out replicates of a band mean give too
-        narrow an interval (see :meth:`Connectivity.jackknife`).
+        frequencies, and leaving out one taper at a time covered 43-81% for
+        band means and maxima of a measure at a nominal 95% (see
+        :meth:`Connectivity.jackknife`).
 
         The leave-one-out replicates the interval summarizes, on the scale of
         ``estimate`` (untransformed), one per left-out unit on the first axis.

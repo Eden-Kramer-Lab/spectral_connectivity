@@ -167,19 +167,26 @@ The migration guide for code written against 2.x is
   measure of the data and of every leave-one-out replicate is reduced to the
   bands (as `frequency_band_reduce` reduces them, with its checks and
   messages) before the interval is formed, and the result has a band axis in
-  place of the frequency axis. It requires whole trials as the units left out
-  (`leave_out="trial"`, or one taper per trial) and refuses leaving out
-  tapers: DPSS coefficients are correlated across frequencies within the
-  bandwidth, so a nominal 95% interval left out one taper at a time covered
-  only 43-81% of band means and maxima in simulation, against 91-96% for band
-  means leaving out trials.
-- `JackknifeResult.replicates`: the leave-one-out replicates,
+  place of the frequency axis. It refuses to leave out tapers of the same
+  samples: different tapers' coefficients are correlated across frequencies
+  within the bandwidth, so a nominal 95% interval left out one taper at a
+  time covered only 43-81% of band means and band maxima in simulation,
+  against 91-96% for band means and 83-93% for band maxima leaving out
+  trials. Allowed units are whole trials (`leave_out="trial"`,
+  `expectation_type="trials"`, or one taper per trial) and Welch segments,
+  which a new optional `SpectralTransform` attribute,
+  `observations_are_time_segments`, records (`Welch` sets it; coefficients
+  passed directly are taken as tapers).
+- `Connectivity.jackknife(..., keep_replicates=True)` returns the
+  leave-one-out replicates as `JackknifeResult.replicates`,
   `(n_replicates, *estimate.shape)`, untransformed, for an interval on any
   other statistic through `jackknife_confidence_interval` (use
   `leave_out="trial"` replicates for a statistic combining frequencies). A
-  replicate is NaN in a bin that never had the unit it leaves out. The result
-  keeps the array the interval was computed from, so it holds
-  `n_replicates` times the memory of the estimate.
+  replicate is NaN in a bin that never had the unit it leaves out. They take
+  `n_replicates` times the memory of the estimate, so they are `None` unless
+  requested. `JackknifeResult` also gains `frequency_bands` (the mapping that
+  names the band axis) and `leave_out`; the three new fields default to
+  `None`, and `jackknife_confidence_interval` sets `replicates` to its input.
 - `Multitaper.harmonic_f_test()`: Thomson's harmonic F-test for a sinusoid at
   each frequency of every window, trial, and signal, returning a
   `HarmonicFTestResult` with the F statistic, its p-value under

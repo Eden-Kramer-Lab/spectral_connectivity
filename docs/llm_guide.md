@@ -164,9 +164,11 @@ Prefer the wrapper's labeled results so you never index these by hand.
   interval. Do not average a per-frequency jackknife over a band: the default
   `leave_out="observation"` leaves out tapers, whose coefficients are
   correlated across nearby frequencies, so the band interval is too narrow
-  (43-81% coverage of a nominal 95%), and `frequency_bands` refuses it. The
-  same holds for any statistic combining frequencies that is computed from
-  `result.replicates`. Leaving out trials needs at least 3.
+  (43-81% coverage of a nominal 95%), and `frequency_bands` refuses it.
+  For another statistic over frequencies, compute it from the replicates of
+  `leave_out="trial"` (`keep_replicates=True`) and pass them to
+  `statistics.jackknife_confidence_interval`. Leaving out trials needs at
+  least 3.
 
   ```python
   >>> from spectral_connectivity import Connectivity, Multitaper
@@ -180,6 +182,8 @@ Prefer the wrapper's labeled results so you never index these by hand.
   (1, 1, 2, 2)
   >>> banded.replicates.shape[0]  # one replicate per trial
   20
+  >>> banded.frequency_bands, banded.leave_out
+  ({'theta': (4, 8)}, 'trial')
 
   ```
 - **Frequency ranges include both endpoints.** `frequency_range=(8, 12)` keeps
@@ -263,6 +267,9 @@ interval includes the variability between trials:
 20
 
 ```
+
+For an interval on a band value, pass `frequency_bands` to the same call
+with `leave_out="trial"` (see the pitfall above).
 
 For significance, `Connectivity.surrogate_test(method, kind=...)` compares the
 measure with its values on surrogate data. `kind` sets the null hypothesis:

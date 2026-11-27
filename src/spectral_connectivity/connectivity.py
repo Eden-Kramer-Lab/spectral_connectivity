@@ -3360,8 +3360,8 @@ class Connectivity:
             ``observations_are_independent`` is ``False``.
 
             A statistic over several frequencies (``frequency_bands``, or one
-            computed from ``JackknifeResult.replicates``) needs whole trials
-            as units; see Notes.
+            computed from ``JackknifeResult.replicates``) should not leave out
+            tapers; see Notes.
         frequency_bands : mapping of str to (float, float), optional
             Band names and their ``(low, high)`` bounds in the units of
             :attr:`frequencies`, both endpoints included, as in
@@ -3511,18 +3511,27 @@ class Connectivity:
         or 4 trials, 13-20% with 5 and 5-8% with 10, at the same coverage
         (two Monte Carlo runs of 1000-2000 datasets each).
 
-        A statistic over several frequencies (a band mean or integral, a band
-        maximum, a peak frequency) needs whole trials as the units left out.
-        The DPSS tapers' coefficients are uncorrelated at one frequency but
-        correlated (0.3-0.6) at frequencies a few bins apart, within the
-        bandwidth, so the taper observations of a band are not independent. In
-        Monte Carlo runs with 1-20 trials of a bivariate VAR (256-2048 samples,
-        time-halfbandwidth product 3-4), a 95% interval leaving out one taper
-        at a time covered only 43-81% for band means and band maxima, while
-        leaving out whole trials covered 91-96% for band means and 83-93% for
-        band maxima. ``frequency_bands`` therefore requires whole trials, and
-        a statistic computed from ``JackknifeResult.replicates`` that combines
-        frequencies should use replicates from ``leave_out="trial"``.
+        Band statistics: different tapers' coefficients are uncorrelated at
+        one frequency but correlated (0.3-0.6) at frequencies a few bins
+        apart, within the bandwidth, so the tapers of one window are not
+        independent observations of a band. In Monte Carlo runs with 1-20
+        trials of a bivariate VAR (256-2048 samples, time-halfbandwidth product
+        3-4), a 95% interval leaving out one taper at a time covered only
+        43-81% for band means and band maxima of a measure, while leaving out
+        whole trials covered 91-96% for band means and 83-93% for band maxima.
+        ``frequency_bands`` therefore refuses to leave out tapers of the same
+        samples. Segments of a trial in time (``Welch``) are not correlated
+        that way and may be left out one at a time: with disjoint segments a
+        band-mean coherence interval covered about 95%, and about 93% at half
+        overlap.
+
+        ``phase_slope_index``, which combines adjacent bins inside its own fit
+        over ``frequency_range``, is less affected: 92.8-94.7% leaving out
+        tapers against 95.0-95.3% leaving out trials (1000 datasets each, 5-10
+        trials). ``delay`` has not been measured. For any other statistic over
+        frequencies computed from ``JackknifeResult.replicates``, the safe
+        choice is replicates from ``leave_out="trial"`` unless its coverage
+        with other units has been checked.
 
         Examples
         --------

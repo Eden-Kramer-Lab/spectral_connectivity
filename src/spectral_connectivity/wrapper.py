@@ -324,6 +324,10 @@ def frequency_band_reduce(
     integrating ``power`` over a band that covers every bin therefore
     reproduces the total signal power (Parseval).
 
+    For a confidence interval on a band value, reduce inside the jackknife,
+    ``Connectivity.jackknife(method, leave_out="trial", frequency_bands=...)``,
+    rather than reducing a per-frequency interval.
+
     Parameters
     ----------
     result : xarray.DataArray or xarray.Dataset
@@ -1425,7 +1429,9 @@ def multitaper_connectivity(
         ``phase_slope_index`` and ``group_delay`` are left as computed over
         ``frequency_range`` (call once per band, with ``frequency_range``, for
         band values). Requesting ``frequency_bands`` or ``frequency_decimation``
-        with only those two measures raises ``ValueError``.
+        with only those two measures raises ``ValueError``. For confidence
+        intervals on band values, use
+        ``Connectivity.jackknife(method, leave_out="trial", frequency_bands=...)``.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Band reduction. Integration is restricted to ``power`` and
         ``cross_spectral_density``, where it yields band power/covariance;
@@ -2078,7 +2084,8 @@ def fourier_connectivity(
         Named bands, both endpoints included, to reduce the frequency axis of
         the frequency-resolved measures into; see :func:`frequency_band_reduce`
         and :func:`multitaper_connectivity` for ``phase_slope_index`` and
-        ``group_delay``.
+        ``group_delay``. For confidence intervals on band values, use
+        ``Connectivity.jackknife(method, leave_out="trial", frequency_bands=...)``.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Within-band reduction used with ``frequency_bands``.
     time_dim, trial_dim, taper_dim, frequency_dim, signal_dim : hashable, optional
