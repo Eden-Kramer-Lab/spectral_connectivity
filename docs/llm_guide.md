@@ -158,6 +158,29 @@ Prefer the wrapper's labeled results so you never index these by hand.
 - **Band summaries.** Use `frequency_bands={"theta": (4, 8)}` rather than
   averaging frequency bins by hand: phase measures get a circular mean and
   complex measures a complex mean.
+- **Intervals for band statistics leave out trials.** Pass the bands to
+  `Connectivity.jackknife(method, leave_out="trial", frequency_bands=...)`,
+  which reduces every leave-one-out replicate to the bands before forming the
+  interval. Do not average a per-frequency jackknife over a band: the default
+  `leave_out="observation"` leaves out tapers, whose coefficients are
+  correlated across nearby frequencies, so the band interval is too narrow
+  (43-81% coverage of a nominal 95%), and `frequency_bands` refuses it. The
+  same holds for any statistic combining frequencies that is computed from
+  `result.replicates`. Leaving out trials needs at least 3.
+
+  ```python
+  >>> from spectral_connectivity import Connectivity, Multitaper
+  >>> banded = Connectivity.from_transform(
+  ...     Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=2)
+  ... ).jackknife(
+  ...     "magnitude_squared_coherence", leave_out="trial", frequency_bands={"theta": (4, 8)}
+  ... )
+  >>> banded.estimate.shape  # (n_time_windows, n_bands, n_signals, n_signals)
+  (1, 1, 2, 2)
+  >>> banded.replicates.shape[0]  # one replicate per trial
+  20
+
+  ```
 - **Frequency ranges include both endpoints.** `frequency_range=(8, 12)` keeps
   the bins at 8 and 12 Hz. Pass it to the wrapper itself, also for
   `phase_slope_index`, `group_delay`, and `delay`, which then consume only

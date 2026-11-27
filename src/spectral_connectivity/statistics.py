@@ -101,7 +101,8 @@ class JackknifeResult:
         leaves out (see ``Connectivity.n_valid_observations``), since leaving
         that unit out removes nothing there. From
         :func:`jackknife_confidence_interval`, ``leave_one_out`` itself (not a
-        copy).
+        copy). The result keeps the array the interval was computed from, so
+        it holds ``n_replicates`` times the memory of ``estimate``.
 
         For an interval on another statistic of the measure (a difference
         between bands, a ratio of two pairs), compute it from ``estimate``

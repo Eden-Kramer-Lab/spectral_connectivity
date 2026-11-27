@@ -734,6 +734,70 @@ bands. The `frequency` axis is replaced by a labeled `band` axis.
 
 ```
 
+## Intervals for band statistics
+
+`Connectivity.jackknife` takes the same `frequency_bands` and
+`frequency_reduction`: it reduces the measure of the data and of every
+leave-one-out replicate to the bands, then forms the interval (here on the
+`atanh(sqrt(.))` scale of the band-mean coherence). Leave out whole trials:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> rng = np.random.default_rng(2)
+>>> trials = rng.standard_normal((500, 10, 2))  # (time, trials, signals)
+>>> trials[..., 1] += 0.6 * np.roll(trials[..., 0], 2, axis=0)
+>>> multitaper = Multitaper(trials, sampling_frequency=500, time_halfbandwidth_product=3)
+>>> connectivity = Connectivity.from_transform(multitaper)
+>>> bands = {"theta": (4, 8), "beta": (13, 30)}
+>>> result = connectivity.jackknife(
+...     "magnitude_squared_coherence", leave_out="trial", frequency_bands=bands
+... )
+>>> result.estimate.shape  # (n_time_windows, n_bands, n_signals, n_signals)
+(1, 2, 2, 2)
+>>> lower, upper = result.confidence_interval
+>>> print(lower[0, :, 0, 1].round(2), result.estimate[0, :, 0, 1].round(2), upper[0, :, 0, 1].round(2))
+[0.18 0.18] [0.25 0.24] [0.32 0.29]
+
+```
+
+Leaving out one taper at a time is refused for bands. A taper's coefficients
+are uncorrelated with the other tapers' at one frequency but correlated with
+them at frequencies within the bandwidth, so the tapers of a band are not
+independent observations and the interval would be too narrow: a nominal 95%
+interval covered 43-81% of band means and maxima in simulation, against
+91-96% for band means leaving out trials. It needs at least 3 trials.
+
+```python
+>>> connectivity.jackknife("magnitude_squared_coherence", frequency_bands=bands)
+Traceback (most recent call last):
+...
+ValueError: jackknife(frequency_bands=...) with leave_out='observation' and expectation_type='trials_tapers' leaves out one trial-taper observation at a time, ...
+
+```
+
+For any other statistic of the measure, compute it from the estimate and from
+each of `result.replicates` (one per trial left out, untransformed) and pass
+both to `jackknife_confidence_interval`. Here, the difference between the two
+bands' coherence:
+
+```python
+>>> from spectral_connectivity.statistics import jackknife_confidence_interval
+>>> result.replicates.shape  # (n_trials, *result.estimate.shape)
+(10, 1, 2, 2, 2)
+>>> difference = jackknife_confidence_interval(
+...     result.estimate[:, 1] - result.estimate[:, 0],
+...     result.replicates[:, :, 1] - result.replicates[:, :, 0],
+... )
+>>> low, high = (bound[0, 0, 1] for bound in difference.confidence_interval)
+>>> print(round(float(low), 2), round(float(high), 2))  # includes 0
+-0.11 0.09
+
+```
+
+A statistic that combines several frequencies needs these trial replicates,
+for the reason above; per-frequency replicates from `leave_out="observation"`
+leave out tapers.
+
 ## Select a frequency range
 
 `frequency_range=(low, high)` includes both endpoints. With 0.5-second windows

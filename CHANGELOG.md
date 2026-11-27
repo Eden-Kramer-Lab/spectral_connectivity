@@ -162,6 +162,24 @@ The migration guide for code written against 2.x is
   too narrow when coupling varies across trials. It needs an expectation that
   averages trials and at least 3 trials, and is allowed when the tapers within
   a trial are correlated. The default (`"observation"`) is unchanged.
+- `Connectivity.jackknife(method, frequency_bands={name: (low, high)},
+  frequency_reduction="mean")` gives intervals for band statistics: the
+  measure of the data and of every leave-one-out replicate is reduced to the
+  bands (as `frequency_band_reduce` reduces them, with its checks and
+  messages) before the interval is formed, and the result has a band axis in
+  place of the frequency axis. It requires whole trials as the units left out
+  (`leave_out="trial"`, or one taper per trial) and refuses leaving out
+  tapers: DPSS coefficients are correlated across frequencies within the
+  bandwidth, so a nominal 95% interval left out one taper at a time covered
+  only 43-81% of band means and maxima in simulation, against 91-96% for band
+  means leaving out trials.
+- `JackknifeResult.replicates`: the leave-one-out replicates,
+  `(n_replicates, *estimate.shape)`, untransformed, for an interval on any
+  other statistic through `jackknife_confidence_interval` (use
+  `leave_out="trial"` replicates for a statistic combining frequencies). A
+  replicate is NaN in a bin that never had the unit it leaves out. The result
+  keeps the array the interval was computed from, so it holds
+  `n_replicates` times the memory of the estimate.
 - `Multitaper.harmonic_f_test()`: Thomson's harmonic F-test for a sinusoid at
   each frequency of every window, trial, and signal, returning a
   `HarmonicFTestResult` with the F statistic, its p-value under
