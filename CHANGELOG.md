@@ -141,7 +141,12 @@ The migration guide for code written against 2.x is
   whole trials (and averaged non-overlapping time windows), never single
   tapers or overlapping windows, so they need 2 or more of them and refuse a
   single independent unit (one trial with no averaged non-overlapping
-  windows).
+  windows). They count the units in each bin: where `observation_weights`
+  (such as those of `Multitaper(artifact_samples=...)`) leave a window a
+  single trial, that window is not tested (NaN p-values, with a warning) and
+  is in no family's maximum, and weights that leave every bin fewer than 2
+  are refused. The warning about few distinct conjugations counts the
+  tested bin with fewest units.
 - `Connectivity` takes and exposes `half_bandwidth`, which
   `Connectivity.from_transform` reads from a transform's optional
   `half_bandwidth` attribute; `Multitaper.half_bandwidth` is

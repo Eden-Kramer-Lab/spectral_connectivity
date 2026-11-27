@@ -774,10 +774,11 @@ def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[No
     warning shown once under the "default" action can be shown again. Only
     NaN or Inf coefficients (``ignore``) take this path;
     finite input never touches the filters (nor do the jackknife replicates
-    of a bin with too few kept observations, whose single-observation
-    warnings it ignores, on any other input). Recording the warnings and
-    re-emitting the others would need ``catch_warnings`` as well, so it would
-    not be safer.
+    of a bin with too few kept observations, or the ``surrogate_test``
+    surrogates of a bin that keeps a single observation, whose
+    single-observation warnings it ignores, on any other input). Recording
+    the warnings and re-emitting the others would need ``catch_warnings`` as
+    well, so it would not be safer.
     """
     if not ignore:
         yield
@@ -3670,7 +3671,9 @@ class Connectivity:
             ``half_bandwidth`` of 0 Hz and Nyquist (for ``"phase_rotation"``)
             and the frequencies whose coefficients are real (for
             ``"conjugation"``: :attr:`real_valued_frequencies`, and 0 Hz and
-            Nyquist of a real signal) are not tested: their p-values are NaN, and
+            Nyquist of a real signal), and the bins where ``observation_weights``
+            leave fewer than 2 units (for ``"phase_rotation"`` and
+            ``"conjugation"``; see Notes) are not tested: their p-values are NaN, and
             they are in no family's maximum. For directed measures
             ``[..., i, j]`` is ``i -> j``.
 
@@ -3683,7 +3686,8 @@ class Connectivity:
             randomizes (trials for ``"trial_shuffle"``, units otherwise) or
             there are fewer than 2 of them (one trial and no averaged
             non-overlapping time windows, for ``"phase_rotation"`` and
-            ``"conjugation"``); if
+            ``"conjugation"``), or ``observation_weights`` leave fewer than 2
+            units in every bin; if
             ``"trial_shuffle"`` meets observation weights that differ between
             trials; if ``"phase_rotation"`` meets one-sided coefficients, or a
             measure that does not return one value per frequency, or a
@@ -3700,9 +3704,11 @@ class Connectivity:
         -----
         UserWarning
             If the data allow fewer distinct surrogates than ``n_surrogates``
-            (the p-values stay valid but coarse), or if surrogates return NaN
-            at tested elements (each counts as at least the estimate and sets
-            its family's maximum to infinity).
+            (the p-values stay valid but coarse; for ``"conjugation"``, in the
+            tested bin with fewest units), if ``observation_weights`` leave
+            some bins a single unit (they are not tested), or if surrogates
+            return NaN at tested elements (each counts as at least the
+            estimate and sets its family's maximum to infinity).
 
         Notes
         -----
@@ -3747,7 +3753,12 @@ class Connectivity:
         longer than the signals' memory: a narrow spectral peak has a long one
         (see Measured sizes). The axes the expectation keeps (each time window
         by default) share the draws, so the surrogates keep the dependence
-        between them that the family maximum depends on.
+        between them that the family maximum depends on. Units are counted in
+        each bin: a trial whose window ``observation_weights`` drop (as
+        ``Multitaper(artifact_samples=...)`` does) is not a unit of that
+        window. A bin left a single unit is not tested, and a bin left few
+        has few distinct conjugations, which can let it dominate the family
+        maximum; ``fwer_axis`` can then make each time window its own family.
 
         **Shared stimulus-locked responses.** ``"trial_shuffle"`` keeps each
         signal's response in every surrogate, so a response common to the
@@ -4003,13 +4014,20 @@ class Connectivity:
                 kind, method, estimate, rotation_half_bandwidth, method_kwargs
             )
         )
-        tested = self._mask_single_unit_bins(
+        tested, units = self._mask_single_unit_bins(
             kind, method, unit_axes, estimate, tested, method_kwargs
         )
+        if kind == "conjugation":
+            self._warn_few_distinct_conjugations(units[tested], n_surrogates)
         tally = _SurrogateTally(
             _surrogate_statistic(estimate, alternative), tested, family_axes, n_surrogates
         )
         rng = _generator(random_state)
+        # The surrogates keep the weights, so where a bin keeps a single
+        # observation they repeat the warning the estimate already gave.
+        single_observation_bins = (
+            self._observation_weights is not None and self._fewest_valid_observations() == 1
+        )
         # The estimate carried the migration notices; the surrogates do not.
         token = _emit_migration_notices.set(False)
         try:
@@ -4019,8 +4037,7 @@ class Connectivity:
                     self._observation_weights,
                 )
                 with _user_warnings_ignored(
-                    _SINGLE_KEPT_OBSERVATION_WARNINGS,
-                    self._observation_weights is not None,
+                    _SINGLE_KEPT_OBSERVATION_WARNINGS, single_observation_bins
                 ):
                     values = getattr(surrogate_connectivity, method)(**method_kwargs)
                 tally.add(
@@ -4181,33 +4198,47 @@ class Connectivity:
         n_units = int(np.prod([shape[axis] for axis in unit_axes]))
         if n_units < 2:
             raise ValueError(self._single_unit_message(kind, n_units))
-        if self._observation_weights is not None:
-            max_valid_units = int(self._surrogate_unit_counts(unit_axes).max(initial=0))
-            if max_valid_units < 2:
-                msg = (
-                    f"surrogate_test(kind={kind!r}) requires at least 2 independent "
-                    "units with nonzero observation_weights in some bin, got at most "
-                    f"{max_valid_units} (see n_valid_observations). With a single unit, "
-                    "whole-unit randomization leaves symmetric measures unchanged."
-                )
-                raise ValueError(msg)
-            n_units = min(n_units, max_valid_units)
-        if kind == "conjugation" and n_units - 1 < math.log2(n_surrogates):
-            # Flipping every unit conjugates the whole spectrum, which leaves
-            # the measures symmetric under conjugation unchanged.
-            n_distinct = 2 ** (n_units - 1)
-            warnings.warn(
-                f"surrogate_test(kind='conjugation'): only {n_units} independent "
-                f"units (trials and averaged non-overlapping time windows), so "
-                f"conjugation can make "
-                f"only 2**{n_units - 1} = {n_distinct} distinct surrogates (fewer "
-                f"than n_surrogates={n_surrogates}): p-values cannot go below about "
-                f"1/{n_distinct}. They remain valid. Use more trials, or average "
-                "more time windows, for a finer test.",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
         return unit_axes
+
+    @staticmethod
+    def _warn_few_distinct_conjugations(
+        tested_units: NDArray[np.intp], n_surrogates: int
+    ) -> None:
+        """Warn if the tested bin with fewest units allows fewer distinct
+        conjugations than ``n_surrogates``.
+
+        ``tested_units`` holds the unit count of each tested element. Where
+        ``observation_weights`` leave some bins fewer units than others, the
+        warning says that those bins can dominate the family maximum.
+        """
+        if tested_units.size == 0:
+            return
+        n_units = int(tested_units.min())
+        if n_units - 1 >= math.log2(n_surrogates):
+            return
+        # Flipping every unit conjugates the whole spectrum, which leaves
+        # the measures symmetric under conjugation unchanged.
+        n_distinct = 2 ** (n_units - 1)
+        uneven = int(tested_units.max()) > n_units
+        where = " with nonzero observation_weights in some tested bins" if uneven else ""
+        family = (
+            " Such bins can dominate the family maximum and raise fwer_p_value "
+            "in the bins with more units; for a pairwise measure, "
+            "fwer_axis=(1, 2, 3) makes each time window its own family."
+            if uneven
+            else ""
+        )
+        warnings.warn(
+            f"surrogate_test(kind='conjugation'): only {n_units} independent "
+            f"units (trials and averaged non-overlapping time windows){where}, so "
+            f"conjugation can make only 2**{n_units - 1} = {n_distinct} distinct "
+            f"surrogates{' there' if uneven else ''} (fewer than "
+            f"n_surrogates={n_surrogates}): p-values cannot go below about "
+            f"1/{n_distinct}. They remain valid.{family} Use more trials, or "
+            "average more time windows, for a finer test.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
 
     def _single_unit_message(self, kind: str, n_units: int) -> str:
         """Why ``kind`` cannot randomize these coefficients, and what would let it.
@@ -4246,31 +4277,37 @@ class Connectivity:
                 "narrow spectral peak, and 19% and 10% just past the half "
                 "bandwidth of a steep 1/f**2 spectrum."
             )
-        if windows_overlap:
-            windows_remedy = (
-                "use non-overlapping windows (a Multitaper or "
-                "ShortTimeFourierTransform with time_window_step >= "
-                "time_window_duration; for coefficients passed directly, "
-                "time_bins_are_disjoint=True says their windows do not overlap)"
-            )
-        elif 0 in averaged:
-            windows_remedy = (
-                "split the recording into more non-overlapping time windows, "
-                "each longer than the signals' memory"
-            )
-        else:
-            windows_remedy = (
-                "average non-overlapping time windows (an expectation_type that "
-                "includes 'time', e.g. 'time_tapers' for one recording, with "
-                "windows longer than the signals' memory, which a narrow spectral "
-                "peak makes long)"
-            )
         trials_remedy = (
             "use an expectation that averages the trials (kind='trial_shuffle' then works too)"
             if n_trials > 1
             else "record more trials (kind='trial_shuffle' then works too)"
         )
-        return f"{msg} To get 2 or more units, {windows_remedy}, or {trials_remedy}."
+        return f"{msg} To get 2 or more units, {self._windows_remedy()}, or {trials_remedy}."
+
+    def _windows_remedy(self) -> str:
+        """How the time windows could give more units, following what the
+        expectation already averages: windows averaged but not units are told
+        to stop overlapping, not to be averaged."""
+        averaged = self._expectation_axes
+        windows_are_units = self._time_bins_are_disjoint and self._time_bins_are_independent
+        if 0 in averaged and self._fourier_coefficients.shape[0] > 1 and not windows_are_units:
+            return (
+                "use non-overlapping windows (a Multitaper or "
+                "ShortTimeFourierTransform with time_window_step >= "
+                "time_window_duration; for coefficients passed directly, "
+                "time_bins_are_disjoint=True says their windows do not overlap)"
+            )
+        if 0 in averaged:
+            return (
+                "split the recording into more non-overlapping time windows, "
+                "each longer than the signals' memory"
+            )
+        return (
+            "average non-overlapping time windows (an expectation_type that "
+            "includes 'time', e.g. 'time_tapers' for one recording, with "
+            "windows longer than the signals' memory, which a narrow spectral "
+            "peak makes long)"
+        )
 
     def _surrogate_unit_counts(self, unit_axes: tuple[int, ...]) -> NDArray[np.intp]:
         """Count independent units with positive ``observation_weights`` per output bin.
@@ -4301,16 +4338,22 @@ class Connectivity:
         estimate: NDArray[np.floating],
         tested: NDArray[np.bool_],
         method_kwargs: dict[str, Any],
-    ) -> NDArray[np.bool_]:
+    ) -> tuple[NDArray[np.bool_], NDArray[np.intp]]:
         """Leave bins with fewer than 2 weighted units untested, warning when any are dropped.
 
-        Where ``observation_weights`` leave only 1 unit along ``unit_axes``,
-        whole-unit phase rotation or conjugation leaves symmetric measures
-        unchanged: testing those bins would yield p-values of 1 and let their
-        invariant estimates dominate the family maxima.
+        Returns the elements still tested and the number of units of each
+        element (broadcast to the estimate's shape). Where
+        ``observation_weights`` leave a single unit along ``unit_axes``,
+        whole-unit phase rotation leaves the magnitude of each cross-spectrum
+        unchanged and conjugation does no more than conjugate the whole
+        spectrum: testing those bins would yield p-values of 1 and let their
+        unchanged estimates dominate the family maxima. Raises if no bin keeps
+        2 units.
         """
+        shape = self._fourier_coefficients.shape
+        n_units = int(np.prod([shape[axis] for axis in unit_axes]))
         if self._observation_weights is None or kind == "trial_shuffle":
-            return tested
+            return tested, np.broadcast_to(np.intp(n_units), estimate.shape)
         valid_units_per_freq = self._surrogate_unit_counts(unit_axes)
         n_nonnegative = valid_units_per_freq.shape[-1]
         dims = self._result_dims(method, estimate.ndim)
@@ -4337,31 +4380,41 @@ class Connectivity:
         else:
             valid_units = valid_units_per_freq.min(axis=-1)
 
+        units = "independent units (trials and averaged non-overlapping time windows)"
         max_valid = int(valid_units.max(initial=0))
         if max_valid < 2:
+            unchanged = (
+                "phase rotation leaves the magnitude of each cross-spectrum unchanged"
+                if kind == "phase_rotation"
+                else "conjugation does no more than conjugate the whole spectrum"
+            )
             msg = (
-                f"surrogate_test(kind={kind!r}) requires at least 2 independent "
-                "units with nonzero observation_weights in some bin, got at most "
-                f"{max_valid} (see n_valid_observations). With a single unit, "
-                "whole-unit randomization leaves symmetric measures unchanged."
+                f"surrogate_test(kind={kind!r}) requires at least 2 {units} with "
+                f"nonzero observation_weights in some bin, got at most {max_valid}. "
+                f"With a single unit, {unchanged}. To keep 2 or more units in a "
+                "bin, use a shorter time_window_duration (more trial windows then "
+                "avoid the artifacts), set artifact_handling='missing_data_tapers' "
+                "(Multitaper only) to estimate a window with artifacts from its "
+                f"valid samples instead of dropping it, or {self._windows_remedy()}."
             )
             raise ValueError(msg)
 
-        enough = valid_units >= 2
-        trailing = (1,) * (estimate.ndim - enough.ndim)
-        mask = enough.reshape(*enough.shape, *trailing)
-        if (tested & ~mask).any():
-            too_few = (valid_units > 0) & ~enough
+        trailing = (1,) * (estimate.ndim - valid_units.ndim)
+        units_per_element = np.broadcast_to(
+            valid_units.reshape(*valid_units.shape, *trailing), estimate.shape
+        )
+        enough = units_per_element >= 2
+        if (tested & ~enough).any():
+            too_few = (valid_units > 0) & (valid_units < 2)
             warnings.warn(
                 f"surrogate_test(kind={kind!r}): observation_weights leave fewer than "
-                f"2 independent units in {int(too_few.sum())} of {too_few.size} bins "
-                "(see n_valid_observations), too few to randomize, so p_value and "
-                "fwer_p_value are NaN there and those bins are excluded from the "
-                "family maxima.",
+                f"2 {units} in {int(too_few.sum())} of {too_few.size} bins, too few "
+                "to randomize, so p_value and fwer_p_value are NaN there and those "
+                "bins are excluded from the family maxima.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
-        return tested & mask
+        return tested & enough, units_per_element
 
     def _surrogate_coefficients(
         self,

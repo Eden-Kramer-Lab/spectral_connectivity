@@ -1008,16 +1008,30 @@ def test_observation_weights_single_unit_window_is_untested_and_excluded_from_fw
 @pytest.mark.parametrize("kind", ["phase_rotation", "conjugation"])
 def test_observation_weights_all_single_unit_bins_refused(kind):
     """When observation_weights leave fewer than 2 units in every bin, the
-    call raises ValueError cleanly without warning first."""
+    call raises ValueError cleanly without warning first. The message counts
+    trials, says what one unit leaves unchanged, and names the remedies."""
     rng = np.random.default_rng(1)
     coefficients = _coefficients(rng, (2, 4, 3, 16, 2))
     weights = np.zeros((2, 4, 3, 16, 1))
     weights[:, 0] = 1.0
     conn = Connectivity(coefficients, observation_weights=weights, half_bandwidth=0.05)
-    with pytest.raises(ValueError, match="at least 2 independent units with nonzero"):
+    with pytest.raises(
+        ValueError, match=re.escape("at least 2 independent units (trials and averaged")
+    ) as excinfo:
         conn.surrogate_test(
             "magnitude_squared_coherence", kind=kind, n_surrogates=19, random_state=0
         )
+    message = str(excinfo.value)
+    unchanged = {
+        "phase_rotation": "leaves the magnitude of each cross-spectrum unchanged",
+        "conjugation": "does no more than conjugate the whole spectrum",
+    }
+    assert unchanged[kind] in message
+    assert "got at most 1." in message
+    assert "a shorter time_window_duration" in message
+    assert "artifact_handling='missing_data_tapers'" in message
+    assert "average non-overlapping time windows" in message
+    assert "n_valid_observations" not in message
 
 
 def test_observation_weights_single_unit_band_summed_measure():
@@ -1045,7 +1059,7 @@ def test_observation_weights_single_unit_band_summed_measure():
     band_weights = np.ones((1, 6, 3, 16, 1))
     band_weights[:, 1:, :, 2:6, :] = 0.0
     conn_band = Connectivity(coefficients[:1], observation_weights=band_weights)
-    with pytest.raises(ValueError, match="at least 2 independent units with nonzero"):
+    with pytest.raises(ValueError, match=re.escape("at least 2 independent units (trials")):
         conn_band.surrogate_test(
             "phase_slope_index",
             kind="conjugation",
@@ -1053,3 +1067,48 @@ def test_observation_weights_single_unit_band_summed_measure():
             random_state=0,
             frequency_range=(0.125, 0.3125),
         )
+
+
+def test_few_distinct_conjugations_warn_for_the_bin_with_fewest_units():
+    """A window keeping 2 of 10 trials allows 2 distinct conjugations, so it
+    sets the coarseness warning even though the other window keeps 10, and the
+    warning says such bins can dominate the family maximum."""
+    rng = np.random.default_rng(16)
+    coefficients = _coefficients(rng, (2, 10, 3, 16, 2))
+    weights = np.ones((2, 10, 3, 16, 1))
+    weights[0, 2:] = 0.0
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    with pytest.warns(
+        UserWarning, match=re.escape("only 2**1 = 2 distinct surrogates there")
+    ) as record:
+        result = connectivity.surrogate_test(
+            "imaginary_coherence", kind="conjugation", n_surrogates=19, random_state=0
+        )
+    (message,) = [str(w.message) for w in record if "distinct surrogates" in str(w.message)]
+    assert "only 2 independent units (trials and averaged non-overlapping" in message
+    assert "dominate the family maximum" in message
+    assert "fwer_axis=(1, 2, 3)" in message
+    assert np.isfinite(result.p_value[0, 1:-1, 0, 1]).all()
+
+
+def test_surrogates_do_not_repeat_the_single_observation_warning():
+    """A window keeping one observation (one trial of one taper) warns once,
+    from the estimate, not once more for each surrogate; the window is left
+    untested."""
+    rng = np.random.default_rng(17)
+    coefficients = _coefficients(rng, (2, 6, 1, 16, 2))
+    weights = np.ones((2, 6, 1, 16, 1))
+    weights[0, 1:] = 0.0
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = connectivity.surrogate_test(
+            "magnitude_squared_coherence", kind="conjugation", n_surrogates=9, random_state=0
+        )
+    messages = [str(w.message) for w in record]
+    single = [m for m in messages if "computed from a single observation in some bins" in m]
+    assert len(single) == 1
+    assert (
+        sum("observation_weights leave fewer than 2 independent" in m for m in messages) == 1
+    )
+    assert np.isnan(result.p_value[0]).all()

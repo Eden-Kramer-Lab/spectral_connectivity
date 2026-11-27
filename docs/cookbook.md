@@ -584,7 +584,11 @@ sets the null, so choose it for the question:
   every window of a trial shares its draw, and one recording in overlapping
   windows is refused. `Connectivity.from_transform` records whether the
   windows overlap; for coefficients passed directly, pass
-  `time_bins_are_disjoint=True` if they do not.
+  `time_bins_are_disjoint=True` if they do not. The units are counted in each
+  window: where `artifact_samples` leaves a window one trial, it is not tested
+  (NaN p-values, with a warning), and a window left few trials can dominate
+  the family maximum under `"conjugation"`, so `fwer_axis=(1, 2, 3)` then
+  corrects each window on its own.
 
 Here signal 1 is signal 0 delayed by 3 samples (6 ms) and signal 2 is
 independent:
