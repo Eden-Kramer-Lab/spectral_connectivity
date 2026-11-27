@@ -334,7 +334,7 @@ def test_jackknife_is_nan_in_a_bin_of_too_few_observations():
     weights = np.ones((*coefficients.shape[:-1], 1))
     weights[1, 2:] = 0  # window 1 keeps two trials
     connectivity = Connectivity(coefficients, observation_weights=weights)
-    with pytest.warns(UserWarning, match="fewer than 3 observations in 1 of 2 bins"):
+    with pytest.warns(UserWarning, match="fewer than 3 trials in 1 of 2 bins"):
         result = connectivity.jackknife("magnitude_squared_coherence")
     assert np.isnan(result.standard_error[1]).all()
     assert np.isfinite(result.standard_error[0, :, 0, 1]).all()

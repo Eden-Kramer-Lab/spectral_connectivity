@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from functools import cached_property, wraps
 from itertools import combinations
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, ParamSpec, TypeVar, cast
 
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
@@ -55,6 +55,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
     NONCONVERGENCE_WARNING_START,
 )
 from spectral_connectivity.statistics import (
+    _MIN_JACKKNIFE_REPLICATES,
     JackknifeResult,
     SurrogateTestResult,
     _jackknife_interval,
@@ -534,20 +535,27 @@ def _exact_spectrum_refusal_message(method: str, reason: _ExactSpectrumRefusal) 
     )
 
 
-# How jackknife learns that observations are segments in time, not tapers.
-_SEGMENTS_ADVICE = (
-    "If the observations are segments of each trial in time instead (Welch), "
-    "build with Connectivity.from_transform(Welch(...)), or pass "
-    "observations_are_time_segments=True to Connectivity, to leave out one "
-    "segment at a time."
-)
-# What jackknife says when only tapers could be left out for frequency_bands.
-_NO_BAND_JACKKNIFE_ADVICE = (
-    "A band statistic of tapers of the same samples has no valid jackknife with "
-    "fewer than 3 trials: collect at least 3 trials, or jackknife each frequency "
-    "without frequency_bands, and do not average those intervals or their "
-    "replicates over a band."
-)
+class _LeaveOutUnits(NamedTuple):
+    """What one replicate of ``Connectivity.jackknife`` leaves out.
+
+    ``kind`` is ``"trial"`` (a whole trial: ``leave_out="trial"``,
+    ``expectation_type="trials"``, or one taper per trial), ``"taper"`` (one
+    taper of a trial's window, which tapers of the same samples share), or
+    ``"segment"`` (one segment of a trial in time,
+    ``observations_are_time_segments``). Each replicate leaves out one index
+    of ``axis`` of the coefficients, after the trial and taper axes are
+    flattened into axis 1 when ``flatten``; there are ``n_units`` of them.
+    """
+
+    kind: Literal["trial", "taper", "segment"]
+    axis: int
+    n_units: int
+    flatten: bool
+
+    @property
+    def noun(self) -> str:
+        """The units in the plural, for messages."""
+        return {"trial": "trials", "taper": "observations", "segment": "segments"}[self.kind]
 
 
 def _unreduced(values: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -3141,54 +3149,149 @@ class Connectivity:
         )
         raise ValueError(msg)
 
-    def _units_are_tapers(self, leave_out: str) -> bool:
-        """Whether ``jackknife(leave_out=...)`` leaves out tapers of the same samples.
-
-        Leaving out an observation of ``"tapers"``, or of ``"trials_tapers"``
-        with more than one taper per trial, leaves out one taper of a trial's
-        window, unless the transform recorded that the observations are
-        segments in time (:attr:`observations_are_time_segments`);
-        ``"trials"`` and one taper per trial leave out whole trials.
-        """
-        if leave_out != "observation" or self._observations_are_time_segments:
-            return False
+    def _leave_out_units(self, leave_out: str) -> _LeaveOutUnits:
+        """The units ``jackknife(leave_out=...)`` leaves out, one per replicate."""
+        n_trials, n_tapers = self._fourier_coefficients.shape[1:3]
+        if leave_out == "trial" or self.expectation_type == "trials":
+            return _LeaveOutUnits("trial", axis=1, n_units=n_trials, flatten=False)
+        kind: Literal["taper", "segment"] = (
+            "segment" if self._observations_are_time_segments else "taper"
+        )
         if self.expectation_type == "tapers":
-            return True
-        return (
-            self.expectation_type == "trials_tapers"
-            and self._fourier_coefficients.shape[2] > 1
+            return _LeaveOutUnits(kind, axis=2, n_units=n_tapers, flatten=False)
+        # trials_tapers: one trial-taper observation, the two axes flattened.
+        return _LeaveOutUnits(
+            "trial" if n_tapers == 1 else kind,
+            axis=1,
+            n_units=n_trials * n_tapers,
+            flatten=True,
         )
 
-    def _band_taper_jackknife_message(self, n_trials: int) -> str:
-        """Why ``jackknife`` refuses to leave out tapers for ``frequency_bands``."""
-        msg = (
-            "jackknife(frequency_bands=...) cannot leave out one taper at a time "
-            "(leave_out='observation' with "
-            f"expectation_type={self.expectation_type!r}): a taper's Fourier "
-            "coefficients are correlated with the other tapers' across the "
-            "frequencies of a band, so the replicates are not independent and the "
-            "band interval is too narrow (a nominal 95% interval covered 43-81% in "
-            "simulation). "
+    def _leave_out_problem(
+        self, units: _LeaveOutUnits, band_statistic: bool
+    ) -> Literal["correlated", "bands", "count"] | None:
+        """Why leaving out ``units`` one at a time gives no valid interval.
+
+        ``"correlated"``: they are not independent at one frequency (a part of
+        a trial, with ``observations_are_independent`` False); ``"bands"``:
+        for a statistic over frequencies, they are tapers of the same samples,
+        correlated across nearby frequencies; ``"count"``: fewer than 3.
+        ``None`` when the interval is valid.
+        """
+        if units.kind != "trial" and not self._observations_are_independent:
+            return "correlated"
+        if band_statistic and units.kind == "taper":
+            return "bands"
+        if units.n_units < _MIN_JACKKNIFE_REPLICATES:
+            return "count"
+        return None
+
+    def _leave_out_message(
+        self,
+        problem: Literal["correlated", "bands", "count"],
+        units: _LeaveOutUnits,
+        leave_out: str,
+        band_statistic: bool,
+        n_valid: int | None = None,
+    ) -> str:
+        """The refusal for ``problem`` (see :meth:`_leave_out_problem`).
+
+        ``n_valid`` is the count of units observation weights keep in some
+        bin, when that is what is too low.
+        """
+        n_trials = self._fourier_coefficients.shape[1]
+        expectation_type = self.expectation_type
+        segments_advice = (
+            "If the observations are segments of each trial in time instead "
+            "(Welch), build with Connectivity.from_transform(Welch(...)), or pass "
+            "observations_are_time_segments=True to Connectivity, to leave out "
+            "one segment at a time."
         )
-        if n_trials < 3:
-            return msg + (
-                "Leaving out whole trials (leave_out='trial') needs at least 3, and "
-                f"these data have {n_trials}. "
-                + _NO_BAND_JACKKNIFE_ADVICE
-                + " "
-                + _SEGMENTS_ADVICE
+        no_band_jackknife = (
+            "A band statistic of tapers of the same samples has no valid "
+            "jackknife with fewer than 3 trials: collect at least 3 trials, or "
+            "jackknife each frequency without frequency_bands, and do not "
+            "average those intervals or their replicates over a band."
+        )
+        if problem == "correlated":
+            msg = (
+                f"jackknife with expectation_type={expectation_type!r} leaves out "
+                f"one {'segment' if units.kind == 'segment' else 'taper observation'} "
+                "at a time, but this transform's observations are correlated "
+                "(observations_are_independent is False: a MorletWavelet smoothing "
+                "neighborhood, or Welch segments overlapping by more than half), so "
+                "leave-one-out intervals over them are invalid. For an interval on "
+                "the same averaged measure, "
             )
-        if self.expectation_type == "trials_tapers":
-            how = "Pass leave_out='trial'"
-        else:
+            if expectation_type == "trials_tapers" and n_trials >= 3:
+                msg += (
+                    "pass leave_out='trial', which leaves out whole trials and is "
+                    "valid with correlated tapers, or "
+                )
+            return msg + (
+                "recompute the transform with independent observations: Welch "
+                "with segment_overlap <= 0.5, a Multitaper transform, or "
+                "MorletWavelet without smoothing_time on at least 3 trials (the "
+                "trials are then the observations, and there is no time "
+                "smoothing). expectation_type='trials' keeps the correlated axis "
+                "as an output dimension instead of averaging it, so it measures "
+                "something else."
+            )
+        if problem == "bands":
+            msg = (
+                "jackknife(frequency_bands=...) cannot leave out one taper at a "
+                "time (leave_out='observation' with "
+                f"expectation_type={expectation_type!r}): a taper's Fourier "
+                "coefficients are correlated with the other tapers' across the "
+                "frequencies of a band, so the replicates are not independent and "
+                "the band interval is too narrow (see the Notes of "
+                "Connectivity.jackknife). "
+            )
+            if n_trials < 3:
+                return msg + (
+                    "Leaving out whole trials (leave_out='trial') needs at least 3, "
+                    f"and these data have {n_trials}. {no_band_jackknife} "
+                    f"{segments_advice}"
+                )
             how = (
-                "Build the Connectivity with expectation_type='trials_tapers' "
+                "Pass leave_out='trial'"
+                if expectation_type == "trials_tapers"
+                else "Build the Connectivity with expectation_type='trials_tapers' "
                 "(which averages the trials into one estimate; per-trial band "
                 "intervals have no valid jackknife) and pass leave_out='trial'"
             )
+            return msg + (
+                f"{how} to leave out one whole trial at a time; it needs at least 3 "
+                f"trials, and these data have {n_trials}. {segments_advice}"
+            )
+        got = units.n_units if n_valid is None else f"{n_valid} with nonzero weight in any bin"
+        msg = (
+            f"jackknife(leave_out={leave_out!r}) requires at least "
+            f"{_MIN_JACKKNIFE_REPLICATES} {units.noun}, got {got}"
+        )
+        if units.kind == "trial" and n_valid is None:
+            msg += (
+                ": an interval over n trials has n - 1 degrees of freedom, so 2 "
+                "trials give a critical value near 13 and 1 trial gives none."
+            )
+            if leave_out != "trial":
+                return msg + " Collect at least 3 trials for an interval."
+            alternative = self._leave_out_units("observation")
+            alternative_problem = self._leave_out_problem(alternative, band_statistic)
+            if alternative.kind != "trial" and alternative_problem is None:
+                return msg + (
+                    f" Keep leave_out='observation' to leave out one "
+                    f"{'segment' if alternative.kind == 'segment' else 'trial-taper observation'} "
+                    "at a time."
+                )
+            if alternative_problem == "bands":
+                return f"{msg} {no_band_jackknife}"
+            return msg + " Collect at least 3 trials for an interval."
         return msg + (
-            f"{how} to leave out one whole trial at a time; it needs at least 3 "
-            f"trials, and these data have {n_trials}. " + _SEGMENTS_ADVICE
+            ". With two, each leave-one-out replicate has a single one, which "
+            "forces magnitude-normalized measures to 1 and makes the interval "
+            "degenerate (a zero standard error, or NaN under a "
+            "variance-stabilizing transform such as the coherence default)."
         )
 
     def _jackknife_band_reducer(
@@ -3582,111 +3685,18 @@ class Connectivity:
                 method, frequency_bands, frequency_reduction, method_kwargs
             )
         )
+        units = self._leave_out_units(leave_out)
+        band_statistic = frequency_bands is not None
+        problem = self._leave_out_problem(units, band_statistic)
+        if problem is not None:
+            raise ValueError(
+                self._leave_out_message(problem, units, leave_out, band_statistic)
+            )
         coefficients = self._fourier_coefficients
-        n_trials = coefficients.shape[1]
-        # Each replicate leaves out one index of ``observation_axis``; for one
-        # trial-taper observation of ``trials_tapers`` the two axes are
-        # flattened into axis 1 first.
-        flatten_trials_tapers = (
-            self.expectation_type == "trials_tapers" and leave_out == "observation"
-        )
-        observation_axis = 2 if self.expectation_type == "tapers" else 1
-        n_observations = (
-            n_trials * coefficients.shape[2]
-            if flatten_trials_tapers
-            else coefficients.shape[observation_axis]
-        )
-        if (
-            leave_out == "observation"
-            and not self._observations_are_independent
-            and self.expectation_type in {"tapers", "trials_tapers"}
-        ):
-            msg = (
-                f"jackknife with expectation_type={self.expectation_type!r} leaves "
-                "out one taper observation at a time, but this transform's "
-                "observations are correlated (observations_are_independent is "
-                "False: a MorletWavelet smoothing neighborhood, or Welch segments "
-                "overlapping by more than half), so leave-one-out intervals over "
-                "them are invalid. For an interval on the same averaged measure, "
-            )
-            if self.expectation_type == "trials_tapers" and n_trials >= 3:
-                msg += (
-                    "pass leave_out='trial', which leaves out whole trials and is "
-                    "valid with correlated tapers, or "
-                )
-            msg += (
-                "recompute the transform with independent observations: Welch "
-                "with segment_overlap <= 0.5, a Multitaper transform, or "
-                "MorletWavelet without smoothing_time on at least 3 trials (the "
-                "trials are then the observations, and there is no time "
-                "smoothing). expectation_type='trials' keeps the correlated axis "
-                "as an output dimension instead of averaging it, so it measures "
-                "something else."
-            )
-            raise ValueError(msg)
-        if frequency_bands is not None and self._units_are_tapers(leave_out):
-            raise ValueError(self._band_taper_jackknife_message(n_trials))
-
-        if n_observations < 3:
-            if leave_out == "trial":
-                msg = (
-                    "jackknife(leave_out='trial') requires at least 3 trials, got "
-                    f"{n_observations}: an interval over n trials has n - 1 degrees "
-                    "of freedom, so 2 trials give a critical value near 13 and 1 "
-                    "trial gives none."
-                )
-                if frequency_bands is not None and self._units_are_tapers("observation"):
-                    msg += " " + _NO_BAND_JACKKNIFE_ADVICE
-                elif (
-                    self.expectation_type == "trials_tapers"
-                    and self._observations_are_independent
-                ):
-                    msg += (
-                        " Keep leave_out='observation' to leave out one trial-taper "
-                        "observation at a time."
-                    )
-                else:
-                    msg += " Collect at least 3 trials for an interval."
-            else:
-                msg = (
-                    "jackknife requires at least 3 observations, got "
-                    f"{n_observations}. With two, each leave-one-out replicate has a "
-                    "single observation, which forces magnitude-normalized measures "
-                    "to 1 and makes the interval degenerate (a zero standard error, "
-                    "or NaN under a variance-stabilizing transform such as the "
-                    "coherence default)."
-                )
-            raise ValueError(msg)
-
-        full_estimate = _real_array_result(
-            measure(**method_kwargs),
-            method,
-            "jackknife",
-            structured_hint=(
-                " Jackknife a measure that returns one real array, such as a "
-                "pairwise measure; group measures are not resampled yet."
-            ),
-        )
-        reduce_to_bands: Callable[[NDArray[np.floating]], NDArray[np.floating]] = _unreduced
-        if band_reducer is not None:
-            frequency_axis = self._frequency_axis(method, full_estimate.ndim)
-            if (
-                frequency_axis is None
-                or full_estimate.shape[frequency_axis] != band_reducer.n_frequencies
-            ):
-                msg = (
-                    f"jackknife cannot reduce {method!r} to frequency_bands: its "
-                    f"result, of shape {full_estimate.shape}, has no axis of its "
-                    f"{band_reducer.n_frequencies} frequencies at position "
-                    f"{frequency_axis}."
-                )
-                raise ValueError(msg)
-            reduce_to_bands = functools.partial(band_reducer, axis=frequency_axis)
-        full_estimate = reduce_to_bands(full_estimate)
-
+        observation_axis, n_observations = units.axis, units.n_units
         observation_weights = self._observation_weights
         observation_coefficients = coefficients
-        if flatten_trials_tapers:
+        if units.flatten:
             observation_coefficients = coefficients.reshape(
                 coefficients.shape[0],
                 n_observations,
@@ -3737,24 +3747,47 @@ class Connectivity:
             present = to_numpy(xp.moveaxis(present, observation_axis, 0))
             if not present.all():
                 unit_is_valid = present
-        units = "trials" if leave_out == "trial" else "observations"
         # The raw count was checked above; these are the units kept anywhere.
-        if unit_is_valid is not None and (n_valid := int(unit_is_valid.sum(0).max())) < 3:
-            caller = "jackknife(leave_out='trial')" if leave_out == "trial" else "jackknife"
-            msg = (
-                f"{caller} requires at least 3 {units}, got {n_valid} with "
-                "nonzero weight in any bin. With two, "
-                "each leave-one-out replicate has a single one, which forces "
-                "magnitude-normalized measures to 1 and makes the interval "
-                "degenerate (a zero standard error, or NaN under a "
-                "variance-stabilizing transform such as the coherence default)."
+        if (
+            unit_is_valid is not None
+            and (n_valid := int(unit_is_valid.sum(0).max())) < _MIN_JACKKNIFE_REPLICATES
+        ):
+            raise ValueError(
+                self._leave_out_message(
+                    "count", units, leave_out, band_statistic, n_valid=n_valid
+                )
             )
-            raise ValueError(msg)
         omitted_units: Sequence[int] = range(n_observations)
         if unit_is_valid is not None:
             omitted_units = np.flatnonzero(
                 unit_is_valid.reshape(n_observations, -1).any(axis=1)
             ).tolist()
+
+        full_estimate = _real_array_result(
+            measure(**method_kwargs),
+            method,
+            "jackknife",
+            structured_hint=(
+                " Jackknife a measure that returns one real array, such as a "
+                "pairwise measure; group measures are not resampled yet."
+            ),
+        )
+        reduce_to_bands: Callable[[NDArray[np.floating]], NDArray[np.floating]] = _unreduced
+        if band_reducer is not None:
+            frequency_axis = self._frequency_axis(method, full_estimate.ndim)
+            if (
+                frequency_axis is None
+                or full_estimate.shape[frequency_axis] != band_reducer.n_frequencies
+            ):
+                msg = (
+                    f"jackknife cannot reduce {method!r} to frequency_bands: its "
+                    f"result, of shape {full_estimate.shape}, has no axis of its "
+                    f"{band_reducer.n_frequencies} frequencies at position "
+                    f"{frequency_axis}."
+                )
+                raise ValueError(msg)
+            reduce_to_bands = functools.partial(band_reducer, axis=frequency_axis)
+        full_estimate = reduce_to_bands(full_estimate)
 
         replicates: list[NDArray[np.floating]] = []
         # The full estimate carried the migration notices; the replicates do not.
@@ -3831,7 +3864,8 @@ class Connectivity:
             ),
             describe_too_few=lambda n_too_few, n_bins, threshold: (
                 f"jackknife: observation_weights leave fewer than {threshold} "
-                f"{units} in {n_too_few} of {n_bins} bins (see n_valid_observations)"
+                f"{units.noun} in {n_too_few} of {n_bins} bins (see "
+                "n_valid_observations)"
             ),
         )
         if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:

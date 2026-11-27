@@ -481,7 +481,7 @@ def test_bands_refuse_leaving_out_tapers(time_series, monkeypatch, expectation_t
     message = str(error.value)
     assert "cannot leave out one taper at a time" in message
     assert "correlated with the other tapers' across the frequencies of a band" in message
-    assert "43-81%" in message
+    assert "see the Notes of Connectivity.jackknife" in message
     assert f"these data have {n_trials}" in message
     if n_trials < 3:
         assert "has no valid jackknife with fewer than 3 trials" in message
@@ -494,6 +494,24 @@ def test_bands_refuse_leaving_out_tapers(time_series, monkeypatch, expectation_t
         )
 
 
+def test_one_taper_per_trial_is_a_trial_whatever_the_independence_flag():
+    """The independence of observations is about the parts of one trial, so
+    with one taper per trial leaving out an observation is leaving out a
+    trial, valid as leave_out="trial" is, also with bands."""
+    rng = np.random.default_rng(4)
+    shape = (1, 5, 1, 16, 2)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    connectivity = Connectivity(coefficients, observations_are_independent=False)
+    bands = {"low": (0.05, 0.2)}
+    by_observation = connectivity.jackknife(
+        "magnitude_squared_coherence", frequency_bands=bands
+    )
+    by_trial = connectivity.jackknife(
+        "magnitude_squared_coherence", leave_out="trial", frequency_bands=bands
+    )
+    np.testing.assert_array_equal(by_observation.standard_error, by_trial.standard_error)
+
+
 def test_two_trials_have_no_band_jackknife(time_series):
     """With 2 trials, leaving out trials is refused for bands with advice that
     does not point back to leaving out tapers."""
@@ -504,6 +522,15 @@ def test_two_trials_have_no_band_jackknife(time_series):
         )
     assert "has no valid jackknife with fewer than 3 trials" in str(error.value)
     assert "Keep leave_out='observation'" not in str(error.value)
+    # Welch segments may be left out one at a time instead.
+    welch = Connectivity.from_transform(
+        Welch(time_series[:, :2], sampling_frequency=_SAMPLING_FREQUENCY, segment_duration=0.5)
+    )
+    with pytest.raises(ValueError, match="requires at least 3 trials") as error:
+        welch.jackknife(
+            "magnitude_squared_coherence", leave_out="trial", frequency_bands=_BANDS
+        )
+    assert "Keep leave_out='observation' to leave out one segment" in str(error.value)
 
 
 @pytest.mark.parametrize(
