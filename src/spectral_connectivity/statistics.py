@@ -502,6 +502,9 @@ def jackknife_confidence_interval(
         ``bias_corrected`` field, with ``g`` the transformation). The half-width
         is the same. It is for band statistics of biased measures, not for
         per-frequency intervals or band maxima: see :meth:`Connectivity.jackknife`.
+        No measure is known here, so the bounds are not clipped into a value
+        range: a bias-corrected interval of a nonnegative measure can lie
+        below 0 (``Connectivity.jackknife`` clips it).
 
     Returns
     -------

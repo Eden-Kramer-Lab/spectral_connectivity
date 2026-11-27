@@ -1486,6 +1486,148 @@ def test_bias_corrected_center_is_the_hand_computed_interval(
     )
 
 
+_EPS = np.finfo(float).eps
+_FORWARD = {
+    "identity": lambda value: value,
+    "log": np.log,
+    "fisher": lambda value: np.arctanh(np.clip(value, -1 + _EPS, 1 - _EPS)),
+    "fisher_squared": lambda value: np.arctanh(np.clip(np.sqrt(value), 0, 1 - _EPS)),
+}
+_INVERSE = {
+    "identity": lambda value: value,
+    "log": np.exp,
+    "fisher": np.tanh,
+    "fisher_squared": lambda value: np.clip(np.tanh(value), 0, 1) ** 2,
+    "circular": lambda value: np.angle(np.exp(1j * value)),
+}
+
+
+@pytest.mark.parametrize("transformation", list(_INVERSE))
+def test_bias_corrected_bounds_by_hand_for_every_transformation(transformation):
+    """Through the public function, for every transformation (with a circular
+    interval crossing +/-pi): the bounds are the back-transform of the
+    bias-corrected center plus and minus the half-width, unclipped."""
+    rng = np.random.default_rng(0)
+    estimate = rng.uniform(0.05, 0.9, size=(8, 5))
+    replicates = np.clip(estimate + 0.15 * rng.standard_normal((9, 8, 5)), 0.001, 0.999)
+    if transformation == "circular":
+        estimate = rng.uniform(-np.pi, np.pi, size=(8, 5))
+        replicates = estimate + 0.2 * rng.standard_normal((9, 8, 5))
+        estimate[0, 0] = 3.1
+        replicates[:, 0, 0] = 3.1 + 0.3 * rng.standard_normal(9)
+        transformed_estimate = estimate
+        transformed = estimate + np.angle(np.exp(1j * (replicates - estimate)))
+    else:
+        transformed_estimate = _FORWARD[transformation](estimate)
+        transformed = _FORWARD[transformation](replicates)
+    n = replicates.shape[0]
+    mean = transformed.mean(axis=0)
+    center = n * transformed_estimate - (n - 1) * mean
+    half_width = scipy.stats.t.ppf(0.975, df=n - 1) * np.sqrt(
+        (n - 1) / n * ((transformed - mean) ** 2).sum(axis=0)
+    )
+
+    result = jackknife_confidence_interval(
+        estimate, replicates, transformation=transformation, interval_center="bias_corrected"
+    )
+
+    assert result.interval_center == "bias_corrected"
+    for bound, expected in zip(
+        result.confidence_interval,
+        (
+            _INVERSE[transformation](center - half_width),
+            _INVERSE[transformation](center + half_width),
+        ),
+        strict=True,
+    ):
+        np.testing.assert_allclose(bound, expected, rtol=1e-12, atol=1e-15)
+    default = jackknife_confidence_interval(
+        estimate, replicates, transformation=transformation
+    )
+    np.testing.assert_array_equal(result.standard_error, default.standard_error)
+    np.testing.assert_array_equal(result.bias_corrected, default.bias_corrected)
+
+
+@pytest.mark.parametrize("method", ["imaginary_coherence", "phase_locking_value"])
+def test_a_magnitudes_bias_corrected_interval_is_never_inverted(method):
+    """A bias-corrected center more than a half-width below 0 left the upper
+    bound below the lower one clamped at 0 (seed 1, 5 uncoupled trials:
+    imaginary_coherence at 44 and 60 Hz); both bounds are clamped now."""
+    signals = np.random.default_rng(1).standard_normal((100, 5, 2))
+    _, connectivity = _connectivity(signals)
+    result = quietly(
+        connectivity.jackknife, method, leave_out="trial", interval_center="bias_corrected"
+    )
+    lower, upper = (bound[..., 0, 1] for bound in result.confidence_interval)
+    assert np.all(lower >= 0)
+    assert np.all(upper >= lower)
+
+
+def test_a_bias_corrected_interval_stays_in_the_measures_range():
+    """For uncoupled signals the bias-corrected band Granger interval can lie
+    wholly below 0 (seed 27, the low band); clipped into Granger's range
+    [0, inf) it collapses to [0, 0], and nowhere does a bound leave it. The
+    public function, which knows no measure, does not clip."""
+    signals = np.random.default_rng(27).standard_normal((256, 10, 2))
+    connectivity = Connectivity.from_transform(
+        Multitaper(
+            signals,
+            sampling_frequency=1.0,
+            n_time_samples_per_window=256,
+            time_halfbandwidth_product=3,
+        )
+    )
+    result = connectivity.jackknife(
+        "pairwise_spectral_granger_prediction",
+        leave_out="trial",
+        frequency_bands={"low": (0.05, 0.15), "mid": (0.2, 0.3)},
+        interval_center="bias_corrected",
+        keep_replicates=True,
+    )
+    lower, upper = result.confidence_interval
+    off_diagonal = ~np.eye(2, dtype=bool)
+    assert np.all(lower[..., off_diagonal] >= 0)
+    assert np.all(upper[..., off_diagonal] >= lower[..., off_diagonal])
+    assert (lower[0, 0, 0, 1], upper[0, 0, 0, 1]) == (0.0, 0.0)
+    unclipped = jackknife_confidence_interval(
+        result.estimate,
+        result.replicates,
+        transformation=result.transformation,
+        interval_center="bias_corrected",
+    )
+    assert unclipped.confidence_interval[1][0, 0, 0, 1] < 0
+    np.testing.assert_array_equal(
+        np.clip(unclipped.confidence_interval[0], 0, np.inf)[..., off_diagonal],
+        lower[..., off_diagonal],
+    )
+
+
+@pytest.mark.parametrize("method", ["magnitude_squared_coherence", "power"])
+def test_public_function_reproduces_a_weighted_band_bias_corrected_interval(
+    time_series, method
+):
+    """With artifacts, bands and kept replicates, the public function given the
+    method's estimate and replicates reproduces its bias-corrected interval."""
+    _, connectivity = _connectivity(_with_artifacts(time_series))
+    result = quietly(
+        connectivity.jackknife,
+        method,
+        leave_out="trial",
+        frequency_bands={"theta": (4, 8), "beta": (13, 30)},
+        keep_replicates=True,
+        interval_center="bias_corrected",
+    )
+    public = jackknife_confidence_interval(
+        result.estimate,
+        result.replicates,
+        transformation=result.transformation,
+        interval_center="bias_corrected",
+    )
+    assert result.interval_center == public.interval_center == "bias_corrected"
+    for got, want in zip(public.confidence_interval, result.confidence_interval, strict=True):
+        np.testing.assert_array_equal(got, want)
+
+
 def test_an_unknown_interval_center_is_refused(time_series):
     _, connectivity = _connectivity(time_series)
     with pytest.raises(
