@@ -663,3 +663,26 @@ def test_surrogate_test_runs_on_the_device(xp, monkeypatch, kind, measure):
     assert isinstance(on_device.p_value, np.ndarray)
     np.testing.assert_array_equal(on_device.p_value, host.p_value)
     np.testing.assert_array_equal(on_device.fwer_p_value, host.fwer_p_value)
+
+
+def test_surrogate_test_with_observation_weights_runs_on_the_device(xp, monkeypatch):
+    """Weighted unit counting in surrogate_test transfers counts via to_numpy
+    and matches the host result on the emulated device backend."""
+    rng = np.random.default_rng(14)
+    coefficients = _coefficients(rng, shape=(2, 6, 3, 16, 2))
+    weights = np.ones((2, 6, 3, 16, 1))
+    weights[0, 1:] = 0.0
+    kwargs = {"kind": "conjugation", "n_surrogates": 5, "random_state": 0}
+    with pytest.warns(UserWarning, match="observation_weights leave fewer than 2 independent"):
+        on_device = Connectivity(
+            xp.asarray(coefficients), observation_weights=xp.asarray(weights)
+        ).surrogate_test("imaginary_coherence", **kwargs)
+
+    monkeypatch.undo()
+    with pytest.warns(UserWarning, match="observation_weights leave fewer than 2 independent"):
+        host = Connectivity(coefficients, observation_weights=weights).surrogate_test(
+            "imaginary_coherence", **kwargs
+        )
+    assert np.isnan(on_device.p_value[0]).all()
+    np.testing.assert_array_equal(on_device.p_value, host.p_value)
+    np.testing.assert_array_equal(on_device.fwer_p_value, host.fwer_p_value)
