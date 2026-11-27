@@ -946,3 +946,105 @@ def test_an_exact_spectrum_is_refused(small_connectivity, monkeypatch):
         small_connectivity.surrogate_test(
             "magnitude_squared_coherence", kind="trial_shuffle", n_surrogates=3
         )
+
+
+@pytest.mark.parametrize("kind", ["phase_rotation", "conjugation"])
+def test_observation_weights_single_unit_window_is_untested_and_excluded_from_fwer(kind):
+    """When artifact_samples leaves only 1 trial in a time window, whole-unit
+    rotation or conjugation leaves symmetric measures invariant there. That
+    window must be left untested (NaN) and excluded from the family maxima so
+    its invariant values do not mask significant bins in other windows."""
+    rng = np.random.default_rng(0)
+    fs = 200
+    n_samples = 400
+    n_trials = 10
+    leader = rng.standard_normal((n_samples + 2, n_trials))
+    s0 = leader[2:]
+    s1 = rng.standard_normal((n_samples, n_trials))
+    s1[200:] = leader[200:400] + 0.5 * rng.standard_normal((200, n_trials))
+    signals = np.stack([s0, s1], axis=-1)
+
+    artifacts = np.zeros((n_samples, n_trials), dtype=bool)
+    artifacts[10, 1:] = True
+    mt = Multitaper(
+        signals,
+        sampling_frequency=fs,
+        time_window_duration=1.0,
+        time_halfbandwidth_product=2,
+        artifact_samples=artifacts,
+    )
+    conn = Connectivity.from_transform(mt)
+    measure = (
+        "magnitude_squared_coherence" if kind == "phase_rotation" else "imaginary_coherence"
+    )
+
+    with pytest.warns(UserWarning, match="observation_weights leave fewer than 2 independent"):
+        result = conn.surrogate_test(measure, kind=kind, n_surrogates=49, random_state=0)
+
+    assert np.isnan(result.p_value[0]).all()
+    assert np.isnan(result.fwer_p_value[0]).all()
+    assert np.nanmin(result.fwer_p_value[1]) <= 0.05
+
+    # Matches testing the intact second window on its own with the same seed.
+    mt_win1 = Multitaper(
+        signals[200:],
+        sampling_frequency=fs,
+        time_window_duration=1.0,
+        time_halfbandwidth_product=2,
+    )
+    ref = Connectivity.from_transform(mt_win1).surrogate_test(
+        measure, kind=kind, n_surrogates=49, random_state=0
+    )
+    np.testing.assert_array_equal(result.p_value[1], ref.p_value[0])
+    np.testing.assert_array_equal(result.fwer_p_value[1], ref.fwer_p_value[0])
+    np.testing.assert_allclose(result.null_maxima, ref.null_maxima, rtol=1e-13, atol=1e-13)
+
+
+@pytest.mark.parametrize("kind", ["phase_rotation", "conjugation"])
+def test_observation_weights_all_single_unit_bins_refused(kind):
+    """When observation_weights leave fewer than 2 units in every bin, the
+    call raises ValueError cleanly without warning first."""
+    rng = np.random.default_rng(1)
+    coefficients = _coefficients(rng, (2, 4, 3, 16, 2))
+    weights = np.zeros((2, 4, 3, 16, 1))
+    weights[:, 0] = 1.0
+    conn = Connectivity(coefficients, observation_weights=weights, half_bandwidth=0.05)
+    with pytest.raises(ValueError, match="at least 2 independent units with nonzero"):
+        conn.surrogate_test(
+            "magnitude_squared_coherence", kind=kind, n_surrogates=19, random_state=0
+        )
+
+
+def test_observation_weights_single_unit_band_summed_measure():
+    """Band-summed measures (phase_slope_index) exclude windows whose band has
+    fewer than 2 valid units and refuse a band with fewer than 2 everywhere."""
+    rng = np.random.default_rng(2)
+    coefficients = _coefficients(rng, (2, 6, 3, 16, 2))
+    weights = np.ones((2, 6, 3, 16, 1))
+    weights[0, 1:] = 0.0
+    conn = Connectivity(coefficients, observation_weights=weights, half_bandwidth=0.05)
+    with pytest.warns(UserWarning, match="observation_weights leave fewer than 2 independent"):
+        result = conn.surrogate_test(
+            "phase_slope_index",
+            kind="phase_rotation",
+            n_surrogates=9,
+            random_state=0,
+            frequency_range=(0.1, 0.35),
+        )
+    assert np.isnan(result.p_value[0]).all()
+    assert np.isnan(result.fwer_p_value[0]).all()
+    assert np.isfinite(result.p_value[1, 0, 1])
+
+    # Every frequency in the requested band has only 1 valid unit, while other
+    # frequencies have 6: the band-summed test must still refuse.
+    band_weights = np.ones((1, 6, 3, 16, 1))
+    band_weights[:, 1:, :, 2:6, :] = 0.0
+    conn_band = Connectivity(coefficients[:1], observation_weights=band_weights)
+    with pytest.raises(ValueError, match="at least 2 independent units with nonzero"):
+        conn_band.surrogate_test(
+            "phase_slope_index",
+            kind="conjugation",
+            n_surrogates=5,
+            random_state=0,
+            frequency_range=(0.125, 0.3125),
+        )

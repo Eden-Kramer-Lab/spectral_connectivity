@@ -3727,6 +3727,9 @@ class Connectivity:
                 kind, method, estimate, rotation_half_bandwidth, method_kwargs
             )
         )
+        tested = self._mask_single_unit_bins(
+            kind, method, unit_axes, estimate, tested, method_kwargs
+        )
         tally = _SurrogateTally(
             _surrogate_statistic(estimate, alternative), tested, family_axes, n_surrogates
         )
@@ -3739,7 +3742,11 @@ class Connectivity:
                     self._surrogate_coefficients(kind, unit_axes, rng),
                     self._observation_weights,
                 )
-                values = getattr(surrogate_connectivity, method)(**method_kwargs)
+                with _user_warnings_ignored(
+                    _SINGLE_KEPT_OBSERVATION_WARNINGS,
+                    self._observation_weights is not None,
+                ):
+                    values = getattr(surrogate_connectivity, method)(**method_kwargs)
                 tally.add(
                     _surrogate_statistic(
                         _real_array_result(values, method, "surrogate_test"), alternative
@@ -3898,6 +3905,17 @@ class Connectivity:
         n_units = int(np.prod([shape[axis] for axis in unit_axes]))
         if n_units < 2:
             raise ValueError(self._single_unit_message(kind, n_units))
+        if self._observation_weights is not None:
+            max_valid_units = int(self._surrogate_unit_counts(unit_axes).max(initial=0))
+            if max_valid_units < 2:
+                msg = (
+                    f"surrogate_test(kind={kind!r}) requires at least 2 independent "
+                    "units with nonzero observation_weights in some bin, got at most "
+                    f"{max_valid_units} (see n_valid_observations). With a single unit, "
+                    "whole-unit randomization leaves symmetric measures unchanged."
+                )
+                raise ValueError(msg)
+            n_units = min(n_units, max_valid_units)
         if kind == "conjugation" and n_units - 1 < math.log2(n_surrogates):
             # Flipping every unit conjugates the whole spectrum, which leaves
             # the measures symmetric under conjugation unchanged.
@@ -3977,6 +3995,97 @@ class Connectivity:
             else "record more trials (kind='trial_shuffle' then works too)"
         )
         return f"{msg} To get 2 or more units, {windows_remedy}, or {trials_remedy}."
+
+    def _surrogate_unit_counts(self, unit_axes: tuple[int, ...]) -> NDArray[np.intp]:
+        """Count independent units with positive ``observation_weights`` per output bin.
+
+        Returns a host integer array of shape ``(*kept_obs_shape, n_nonnegative)``.
+        A unit along ``unit_axes`` counts in a bin if any of the other averaged axes
+        (such as tapers or overlapping time windows) has positive weight there.
+        """
+        assert self._observation_weights is not None
+        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
+        positive = self._observation_weights[..., :n_nonnegative, 0] > 0
+        collapsed = tuple(axis for axis in self._expectation_axes if axis not in unit_axes)
+        unit_present = (
+            xp.any(positive, axis=collapsed, keepdims=True) if collapsed else positive
+        )
+        counts = xp.squeeze(
+            xp.sum(unit_present, axis=unit_axes, keepdims=True),
+            axis=self._expectation_axes,
+        )
+        valid_counts: NDArray[np.intp] = to_numpy(counts)
+        return valid_counts
+
+    def _mask_single_unit_bins(
+        self,
+        kind: str,
+        method: str,
+        unit_axes: tuple[int, ...],
+        estimate: NDArray[np.floating],
+        tested: NDArray[np.bool_],
+        method_kwargs: dict[str, Any],
+    ) -> NDArray[np.bool_]:
+        """Leave bins with fewer than 2 weighted units untested, warning when any are dropped.
+
+        Where ``observation_weights`` leave only 1 unit along ``unit_axes``,
+        whole-unit phase rotation or conjugation leaves symmetric measures
+        unchanged: testing those bins would yield p-values of 1 and let their
+        invariant estimates dominate the family maxima.
+        """
+        if self._observation_weights is None or kind == "trial_shuffle":
+            return tested
+        valid_units_per_freq = self._surrogate_unit_counts(unit_axes)
+        n_nonnegative = valid_units_per_freq.shape[-1]
+        dims = self._result_dims(method, estimate.ndim)
+        band_summed = dims is not None and "frequency" not in dims
+        frequency_axis = (
+            dims.index("frequency")
+            if dims is not None and not band_summed
+            else len(self._kept_observation_axes)
+        )
+        per_frequency = (
+            not band_summed
+            and estimate.ndim >= frequency_axis + 3
+            and estimate.shape[frequency_axis] == n_nonnegative
+        )
+        if per_frequency:
+            valid_units = valid_units_per_freq
+        elif band_summed:
+            band = _select_measure_frequencies(
+                self.frequencies,
+                method_kwargs.get("frequency_range"),
+                method_kwargs.get("frequencies_of_interest"),
+            ).mask
+            valid_units = valid_units_per_freq[..., band].min(axis=-1)
+        else:
+            valid_units = valid_units_per_freq.min(axis=-1)
+
+        max_valid = int(valid_units.max(initial=0))
+        if max_valid < 2:
+            msg = (
+                f"surrogate_test(kind={kind!r}) requires at least 2 independent "
+                "units with nonzero observation_weights in some bin, got at most "
+                f"{max_valid} (see n_valid_observations). With a single unit, "
+                "whole-unit randomization leaves symmetric measures unchanged."
+            )
+            raise ValueError(msg)
+
+        enough = valid_units >= 2
+        trailing = (1,) * (estimate.ndim - enough.ndim)
+        mask = enough.reshape(*enough.shape, *trailing)
+        if (tested & ~mask).any():
+            too_few = (valid_units > 0) & ~enough
+            warnings.warn(
+                f"surrogate_test(kind={kind!r}): observation_weights leave fewer than "
+                f"2 independent units in {int(too_few.sum())} of {too_few.size} bins "
+                "(see n_valid_observations), too few to randomize, so p_value and "
+                "fwer_p_value are NaN there and those bins are excluded from the "
+                "family maxima.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return tested & mask
 
     def _surrogate_coefficients(
         self,
