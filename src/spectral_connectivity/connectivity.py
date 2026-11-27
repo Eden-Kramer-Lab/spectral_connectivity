@@ -5,7 +5,7 @@ import inspect
 import math
 import re
 import warnings
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cached_property, wraps
@@ -3085,6 +3085,133 @@ class Connectivity:
         )
         raise ValueError(msg)
 
+    def _band_taper_jackknife_message(self, n_trials: int) -> str:
+        """Why ``jackknife`` refuses to leave out tapers for ``frequency_bands``."""
+        units = (
+            "one taper of one trial"
+            if self.expectation_type == "tapers"
+            else "one trial-taper observation"
+        )
+        msg = (
+            f"jackknife(frequency_bands=...) with leave_out='observation' and "
+            f"expectation_type={self.expectation_type!r} leaves out {units} at "
+            "a time, but the DPSS tapers' coefficients, uncorrelated at one "
+            "frequency, are correlated at frequencies within their bandwidth, so "
+            "leave-one-taper-out replicates of a statistic over several "
+            "frequencies are not independent and its interval is too narrow (a "
+            "nominal 95% interval covered 43-81% of band means and band maxima "
+            "in simulation). "
+        )
+        if n_trials < 3:
+            return msg + (
+                "Leaving out whole trials (leave_out='trial') is valid but needs at "
+                f"least 3 trials, and these data have {n_trials}, so there is no "
+                "valid jackknife for a band statistic on these data. Collect at "
+                "least 3 trials, or jackknife each frequency (without "
+                "frequency_bands), for which leaving out tapers is valid."
+            )
+        how = (
+            "Pass leave_out='trial'"
+            if self.expectation_type == "trials_tapers"
+            else "Build the Connectivity with expectation_type='trials_tapers' and "
+            "pass leave_out='trial'"
+        )
+        return msg + (
+            f"{how}, which leaves out one whole trial at a time (all its tapers "
+            f"together) and needs at least 3 trials; these data have {n_trials}."
+        )
+
+    def _band_reducer(
+        self,
+        method: str,
+        frequency_bands: Mapping[str, tuple[float, float]],
+        frequency_reduction: str,
+    ) -> Callable[[NDArray[np.floating]], NDArray[np.floating]]:
+        """Validate ``jackknife``'s band request and return its band reduction.
+
+        The request is checked as :func:`frequency_band_reduce` checks it
+        (bands, reduction, and which measures may be integrated), before any
+        measure is computed. The returned function replaces the frequency axis
+        of a result of ``method``, ``(..., n_nonnegative_frequencies, ...)``,
+        with a band axis, ``(..., n_bands, ...)``, in the mapping's order.
+        """
+        # These modules import this one, so their helpers are imported here.
+        from spectral_connectivity._frequency_bands import (
+            _band_bins,
+            _band_masks,
+            _band_reduction,
+            _nyquist_frequency,
+            _reduce_band,
+        )
+        from spectral_connectivity._measure_registry import (
+            _MEASURE_SPECS,
+            _consumes_frequency_range,
+        )
+
+        if _consumes_frequency_range(method):
+            msg = (
+                f"jackknife cannot reduce {method!r} to frequency_bands: it selects "
+                "its own frequency bins with frequency_range, so its result is not "
+                "on the frequency grid the bands select from. To restrict it to "
+                "one band, pass frequency_range=(low, high) without "
+                "frequency_bands; jackknife forwards it to the measure."
+            )
+            raise ValueError(msg)
+        frequencies = self.frequencies
+        band_masks_and_bounds = _band_masks(
+            frequencies, frequency_bands, frequency_reduction=frequency_reduction
+        )
+        spec = _MEASURE_SPECS.get(method)
+        reduction = _band_reduction(
+            method,
+            frequency_reduction,
+            circular=None,
+            units=None if spec is None else spec.units,
+            is_complex=False,
+        )
+        # A two-sided FFT grid has a Nyquist bin only for an even length; a
+        # one-sided grid is read as frequency_band_reduce reads one without a
+        # recorded Nyquist frequency.
+        nyquist_frequency = (
+            _nyquist_frequency({}, frequencies)
+            if self._is_one_sided
+            else (float(frequencies[-1]) if len(self._frequencies) % 2 == 0 else None)
+        )
+        bands = _band_bins(
+            frequencies,
+            band_masks_and_bounds,
+            frequency_reduction=frequency_reduction,
+            nyquist_frequency=nyquist_frequency,
+        )
+        # The kept observation axes lead every measure's result.
+        frequency_axis = len(self._kept_observation_axes)
+
+        def reduce_to_bands(values: NDArray[np.floating]) -> NDArray[np.floating]:
+            if values.ndim <= frequency_axis or values.shape[frequency_axis] != len(
+                frequencies
+            ):
+                msg = (
+                    f"jackknife cannot reduce {method!r} to frequency_bands: its "
+                    f"result, of shape {values.shape}, has no axis of the "
+                    f"{len(frequencies)} non-negative frequencies at position "
+                    f"{frequency_axis}."
+                )
+                raise ValueError(msg)
+            return np.stack(
+                [
+                    _reduce_band(
+                        np.take(values, bins, axis=frequency_axis),
+                        frequency_axis,
+                        reduction=reduction,
+                        weights=weights,
+                    )
+                    for bins, weights in bands
+                ],
+                axis=frequency_axis,
+            )
+
+        return reduce_to_bands
+
     @_refused_for_exact_spectrum("sampling_error")
     def jackknife(
         self,
@@ -3095,6 +3222,8 @@ class Connectivity:
             "auto", "identity", "log", "fisher", "fisher_squared", "circular"
         ] = "auto",
         leave_out: Literal["observation", "trial"] = "observation",
+        frequency_bands: Mapping[str, tuple[float, float]] | None = None,
+        frequency_reduction: Literal["mean", "integral"] = "mean",
         **method_kwargs: Any,
     ) -> JackknifeResult:
         """Estimate uncertainty by leaving out one observation or one trial.
@@ -3152,6 +3281,28 @@ class Connectivity:
             are the same) and at least 3 trials. It assumes the trials are
             independent, but not the tapers within one, so it is allowed when
             ``observations_are_independent`` is ``False``.
+
+            A statistic over several frequencies (``frequency_bands``, or one
+            computed from ``JackknifeResult.replicates``) needs whole trials
+            as units; see Notes.
+        frequency_bands : mapping of str to (float, float), optional
+            Band names and their ``(low, high)`` bounds in the units of
+            :attr:`frequencies`, both endpoints included, as in
+            :func:`~spectral_connectivity.frequency_band_reduce`. The measure
+            of the full data and of every replicate is reduced to these bands
+            before the interval is formed, and ``transformation`` applies to
+            the band value (the log of band power, ``atanh(sqrt(.))`` of the
+            band-mean magnitude-squared coherence). Each unit left out must be
+            a whole trial: ``leave_out="trial"``, or an expectation whose
+            observations are trials (``"trials"``, or ``"trials_tapers"`` with
+            one taper per trial). ``None`` (the default) keeps every
+            frequency.
+        frequency_reduction : {"mean", "integral"}, default="mean"
+            How ``frequency_bands`` combine a band's bins, as in
+            :func:`~spectral_connectivity.frequency_band_reduce`: the mean
+            of the measure over the bins in the band (circular for
+            ``coherence_phase``), or for ``power`` only, its integral over the
+            band (band power). Ignored without ``frequency_bands``.
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -3161,6 +3312,10 @@ class Connectivity:
             Estimate, bias-corrected estimate, standard error, and confidence
             bounds, each with the measure's own shape (for a pairwise measure
             ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)``).
+            With ``frequency_bands`` the frequency axis is replaced by a band
+            axis, in the mapping's order: ``(n_time, n_bands, n_signals,
+            n_signals)``. ``replicates`` holds the leave-one-out replicates,
+            ``(n_replicates, *estimate.shape)``.
             For directed measures ``[..., i, j]`` is the influence ``i -> j``,
             the same order as the xarray wrapper's ``sel(source=i, target=j)``.
 
@@ -3184,6 +3339,17 @@ class Connectivity:
             Also raised if ``leave_out`` is not ``"observation"`` or
             ``"trial"``, or is ``"trial"`` with an expectation that does not
             average trials or with fewer than 3 trials.
+
+            With ``frequency_bands``: if ``leave_out="observation"`` leaves
+            out tapers (``expectation_type="tapers"``, or ``"trials_tapers"``
+            with more than one taper per trial), since the interval would be
+            too narrow (see Notes); for the bands and reductions
+            :func:`~spectral_connectivity.frequency_band_reduce` refuses (a
+            band containing no bin, ``"integral"`` of a measure other than
+            ``power``); and for a measure that selects its own bins with
+            ``frequency_range`` (``delay``, ``group_delay``,
+            ``phase_slope_index``). All are raised before any measure is
+            computed.
 
         Notes
         -----
@@ -3249,6 +3415,41 @@ class Connectivity:
         are alike, the median ``"trial"`` interval is wider by 19-47% with 3
         or 4 trials, 13-20% with 5 and 5-8% with 10, at the same coverage
         (two Monte Carlo runs of 1000-2000 datasets each).
+
+        A statistic over several frequencies (a band mean or integral, a band
+        maximum, a peak frequency) needs whole trials as the units left out.
+        The DPSS tapers' coefficients are uncorrelated at one frequency but
+        correlated (0.3-0.6) at frequencies a few bins apart, within the
+        bandwidth, so the taper observations of a band are not independent. In
+        Monte Carlo runs with 1-20 trials of a bivariate VAR (256-2048 samples,
+        time-halfbandwidth product 3-4), a 95% interval leaving out one taper
+        at a time covered only 43-81% for band means and band maxima, while
+        leaving out whole trials covered 91-96% for band means and 83-93% for
+        band maxima. ``frequency_bands`` therefore requires whole trials, and
+        a statistic computed from ``JackknifeResult.replicates`` that combines
+        frequencies should use replicates from ``leave_out="trial"``.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> signals = rng.standard_normal((500, 10, 2))  # (time, trials, signals)
+        >>> signals[..., 1] += 0.5 * signals[..., 0]
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> result = connectivity.jackknife(
+        ...     "magnitude_squared_coherence",
+        ...     leave_out="trial",
+        ...     frequency_bands={"theta": (4, 8), "beta": (13, 30)},
+        ... )
+        >>> result.estimate.shape  # (n_time, n_bands, n_signals, n_signals)
+        (1, 2, 2, 2)
+        >>> result.replicates.shape  # one replicate per trial left out
+        (10, 1, 2, 2, 2)
+        >>> lower, upper = result.confidence_interval
+        >>> bool(lower[0, 0, 0, 1] < result.estimate[0, 0, 0, 1] < upper[0, 0, 0, 1])
+        True
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (
@@ -3315,6 +3516,15 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
+        if (
+            frequency_bands is not None
+            and leave_out == "observation"
+            and (
+                self.expectation_type == "tapers"
+                or (self.expectation_type == "trials_tapers" and coefficients.shape[2] > 1)
+            )
+        ):
+            raise ValueError(self._band_taper_jackknife_message(n_trials))
         method, measure = self._resampled_measure(method, "jackknife")
 
         if n_observations < 3:
@@ -3345,6 +3555,11 @@ class Connectivity:
                     "coherence default)."
                 )
             raise ValueError(msg)
+        reduce_to_bands = (
+            None
+            if frequency_bands is None
+            else self._band_reducer(method, frequency_bands, frequency_reduction)
+        )
 
         full_estimate = _real_array_result(
             measure(**method_kwargs),
@@ -3355,6 +3570,8 @@ class Connectivity:
                 "pairwise measure; group measures are not resampled yet."
             ),
         )
+        if reduce_to_bands is not None:
+            full_estimate = reduce_to_bands(full_estimate)
 
         observation_weights = self._observation_weights
         observation_coefficients = coefficients
@@ -3450,7 +3667,10 @@ class Connectivity:
                 if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
                     msg = f"jackknife requires a real array result from {method!r}."
                     raise TypeError(msg)
-                replicates.append(np.asarray(replicate))
+                replicate = np.asarray(replicate)
+                replicates.append(
+                    replicate if reduce_to_bands is None else reduce_to_bands(replicate)
+                )
         finally:
             _emit_migration_notices.reset(token)
 

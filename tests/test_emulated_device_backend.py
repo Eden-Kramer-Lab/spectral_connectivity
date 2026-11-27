@@ -390,8 +390,9 @@ def test_multitaper_transform_runs_on_the_device(xp):
 
 def test_artifact_samples_run_on_the_device(xp, monkeypatch):
     """The mask, the zero-filled samples, the drop weights, and the measures
-    that count each bin's kept observations (the jackknife among them) stay on
-    the device and match the host."""
+    that count each bin's kept observations (the jackknife among them, also
+    reduced to frequency bands, with its replicates) stay on the device and
+    match the host."""
     from spectral_connectivity import Multitaper
 
     rng = np.random.default_rng(11)
@@ -421,6 +422,19 @@ def test_artifact_samples_run_on_the_device(xp, monkeypatch):
         results["jackknife"] = connectivity.jackknife(
             "magnitude_squared_coherence"
         ).standard_error
+        bands = {"low": (10, 40), "high": (42, 90)}
+        for method, frequency_reduction in (
+            ("magnitude_squared_coherence", "mean"),
+            ("power", "integral"),
+        ):
+            band_interval = connectivity.jackknife(
+                method,
+                leave_out="trial",
+                frequency_bands=bands,
+                frequency_reduction=frequency_reduction,
+            )
+            results[f"jackknife_bands_{method}"] = band_interval.standard_error
+            results[f"jackknife_replicates_{method}"] = band_interval.replicates
         results["delay"] = connectivity.group_delay()[0]
         return multitaper, results
 
