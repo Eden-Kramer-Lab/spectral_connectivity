@@ -434,6 +434,46 @@ def test_artifact_samples_run_on_the_device(xp, monkeypatch):
         np.testing.assert_allclose(value, host[name], rtol=1e-12, equal_nan=True, err_msg=name)
 
 
+@pytest.mark.parametrize("taper_weighting", ["uniform", "eigen", "adaptive"])
+def test_missing_data_tapers_run_on_the_device(xp, monkeypatch, taper_weighting):
+    """The missing-data tapers (computed on the host), their coefficients,
+    weights, and taper counts reach the device and match the host."""
+    from spectral_connectivity import Multitaper
+
+    rng = np.random.default_rng(12)
+    time_series = rng.standard_normal((200, 4, 2))
+    time_series[60:64, 1, 0] = np.nan
+    time_series[[110, 112, 130], 2, 1] = np.nan
+
+    def compute():
+        multitaper = Multitaper(
+            time_series,
+            200,
+            n_time_samples_per_window=50,
+            artifact_samples="nonfinite",
+            artifact_handling="missing_data_tapers",
+            taper_weighting=taper_weighting,
+            detrend_type="linear",
+        )
+        connectivity = Connectivity.from_transform(multitaper)
+        return multitaper, {
+            "fft": multitaper.fft(),
+            "pairwise_phase_consistency": connectivity.pairwise_phase_consistency(),
+            "n_valid_observations": connectivity.n_valid_observations,
+        }
+
+    multitaper, on_device = compute()
+    assert isinstance(on_device.pop("fft"), _DeviceArray)
+    assert isinstance(multitaper.observation_weights, _DeviceArray)
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    _, host = compute()
+    host.pop("fft")
+    for name, value in on_device.items():
+        assert isinstance(value, np.ndarray), name
+        np.testing.assert_allclose(value, host[name], rtol=1e-12, equal_nan=True, err_msg=name)
+    assert (host["n_valid_observations"][1:3, 0] < 20).all()  # tapers were dropped
+
+
 def test_phase_lag_family_runs_on_the_device(xp, monkeypatch):
     """The phase-lag tile loop (ufunc ``out=``, ``count_nonzero`` over an axis
     tuple, ``einsum``) runs on device arrays and matches the host result."""

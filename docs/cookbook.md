@@ -386,6 +386,77 @@ takes a count reads such an array the same way: an entry below the fewest
 observations the statistic needs (two for the coherence statistics, one for
 the power statistics) gives NaN there, while a single count below it raises.
 
+Dropping a window throws away its valid samples too. With
+`artifact_handling="missing_data_tapers"` (a `Multitaper` setting; for the
+wrapper, in `transform_kwargs` beside `artifact_samples`) a trial window
+containing artifacts is estimated from its valid samples instead, with
+missing-data Slepian tapers: the sequences that are zero at its artifacts and
+most concentrated in the bandwidth, the DPSS of a window with gaps (Bronez
+1988; Chave 2019). It keeps those with over 90% of their energy in the band,
+so it can keep fewer tapers than a clean window. A window keeping fewer than
+2 is still dropped, with a warning: one with too few valid samples, or one
+whose artifacts recur more often than every `1 / frequency_resolution`
+seconds (here 1 / 12 Hz, 83 ms). `Multitaper.n_kept_tapers` says what each
+trial window keeps; here the two windows with artifacts keep 4 and 3 of
+their 5 tapers:
+
+```python
+>>> multitaper = Multitaper(
+...     time_series,
+...     sampling_frequency=sampling_frequency,
+...     time_window_duration=0.5,
+...     artifact_samples=artifact_samples,
+...     artifact_handling="missing_data_tapers",
+... )
+>>> multitaper.n_kept_tapers.tolist()  # (n_time_windows, n_trials)
+[[5, 5, 5, 4], [5, 5, 5, 5], [5, 3, 5, 5], [5, 5, 5, 5]]
+
+```
+
+Which to choose:
+
+- `"drop"` when few windows have artifacts, or when the spectrum spans more
+  than about 1000 in power (strong peaks over a low floor, or steep 1/f
+  power), where the gapped windows' extra leakage matters. A spectrum's span
+  is its largest true power over its smallest at every frequency from 0 Hz to
+  Nyquist, those below the band of interest included, since leakage brings
+  power from any of them;
+- `"missing_data_tapers"` when `"drop"` would lose much of the data, the
+  artifacts are short, and the spectrum spans less than about 100;
+- in between, compute both on your data and compare.
+
+:::{note}
+The gapped windows' tapers are less concentrated than the DPSS (down to 0.9
+rather than about 0.95), and fewer of them smooth less, so their expected
+spectrum differs from that without gaps. For 64-sample windows (NW = 3) and
+the gap patterns tested (a 4-, a 12-, and two 3-sample gaps), away from 0 Hz
+and Nyquist, it differs by about 5% for a spectrum spanning about 120 (an
+AR(2) with poles of radius 0.77) and by up to 37% for one spanning 2400
+(poles of radius 0.95 at 0.1 cycles per sample, two 3-sample gaps), each
+span taken over the window's 64 FFT frequencies. Other gap positions gave
+1-13% (a single 4- to 12-sample gap at 165 positions, under 6% for 68% of
+them) and 7-70% (two 3-sample gaps at 325, median 34%), and the difference
+grows toward Nyquist. Several short gaps can leak far more than one long one,
+depending on how far apart they are. For 500-sample windows (NW = 4) of an
+AR(1) with coefficient 0.99 (spanning about 40000), a bandwidth or more above
+0 Hz, one 20-sample gap at the window's center (samples 240-259) changed the
+expected spectrum by 2.4% (1.5-10.3% over its positions, above 5% only within
+25 samples of either end), and two 5-sample gaps at samples 200 and 300 by 52%.
+Over a grid of positions two 5-sample gaps changed it by 6-70% (median 41%)
+when 30 or more samples apart, but by 3-36% (median 8%) when closer, as they
+then act much like one gap (4.9% at samples 240 and 255). In exchange the
+valid samples are used: with three of four trials gapped in every window, the
+variance of white-noise power is a third of that of `"drop"`. Building the
+transform finds the tapers of each distinct pattern of artifacts in a trial
+window, about 2 ms per pattern for 1000 samples and 65 ms for 60000. With
+multithreaded OpenBLAS on many cores, as in the NumPy 1.24 and SciPy
+1.11-era wheels, that eigensolver (ARPACK) can be 190-840 times slower per
+pattern (600 ms against 3.2 ms for 1000 samples at NW = 4, on 18 threads). If
+building the transform is slow, set `OPENBLAS_NUM_THREADS=1` before starting
+Python, or build it within `threadpoolctl.threadpool_limits(1)`. Windows
+without artifacts are unchanged.
+:::
+
 ## Group measures: canonical coherence between areas
 
 Group measures (`list_measures(category="group_pairwise")` and
