@@ -1,17 +1,18 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import contextlib
+import functools
 import inspect
 import math
 import re
 import warnings
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cached_property, wraps
 from itertools import combinations
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, ParamSpec, TypeVar, cast
 
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
@@ -54,16 +55,19 @@ from spectral_connectivity.minimum_phase_decomposition import (
     NONCONVERGENCE_WARNING_START,
 )
 from spectral_connectivity.statistics import (
+    _MIN_JACKKNIFE_REPLICATES,
     JackknifeResult,
     SurrogateTestResult,
+    _jackknife_interval,
     _normalized_axes,
     _surrogate_statistic,
     _SurrogateTally,
     _validate_alpha,
     _validate_confidence_level,
+    _validate_interval_center,
+    _validate_jackknife_transformation,
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
-    jackknife_confidence_interval,
 )
 from spectral_connectivity.transforms import VARSpectrum, _var_settings_by_keyword
 from spectral_connectivity.utils import (
@@ -82,6 +86,7 @@ from spectral_connectivity.utils import (
 )
 
 if TYPE_CHECKING:
+    from spectral_connectivity._frequency_bands import _BandReducer
     from spectral_connectivity.transforms import SpectralTransform
 
 logger = getLogger(__name__)
@@ -529,6 +534,34 @@ def _exact_spectrum_refusal_message(method: str, reason: _ExactSpectrumRefusal) 
         "phase_slope_index, and the spectral Granger and transfer-function "
         f"families), or {_SIMULATE_INSTEAD}."
     )
+
+
+class _LeaveOutUnits(NamedTuple):
+    """What one replicate of ``Connectivity.jackknife`` leaves out.
+
+    ``kind`` is ``"trial"`` (a whole trial: ``leave_out="trial"``,
+    ``expectation_type="trials"``, or one taper per trial), ``"taper"`` (one
+    taper of a trial's window, which tapers of the same samples share), or
+    ``"segment"`` (one segment of a trial in time,
+    ``observations_are_time_segments``). Each replicate leaves out one index
+    of ``axis`` of the coefficients, after the trial and taper axes are
+    flattened into axis 1 when ``flatten``; there are ``n_units`` of them.
+    """
+
+    kind: Literal["trial", "taper", "segment"]
+    axis: int
+    n_units: int
+    flatten: bool
+
+    @property
+    def noun(self) -> str:
+        """The units in the plural, for messages."""
+        return {"trial": "trials", "taper": "observations", "segment": "segments"}[self.kind]
+
+
+def _unreduced(values: NDArray[np.floating]) -> NDArray[np.floating]:
+    """``jackknife``'s band reduction without ``frequency_bands``: none."""
+    return values
 
 
 def _refused_for_exact_spectrum(
@@ -1146,6 +1179,14 @@ class Connectivity:
         coefficients. The default assumes that coefficients passed directly
         may come from overlapping windows; pass ``True`` for ones that do
         not. It changes no measure.
+    observations_are_time_segments : bool, default=False
+        Keyword-only. Whether each trial's observations (the taper axis) are
+        segments of it in time, as ``Welch``'s are, rather than tapers of the
+        same samples, which :meth:`from_transform` reads from the transform.
+        Different tapers' coefficients are correlated across nearby
+        frequencies and segments' are not, so :meth:`jackknife` with
+        ``frequency_bands`` leaves out one observation at a time only when
+        this is ``True``. The default takes them as tapers.
     half_bandwidth : float, optional
         Half-width of the transform's spectral smoothing, in the units of
         ``frequencies`` (``frequency_resolution / 2`` for ``Multitaper``,
@@ -1336,6 +1377,7 @@ class Connectivity:
         time_bins_are_independent: bool = True,
         *,
         time_bins_are_disjoint: bool = False,
+        observations_are_time_segments: bool = False,
         half_bandwidth: float | None = None,
         is_exact_spectrum: bool = False,
         _adopt_fourier_coefficients: bool = False,
@@ -1375,6 +1417,9 @@ class Connectivity:
         )
         self._half_bandwidth = (
             None if half_bandwidth is None else _validated_half_bandwidth(half_bandwidth)
+        )
+        self._observations_are_time_segments = _validated_flag(
+            "observations_are_time_segments", observations_are_time_segments
         )
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
@@ -1941,6 +1986,9 @@ class Connectivity:
         if half_bandwidth is not None:
             half_bandwidth = _validated_half_bandwidth(half_bandwidth)
         time_bins_are_disjoint = _transform_flag(transform, "time_bins_are_disjoint", False)
+        observations_are_time_segments = _transform_flag(
+            transform, "observations_are_time_segments", False
+        )
         init_kwargs["fourier_coefficients"] = transform.fft()
         init_kwargs["time"] = transform.time
         init_kwargs["frequencies"] = transform.frequencies
@@ -1966,6 +2014,7 @@ class Connectivity:
             connectivity = cls(**init_kwargs)
         connectivity._half_bandwidth = half_bandwidth
         connectivity._time_bins_are_disjoint = time_bins_are_disjoint
+        connectivity._observations_are_time_segments = observations_are_time_segments
         return connectivity
 
     @contextlib.contextmanager
@@ -2934,6 +2983,22 @@ class Connectivity:
         return self._observations_are_independent
 
     @property
+    def observations_are_time_segments(self) -> bool:
+        """Whether each trial's observations are segments of it in time.
+
+        :meth:`from_transform` reads it from the transform (``True`` for
+        :class:`~spectral_connectivity.transforms.Welch`, whose observations
+        are successive segments; ``False`` for tapers of the same samples, as
+        :class:`~spectral_connectivity.transforms.Multitaper`'s are), and it
+        is a keyword of the constructor for coefficients passed directly
+        (``False`` unless passed). :meth:`jackknife` with ``frequency_bands``
+        leaves out one observation at a time only when it is ``True``.
+
+        .. versionadded:: 3.0
+        """
+        return self._observations_are_time_segments
+
+    @property
     def half_bandwidth(self) -> float | None:
         """Half-width of the transform's spectral smoothing, or ``None`` if unknown.
 
@@ -3085,6 +3150,239 @@ class Connectivity:
         )
         raise ValueError(msg)
 
+    def _leave_out_units(self, leave_out: str) -> _LeaveOutUnits:
+        """The units ``jackknife(leave_out=...)`` leaves out, one per replicate."""
+        n_trials, n_tapers = self._fourier_coefficients.shape[1:3]
+        if leave_out == "trial" or self.expectation_type == "trials":
+            return _LeaveOutUnits("trial", axis=1, n_units=n_trials, flatten=False)
+        kind: Literal["taper", "segment"] = (
+            "segment" if self._observations_are_time_segments else "taper"
+        )
+        if self.expectation_type == "tapers":
+            return _LeaveOutUnits(kind, axis=2, n_units=n_tapers, flatten=False)
+        # trials_tapers: one trial-taper observation, the two axes flattened.
+        return _LeaveOutUnits(
+            "trial" if n_tapers == 1 else kind,
+            axis=1,
+            n_units=n_trials * n_tapers,
+            flatten=True,
+        )
+
+    def _leave_out_problem(
+        self, units: _LeaveOutUnits, band_statistic: bool
+    ) -> Literal["correlated", "bands", "count"] | None:
+        """Why leaving out ``units`` one at a time gives no valid interval.
+
+        ``"correlated"``: they are not independent at one frequency (a part of
+        a trial, with ``observations_are_independent`` False); ``"bands"``:
+        for a statistic over frequencies, they are tapers of the same samples,
+        correlated across nearby frequencies; ``"count"``: fewer than 3.
+        ``None`` when the interval is valid.
+        """
+        if units.kind != "trial" and not self._observations_are_independent:
+            return "correlated"
+        if band_statistic and units.kind == "taper":
+            return "bands"
+        if units.n_units < _MIN_JACKKNIFE_REPLICATES:
+            return "count"
+        return None
+
+    def _leave_out_message(
+        self,
+        problem: Literal["correlated", "bands", "count"],
+        units: _LeaveOutUnits,
+        leave_out: str,
+        band_statistic: bool,
+        n_valid: int | None = None,
+    ) -> str:
+        """The refusal for ``problem`` (see :meth:`_leave_out_problem`).
+
+        ``n_valid`` is the count of units observation weights keep in some
+        bin, when that is what is too low.
+        """
+        n_trials = self._fourier_coefficients.shape[1]
+        expectation_type = self.expectation_type
+        segments_advice = (
+            "If the observations are segments of each trial in time instead "
+            "(Welch), build with Connectivity.from_transform(Welch(...)), or pass "
+            "observations_are_time_segments=True to Connectivity, to leave out "
+            "one segment at a time."
+        )
+        no_band_jackknife = (
+            "A band statistic of tapers of the same samples has no valid "
+            "jackknife with fewer than 3 trials: collect at least 3 trials, or "
+            "jackknife each frequency without frequency_bands, and do not "
+            "average those intervals or their replicates over a band."
+        )
+        if problem == "correlated":
+            msg = (
+                f"jackknife with expectation_type={expectation_type!r} leaves out "
+                f"one {'segment' if units.kind == 'segment' else 'taper observation'} "
+                "at a time, but this transform's observations are correlated "
+                "(observations_are_independent is False: a MorletWavelet smoothing "
+                "neighborhood, or Welch segments overlapping by more than half), so "
+                "leave-one-out intervals over them are invalid. For an interval on "
+                "the same averaged measure, "
+            )
+            if expectation_type == "trials_tapers" and n_trials >= 3:
+                msg += (
+                    "pass leave_out='trial', which leaves out whole trials and is "
+                    "valid with correlated tapers, or "
+                )
+            return msg + (
+                "recompute the transform with independent observations: Welch "
+                "with segment_overlap <= 0.5, a Multitaper transform, or "
+                "MorletWavelet without smoothing_time on at least 3 trials (the "
+                "trials are then the observations, and there is no time "
+                "smoothing). expectation_type='trials' keeps the correlated axis "
+                "as an output dimension instead of averaging it, so it measures "
+                "something else."
+            )
+        if problem == "bands":
+            msg = (
+                "jackknife(frequency_bands=...) cannot leave out one taper at a "
+                "time (leave_out='observation' with "
+                f"expectation_type={expectation_type!r}): a taper's Fourier "
+                "coefficients are correlated with the other tapers' across the "
+                "frequencies of a band, so the replicates are not independent and "
+                "the band interval is too narrow (see the Notes of "
+                "Connectivity.jackknife). "
+            )
+            if n_trials < 3:
+                return msg + (
+                    "Leaving out whole trials (leave_out='trial') needs at least 3, "
+                    f"and these data have {n_trials}. {no_band_jackknife} "
+                    f"{segments_advice}"
+                )
+            how = (
+                "Pass leave_out='trial'"
+                if expectation_type == "trials_tapers"
+                else "Build the Connectivity with expectation_type='trials_tapers' "
+                "(which averages the trials into one estimate; per-trial band "
+                "intervals have no valid jackknife) and pass leave_out='trial'"
+            )
+            return msg + (
+                f"{how} to leave out one whole trial at a time; it needs at least 3 "
+                f"trials, and these data have {n_trials}. {segments_advice}"
+            )
+        got = units.n_units if n_valid is None else f"{n_valid} with nonzero weight in any bin"
+        msg = (
+            f"jackknife(leave_out={leave_out!r}) requires at least "
+            f"{_MIN_JACKKNIFE_REPLICATES} {units.noun}, got {got}"
+        )
+        if units.kind == "trial" and n_valid is None:
+            msg += (
+                ": an interval over n trials has n - 1 degrees of freedom, so 2 "
+                "trials give a critical value near 13 and 1 trial gives none."
+            )
+            if leave_out != "trial":
+                return msg + " Collect at least 3 trials for an interval."
+            alternative = self._leave_out_units("observation")
+            alternative_problem = self._leave_out_problem(alternative, band_statistic)
+            if alternative.kind != "trial" and alternative_problem is None:
+                return msg + (
+                    f" Keep leave_out='observation' to leave out one "
+                    f"{'segment' if alternative.kind == 'segment' else 'trial-taper observation'} "
+                    "at a time."
+                )
+            if alternative_problem == "bands":
+                return f"{msg} {no_band_jackknife}"
+            return msg + " Collect at least 3 trials for an interval."
+        return msg + (
+            ". With two, each leave-one-out replicate has a single one, which "
+            "forces magnitude-normalized measures to 1 and makes the interval "
+            "degenerate (a zero standard error, or NaN under a "
+            "variance-stabilizing transform such as the coherence default)."
+        )
+
+    def _jackknife_band_reducer(
+        self,
+        method: str,
+        frequency_bands: Mapping[str, tuple[float, float]],
+        frequency_reduction: str,
+        method_kwargs: Mapping[str, Any],
+    ) -> "_BandReducer":
+        """Validate ``jackknife``'s band request and return its band reduction.
+
+        Checked before any measure is computed: the bands and the reduction
+        as :func:`frequency_band_reduce` checks them, and the measures it
+        cannot band-reduce. ``delay``'s grid is its ``frequency_range``, as
+        in the wrappers.
+        """
+        # These modules import this one, so their helpers are imported here.
+        from spectral_connectivity._frequency_bands import (
+            _band_reducer,
+            _frequency_reduced_message,
+            _nyquist_frequency,
+            _requests_two_sided_density,
+        )
+        from spectral_connectivity._measure_registry import (
+            _MEASURE_SPECS,
+            _consumes_frequency_range,
+            _reduces_frequency,
+        )
+
+        spec = _MEASURE_SPECS.get(method)
+        if _reduces_frequency(method):
+            msg = _frequency_reduced_message("frequency_bands", [method])
+            if spec is not None and spec.companions:
+                msg += (
+                    f"; but jackknife does not resample {method} in any case, "
+                    "since it returns several arrays."
+                )
+            else:
+                msg += (
+                    ", in jackknife without frequency_bands; leave_out='trial' (at "
+                    "least 3 trials) is the safer choice."
+                )
+            raise ValueError(msg)
+        if frequency_reduction == "integral" and _requests_two_sided_density(method_kwargs):
+            msg = (
+                "frequency_reduction='integral' integrates the one-sided power "
+                "density, but one_sided=False makes power return the two-sided "
+                "density at the non-negative frequencies, whose integral is half "
+                "the band power. Pass one_sided=True (or omit it)."
+            )
+            raise ValueError(msg)
+        frequencies = self.frequencies
+        if _consumes_frequency_range(method):
+            frequencies = frequencies[
+                _select_measure_frequencies(
+                    frequencies,
+                    method_kwargs.get("frequency_range"),
+                    method_kwargs.get("frequencies_of_interest"),
+                ).mask
+            ]
+        # A two-sided FFT grid has a Nyquist bin only for an even length; a
+        # one-sided grid is read as frequency_band_reduce reads one without a
+        # recorded Nyquist frequency.
+        nyquist_frequency = (
+            _nyquist_frequency({}, self.frequencies)
+            if self._is_one_sided
+            else (float(self.frequencies[-1]) if len(self._frequencies) % 2 == 0 else None)
+        )
+        return _band_reducer(
+            frequencies,
+            frequency_bands,
+            frequency_reduction=frequency_reduction,
+            measure=method,
+            units=None if spec is None else spec.units,
+            nyquist_frequency=nyquist_frequency,
+        )
+
+    def _frequency_axis(self, method: str, ndim: int) -> int | None:
+        """The frequency axis of ``method``'s ``ndim``-dimensional result.
+
+        ``None`` for a registered measure without one (it reduces the bins of
+        its ``frequency_range``); otherwise its axis among the registry's
+        dimensions (see :meth:`_result_dims`), or, for an unregistered
+        measure, the axis after the kept observation axes.
+        """
+        dims = self._result_dims(method, ndim)
+        if dims is None:
+            return len(self._kept_observation_axes)
+        return dims.index("frequency") if "frequency" in dims else None
+
     @_refused_for_exact_spectrum("sampling_error")
     def jackknife(
         self,
@@ -3095,6 +3393,10 @@ class Connectivity:
             "auto", "identity", "log", "fisher", "fisher_squared", "circular"
         ] = "auto",
         leave_out: Literal["observation", "trial"] = "observation",
+        frequency_bands: Mapping[str, tuple[float, float]] | None = None,
+        frequency_reduction: Literal["mean", "integral"] = "mean",
+        keep_replicates: bool = False,
+        interval_center: Literal["estimate", "bias_corrected"] = "estimate",
         **method_kwargs: Any,
     ) -> JackknifeResult:
         """Estimate uncertainty by leaving out one observation or one trial.
@@ -3152,6 +3454,46 @@ class Connectivity:
             are the same) and at least 3 trials. It assumes the trials are
             independent, but not the tapers within one, so it is allowed when
             ``observations_are_independent`` is ``False``.
+
+            A statistic over several frequencies (``frequency_bands``, or one
+            computed from ``JackknifeResult.replicates``) should not leave out
+            tapers; see Notes.
+        frequency_bands : mapping of str to (float, float), optional
+            Band names and their ``(low, high)`` bounds in the units of
+            :attr:`frequencies`, both endpoints included, as in
+            :func:`~spectral_connectivity.frequency_band_reduce`. The measure
+            of the full data and of every replicate is reduced to these bands
+            before the interval is formed, and ``transformation`` applies to
+            the band value (the log of band power, ``atanh(sqrt(.))`` of the
+            band-mean magnitude-squared coherence). The units left out must
+            not be tapers of the same samples: use ``leave_out="trial"``, an
+            expectation whose observations are trials (``"trials"``, or
+            ``"trials_tapers"`` with one taper per trial), or observations
+            that are segments in time (:attr:`observations_are_time_segments`,
+            recorded by ``Connectivity.from_transform(Welch(...))``, or passed
+            to the constructor). ``delay`` is reduced on the bins of its
+            ``frequency_range``, as in the wrappers. ``None`` (the default)
+            keeps every frequency.
+        frequency_reduction : {"mean", "integral"}, default="mean"
+            How ``frequency_bands`` combine a band's bins, as in
+            :func:`~spectral_connectivity.frequency_band_reduce`: the mean
+            of the measure over the bins in the band (circular for
+            ``coherence_phase``), or for ``power`` only, its integral over the
+            band (band power). Ignored without ``frequency_bands``.
+        keep_replicates : bool, default=False
+            Return the leave-one-out replicates as ``JackknifeResult.replicates``,
+            for an interval on another statistic of the measure through
+            :func:`~spectral_connectivity.statistics.jackknife_confidence_interval`.
+            They take ``n_replicates`` times the memory of the estimate, so
+            they are dropped unless asked for.
+        interval_center : {"estimate", "bias_corrected"}, default="estimate"
+            Where the interval is centered, on the transformed scale: on the
+            estimate, or on the jackknife's bias-corrected estimate (the
+            ``bias_corrected`` field), with the same half-width. The second is
+            for band statistics (band means and integrals) of biased measures,
+            not for per-frequency intervals or band maxima; see Notes. Its
+            bounds are clipped into the measure's value range (e.g. ``[0,
+            inf)`` for spectral Granger).
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -3160,7 +3502,17 @@ class Connectivity:
         JackknifeResult
             Estimate, bias-corrected estimate, standard error, and confidence
             bounds, each with the measure's own shape (for a pairwise measure
-            ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)``).
+            and the default expectation, ``(n_time,
+            n_nonnegative_frequencies, n_signals, n_signals)``; with
+            ``expectation_type="trials"`` the taper axis follows time). With
+            ``frequency_bands`` the frequency axis is replaced by a band axis,
+            in the mapping's order (``(n_time, n_bands, n_signals,
+            n_signals)`` for the default expectation), and
+            ``JackknifeResult.frequency_bands`` names it
+            (``frequency_reduction`` records the reduction). ``leave_out`` records
+            the unit left out, and with ``keep_replicates=True``
+            ``replicates`` holds the leave-one-out replicates,
+            ``(n_replicates, *estimate.shape)``.
             For directed measures ``[..., i, j]`` is the influence ``i -> j``,
             the same order as the xarray wrapper's ``sel(source=i, target=j)``.
 
@@ -3185,6 +3537,12 @@ class Connectivity:
             ``"trial"``, or is ``"trial"`` with an expectation that does not
             average trials or with fewer than 3 trials.
 
+            With ``frequency_bands``, before any measure is computed: for a
+            band request :func:`~spectral_connectivity.frequency_band_reduce`
+            refuses, ``"integral"`` with ``one_sided=False``, a measure
+            without a frequency axis (``phase_slope_index``, ``group_delay``),
+            and leaving out tapers of the same samples (see Notes).
+
         Notes
         -----
         Where zero ``observation_weights`` drop observations (the invalid
@@ -3195,7 +3553,8 @@ class Connectivity:
         (:attr:`n_valid_observations`; ``JackknifeResult.n_observations`` is
         then one count per bin). With ``leave_out="trial"`` the units are
         trials, a trial counting in a bin if any of its tapers is kept there.
-        A bin keeping fewer than 3 is NaN, with a warning.
+        A bin keeping fewer than 3 is NaN, with a warning; one keeping none is
+        NaN without one.
 
         Circular confidence bounds are wrapped to ``(-pi, pi]``, so when the
         interval crosses ``+/-pi`` the lower bound exceeds the upper bound;
@@ -3249,6 +3608,95 @@ class Connectivity:
         are alike, the median ``"trial"`` interval is wider by 19-47% with 3
         or 4 trials, 13-20% with 5 and 5-8% with 10, at the same coverage
         (two Monte Carlo runs of 1000-2000 datasets each).
+
+        Band statistics: different tapers' coefficients are uncorrelated at
+        one frequency but correlated at frequencies 1-3 bins apart (for white
+        noise and NW = 3-4, up to 0.4-0.6 between two tapers, median 0.2-0.4),
+        so the tapers of one window are not independent observations of a
+        band. In Monte Carlo runs of a bivariate VAR (256-2048-sample windows,
+        NW = 3-4, 1000-3000 datasets per configuration), a 95% interval leaving
+        out one taper at a time (1-20 trials) covered only 43-81% for band
+        means. For band maxima it was affected very unevenly: 43-47% in
+        long-window single-trial runs, 62-95% in others. Leaving out whole
+        trials (3-20 trials) covered 92-96% for band means at moderate or
+        strong coherence but 87% at a weak band-mean magnitude-squared
+        coherence of 0.07 with 5 trials, a shortfall from the estimate's upward
+        bias, and 69-96% for band maxima. ``frequency_bands`` therefore refuses
+        to leave out tapers of the same samples. Segments of a trial in time
+        (``Welch``) are not correlated that way and may be left out one at a
+        time: with disjoint segments a band-mean coherence interval covered
+        about 95%, and about 93% at half overlap.
+
+        ``interval_center="bias_corrected"`` centers the interval on the
+        jackknife's bias-corrected estimate, on the transformed scale, with
+        the same half-width. Use it for band statistics of biased measures,
+        such as the spectral Granger family and partial coherence: averaging
+        over a band shrinks a statistic's spread but not its finite-sample
+        bias, so an interval centered on the estimate misses. The gains
+        depend on the model and the pair. With 10 trials (50-70
+        observations), leaving out trials, in a dense 5-signal VAR and a
+        3-signal one (including an uncoupled pair), intervals centered on the
+        estimate covered 45-78% for band-mean pairwise and conditional
+        spectral Granger and 40-94% for partial coherence (40% for the weakest
+        pair of the dense model); centered on the bias-corrected estimate,
+        92-99%. It raised band-mean coherence from 92-96% to 96.7-97.0%, and
+        the weak band above from 87% to 92%. It does not help at zero
+        coherence, where neither interval covers 0 reliably (0% and 24-38%):
+        test for nonzero coherence with
+        :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`.
+        Keep the default for band maxima, whose coverage it lowers from 93-96%
+        to 87.5-94%, depending on the model. At a single frequency the default
+        center is already adequate and the bias-corrected one can hurt: a
+        single bin's estimate has more spread than bias (under 0.75 standard
+        deviations, and 0.95-1.1 for Granger at zero coupling; 1.7-2.0 for
+        magnitude-squared coherence at zero coherence), so the default covered
+        93-100% (84-87% for coherence at zero), while the bias-corrected
+        center lowered pairwise and conditional Granger coverage to 87.5-97%
+        and partial coherence to 90-96%, and left power and nonzero coherence
+        unchanged (three VAR models of 2, 3 and 5 signals, 1024-sample
+        windows, NW = 3, 5 and 10 trials, 200-400 datasets per configuration,
+        at a band's center and
+        edge bins). Use ``interval_center="bias_corrected"`` for band
+        statistics, not for per-frequency intervals. Its bounds are clipped
+        into the measure's value range: a bias-corrected interval collapsed
+        at a boundary (``[0, 0]`` for spectral Granger, say) means the
+        bias-corrected estimate lies at or beyond it, where the interval says
+        nothing; use the default center there, or a significance test
+        (:func:`~spectral_connectivity.statistics.coherence_significance_pvalue`,
+        :meth:`surrogate_test`).
+
+        ``phase_slope_index``, which combines adjacent bins inside its own fit
+        over ``frequency_range``, is less affected by leaving out tapers. With
+        ``frequency_range=(0.08, 0.13)`` cycles per sample, NW = 3-4 and 5-10
+        trials of 256-1024-sample windows (1000 datasets each), it covered
+        92.8-94.7% leaving out tapers against 95.0-95.3% leaving out trials;
+        with 5 trials of 128 samples, 95.3-96.4% and 93.6-94.9%. ``delay`` has
+        not been measured. For any other statistic over frequencies computed
+        from ``JackknifeResult.replicates``, the safe choice is replicates
+        from ``leave_out="trial"`` unless its coverage with other units has
+        been checked.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> signals = rng.standard_normal((500, 10, 2))  # (time, trials, signals)
+        >>> signals[..., 1] += 0.5 * signals[..., 0]
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> result = connectivity.jackknife(
+        ...     "magnitude_squared_coherence",
+        ...     leave_out="trial",
+        ...     frequency_bands={"theta": (4, 8), "beta": (13, 30)},
+        ... )
+        >>> result.estimate.shape  # (n_time, n_bands, n_signals, n_signals)
+        (1, 2, 2, 2)
+        >>> list(result.frequency_bands)  # the band axis, in order
+        ['theta', 'beta']
+        >>> lower, upper = result.confidence_interval
+        >>> bool(lower[0, 0, 0, 1] < result.estimate[0, 0, 0, 1] < upper[0, 0, 0, 1])
+        True
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (
@@ -3261,6 +3709,10 @@ class Connectivity:
             )
             raise ValueError(msg)
         _validate_confidence_level(confidence_level)
+        if transformation != "auto":
+            _validate_jackknife_transformation(transformation)
+        _validate_interval_center(interval_center)
+        keep_replicates = _validated_flag("keep_replicates", keep_replicates)
         if leave_out not in ("observation", "trial"):
             msg = f"leave_out must be 'observation' or 'trial'; got {leave_out!r}."
             raise ValueError(msg)
@@ -3273,92 +3725,26 @@ class Connectivity:
                 "out, or keep leave_out='observation' to leave out one taper."
             )
             raise ValueError(msg)
-        coefficients = self._fourier_coefficients
-        n_trials = coefficients.shape[1]
-        # Each replicate leaves out one index of ``observation_axis``; for one
-        # trial-taper observation of ``trials_tapers`` the two axes are
-        # flattened into axis 1 first.
-        flatten_trials_tapers = (
-            self.expectation_type == "trials_tapers" and leave_out == "observation"
-        )
-        observation_axis = 2 if self.expectation_type == "tapers" else 1
-        n_observations = (
-            n_trials * coefficients.shape[2]
-            if flatten_trials_tapers
-            else coefficients.shape[observation_axis]
-        )
-        if (
-            leave_out == "observation"
-            and not self._observations_are_independent
-            and self.expectation_type in {"tapers", "trials_tapers"}
-        ):
-            msg = (
-                f"jackknife with expectation_type={self.expectation_type!r} leaves "
-                "out one taper observation at a time, but this transform's "
-                "observations are correlated (observations_are_independent is "
-                "False: a MorletWavelet smoothing neighborhood, or Welch segments "
-                "overlapping by more than half), so leave-one-out intervals over "
-                "them are invalid. For an interval on the same averaged measure, "
-            )
-            if self.expectation_type == "trials_tapers" and n_trials >= 3:
-                msg += (
-                    "pass leave_out='trial', which leaves out whole trials and is "
-                    "valid with correlated tapers, or "
-                )
-            msg += (
-                "recompute the transform with independent observations: Welch "
-                "with segment_overlap <= 0.5, a Multitaper transform, or "
-                "MorletWavelet without smoothing_time on at least 3 trials (the "
-                "trials are then the observations, and there is no time "
-                "smoothing). expectation_type='trials' keeps the correlated axis "
-                "as an output dimension instead of averaging it, so it measures "
-                "something else."
-            )
-            raise ValueError(msg)
         method, measure = self._resampled_measure(method, "jackknife")
-
-        if n_observations < 3:
-            if leave_out == "trial":
-                msg = (
-                    "jackknife(leave_out='trial') requires at least 3 trials, got "
-                    f"{n_observations}: an interval over n trials has n - 1 degrees "
-                    "of freedom, so 2 trials give a critical value near 13 and 1 "
-                    "trial gives none."
-                )
-                if (
-                    self.expectation_type == "trials_tapers"
-                    and self._observations_are_independent
-                ):
-                    msg += (
-                        " Keep leave_out='observation' to leave out one trial-taper "
-                        "observation at a time."
-                    )
-                else:
-                    msg += " Collect at least 3 trials for an interval."
-            else:
-                msg = (
-                    "jackknife requires at least 3 observations, got "
-                    f"{n_observations}. With two, each leave-one-out replicate has a "
-                    "single observation, which forces magnitude-normalized measures "
-                    "to 1 and makes the interval degenerate (a zero standard error, "
-                    "or NaN under a variance-stabilizing transform such as the "
-                    "coherence default)."
-                )
-            raise ValueError(msg)
-
-        full_estimate = _real_array_result(
-            measure(**method_kwargs),
-            method,
-            "jackknife",
-            structured_hint=(
-                " Jackknife a measure that returns one real array, such as a "
-                "pairwise measure; group measures are not resampled yet."
-            ),
+        band_reducer = (
+            None
+            if frequency_bands is None
+            else self._jackknife_band_reducer(
+                method, frequency_bands, frequency_reduction, method_kwargs
+            )
         )
-
+        units = self._leave_out_units(leave_out)
+        band_statistic = frequency_bands is not None
+        problem = self._leave_out_problem(units, band_statistic)
+        if problem is not None:
+            raise ValueError(
+                self._leave_out_message(problem, units, leave_out, band_statistic)
+            )
+        coefficients = self._fourier_coefficients
+        observation_axis, n_observations = units.axis, units.n_units
         observation_weights = self._observation_weights
         observation_coefficients = coefficients
-        if flatten_trials_tapers:
+        if units.flatten:
             observation_coefficients = coefficients.reshape(
                 coefficients.shape[0],
                 n_observations,
@@ -3409,24 +3795,47 @@ class Connectivity:
             present = to_numpy(xp.moveaxis(present, observation_axis, 0))
             if not present.all():
                 unit_is_valid = present
-        units = "trials" if leave_out == "trial" else "observations"
         # The raw count was checked above; these are the units kept anywhere.
-        if unit_is_valid is not None and (n_valid := int(unit_is_valid.sum(0).max())) < 3:
-            caller = "jackknife(leave_out='trial')" if leave_out == "trial" else "jackknife"
-            msg = (
-                f"{caller} requires at least 3 {units}, got {n_valid} with "
-                "nonzero weight in any bin. With two, "
-                "each leave-one-out replicate has a single one, which forces "
-                "magnitude-normalized measures to 1 and makes the interval "
-                "degenerate (a zero standard error, or NaN under a "
-                "variance-stabilizing transform such as the coherence default)."
+        if (
+            unit_is_valid is not None
+            and (n_valid := int(unit_is_valid.sum(0).max())) < _MIN_JACKKNIFE_REPLICATES
+        ):
+            raise ValueError(
+                self._leave_out_message(
+                    "count", units, leave_out, band_statistic, n_valid=n_valid
+                )
             )
-            raise ValueError(msg)
         omitted_units: Sequence[int] = range(n_observations)
         if unit_is_valid is not None:
             omitted_units = np.flatnonzero(
                 unit_is_valid.reshape(n_observations, -1).any(axis=1)
             ).tolist()
+
+        full_estimate = _real_array_result(
+            measure(**method_kwargs),
+            method,
+            "jackknife",
+            structured_hint=(
+                " Jackknife a measure that returns one real array, such as a "
+                "pairwise measure; group measures are not resampled yet."
+            ),
+        )
+        reduce_to_bands: Callable[[NDArray[np.floating]], NDArray[np.floating]] = _unreduced
+        if band_reducer is not None:
+            frequency_axis = self._frequency_axis(method, full_estimate.ndim)
+            if (
+                frequency_axis is None
+                or full_estimate.shape[frequency_axis] != band_reducer.n_frequencies
+            ):
+                msg = (
+                    f"jackknife cannot reduce {method!r} to frequency_bands: its "
+                    f"result, of shape {full_estimate.shape}, has no axis of its "
+                    f"{band_reducer.n_frequencies} frequencies at position "
+                    f"{frequency_axis}."
+                )
+                raise ValueError(msg)
+            reduce_to_bands = functools.partial(band_reducer, axis=frequency_axis)
+        full_estimate = reduce_to_bands(full_estimate)
 
         replicates: list[NDArray[np.floating]] = []
         # The full estimate carried the migration notices; the replicates do not.
@@ -3450,7 +3859,7 @@ class Connectivity:
                 if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
                     msg = f"jackknife requires a real array result from {method!r}."
                     raise TypeError(msg)
-                replicates.append(np.asarray(replicate))
+                replicates.append(reduce_to_bands(np.asarray(replicate)))
         finally:
             _emit_migration_notices.reset(token)
 
@@ -3473,6 +3882,9 @@ class Connectivity:
                 resolved_transformation = "identity"
         else:
             resolved_transformation = transformation
+        leave_one_out = np.stack(replicates, axis=0)
+        # The stack is a copy: free the list before the interval's temporaries.
+        replicates.clear()
         replicate_is_valid = None
         if unit_is_valid is not None and not unit_is_valid[omitted_units].all():
             # Each bin's replicates lead the measure's own axes.
@@ -3484,44 +3896,65 @@ class Connectivity:
                     *(1,) * (full_estimate.ndim - len(kept_shape)),
                 )
             )
-            too_few = unit_is_valid.sum(axis=0) < 3
-            if too_few.any():
-                warnings.warn(
-                    f"jackknife: observation_weights leave fewer than 3 {units} "
-                    f"in {int(too_few.sum())} of {too_few.size} bins (see "
-                    "n_valid_observations), too few for a leave-one-out interval, so "
-                    "the bias-corrected estimate, standard error and bounds are NaN "
-                    "there.",
-                    UserWarning,
-                    stacklevel=stacklevel_outside_package(),
-                )
-                replicate_is_valid = replicate_is_valid & ~too_few.reshape(
-                    replicate_is_valid.shape[1:]
-                )
-        result = jackknife_confidence_interval(
+        result = _jackknife_interval(
             full_estimate,
-            np.stack(replicates, axis=0),
+            leave_one_out,
             confidence_level=confidence_level,
             transformation=resolved_transformation,
+            interval_center=interval_center,
+            # A NaN replicate of a unit the bin has is a NaN value of the
+            # measure, which makes the bin's interval NaN.
+            replicate_is_valid=replicate_is_valid,
             # PLV's diagonal is 1 by definition, not a saturated estimate.
-            _saturated_by_construction=(
+            saturated_by_construction=(
                 np.eye(self.n_signals, dtype=bool)
                 if method == "phase_locking_value"
                 else False
             ),
-            _replicate_is_valid=replicate_is_valid,
+            describe_too_few=lambda n_too_few, n_bins, threshold: (
+                f"jackknife: observation_weights leave fewer than {threshold} "
+                f"{units.noun} in {n_too_few} of {n_bins} bins (see "
+                "n_valid_observations)"
+            ),
         )
         if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:
             # tanh maps the atanh-scale interval onto [-1, 1], but a magnitude
             # cannot be negative: clamp at 0, as fisher_squared's back-transform
-            # does for magnitude-squared coherence.
+            # does for magnitude-squared coherence. A bias-corrected center can
+            # put the whole interval below 0, so the upper bound is clamped too
+            # (the estimate's interval always has a nonnegative upper bound).
             lower, upper = result.confidence_interval
             result = replace(
                 result,
                 bias_corrected=np.maximum(result.bias_corrected, 0.0),
-                confidence_interval=(np.maximum(lower, 0.0), upper),
+                confidence_interval=(np.maximum(lower, 0.0), np.maximum(upper, 0.0)),
             )
-        return result
+        if interval_center == "bias_corrected":
+            # The registry imports this module, so it is imported here.
+            from spectral_connectivity._measure_registry import _MEASURE_SPECS
+
+            spec = _MEASURE_SPECS.get(method)
+            if spec is not None:
+                # A bias-corrected center can lie beyond the measure's range
+                # (a nonnegative Granger value below 0): keep the bounds in it.
+                low, high = spec.value_range
+                result = replace(
+                    result,
+                    confidence_interval=tuple(
+                        np.clip(bound, low, high) for bound in result.confidence_interval
+                    ),
+                )
+        if keep_replicates and replicate_is_valid is not None:
+            # Leaving out a unit a bin never had gives no replicate there (the
+            # interval masked it).
+            np.copyto(leave_one_out, np.nan, where=~replicate_is_valid)
+        return replace(
+            result,
+            replicates=leave_one_out if keep_replicates else None,
+            frequency_bands=None if frequency_bands is None else dict(frequency_bands),
+            frequency_reduction=None if frequency_bands is None else frequency_reduction,
+            leave_out=leave_out,
+        )
 
     @_refused_for_exact_spectrum("surrogate_null")
     def surrogate_test(
@@ -4353,13 +4786,9 @@ class Connectivity:
         # frequency_range. Otherwise the frequency axis follows the kept
         # observation axes; an unregistered measure is taken to have it there
         # if its length is right.
-        dims = self._result_dims(method, estimate.ndim)
-        band_summed = dims is not None and "frequency" not in dims
-        frequency_axis = (
-            dims.index("frequency")
-            if dims is not None and not band_summed
-            else len(self._kept_observation_axes)
-        )
+        located = self._frequency_axis(method, estimate.ndim)
+        band_summed = located is None
+        frequency_axis = len(self._kept_observation_axes) if located is None else located
         per_frequency = (
             not band_summed
             and estimate.ndim >= frequency_axis + 3

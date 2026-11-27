@@ -158,6 +158,35 @@ Prefer the wrapper's labeled results so you never index these by hand.
 - **Band summaries.** Use `frequency_bands={"theta": (4, 8)}` rather than
   averaging frequency bins by hand: phase measures get a circular mean and
   complex measures a complex mean.
+- **Intervals for band statistics leave out trials.** Pass the bands to
+  `Connectivity.jackknife(method, leave_out="trial", frequency_bands=...)`,
+  which reduces every leave-one-out replicate to the bands before forming the
+  interval. Do not average a per-frequency jackknife over a band: the default
+  `leave_out="observation"` leaves out tapers, whose coefficients are
+  correlated across nearby frequencies, so the band interval is too narrow
+  (see the Notes of `Connectivity.jackknife`), and `frequency_bands` refuses
+  it.
+  For another statistic over frequencies, compute it from the replicates of
+  `leave_out="trial"` (`keep_replicates=True`) and pass them to
+  `statistics.jackknife_confidence_interval`. Leaving out trials needs at
+  least 3.
+
+  ```python
+  >>> from spectral_connectivity import Connectivity, Multitaper
+  >>> banded = Connectivity.from_transform(
+  ...     Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=2)
+  ... ).jackknife(
+  ...     "magnitude_squared_coherence", leave_out="trial", frequency_bands={"theta": (4, 8)},
+  ...     keep_replicates=True,
+  ... )
+  >>> banded.estimate.shape  # (n_time_windows, n_bands, n_signals, n_signals)
+  (1, 1, 2, 2)
+  >>> banded.replicates.shape[0]  # one replicate per trial
+  20
+  >>> banded.frequency_bands, banded.leave_out
+  ({'theta': (4, 8)}, 'trial')
+
+  ```
 - **Other transforms.** For a `Welch`, `ShortTimeFourierTransform`,
   `MorletWavelet`, or your own transform, call
   `spectral_connectivity.connectivity_to_xarray(transform,
@@ -245,6 +274,9 @@ interval includes the variability between trials:
 20
 
 ```
+
+For an interval on a band value, pass `frequency_bands` to the same call
+with `leave_out="trial"` (see the pitfall above).
 
 For significance, `Connectivity.surrogate_test(method, kind=...)` compares the
 measure with its values on surrogate data. `kind` sets the null hypothesis:

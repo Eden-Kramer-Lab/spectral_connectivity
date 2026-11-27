@@ -466,6 +466,7 @@ def test_fft_order_check_allows_for_the_coordinate_precision(n_fft, dtype):
         "observations_are_independent",
         "time_bins_are_independent",
         "time_bins_are_disjoint",
+        "observations_are_time_segments",
     ],
 )
 @pytest.mark.parametrize("value", ["False", None, 0, print])

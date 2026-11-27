@@ -755,6 +755,103 @@ and the same frequency options:
 
 ```
 
+For a confidence interval on a band value, see
+[Intervals for band statistics](#intervals-for-band-statistics).
+
+## Intervals for band statistics
+
+`Connectivity.jackknife` takes the same `frequency_bands` and
+`frequency_reduction`: it reduces the measure of the data and of every
+leave-one-out replicate to the bands, then forms the interval (here on the
+`atanh(sqrt(.))` scale of the band-mean coherence). Leave out whole trials;
+leaving out trials needs at least 3. Here the two signals share a 20 Hz
+rhythm, so they are coherent in the beta band only:
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> rng = np.random.default_rng(2)
+>>> t = np.arange(500) / 500  # 1 s at 500 Hz
+>>> rhythm = np.sin(2 * np.pi * 20 * t[:, np.newaxis] + rng.uniform(0, 2 * np.pi, 10))
+>>> trials = rng.standard_normal((500, 10, 2)) + rhythm[..., np.newaxis]  # (time, trials, signals)
+>>> multitaper = Multitaper(trials, sampling_frequency=500, time_halfbandwidth_product=3)
+>>> connectivity = Connectivity.from_transform(multitaper)
+>>> result = connectivity.jackknife(
+...     "magnitude_squared_coherence",
+...     leave_out="trial",
+...     frequency_bands={"theta": (4, 8), "beta": (16, 24)},
+...     keep_replicates=True,
+... )
+>>> result.estimate.shape  # (n_time_windows, n_bands, n_signals, n_signals)
+(1, 2, 2, 2)
+>>> band = list(result.frequency_bands).index  # position of a band on the band axis
+>>> lower, upper = result.confidence_interval
+>>> beta = band("beta")
+>>> print(lower[0, beta, 0, 1].round(2), result.estimate[0, beta, 0, 1].round(2), upper[0, beta, 0, 1].round(2))
+0.61 0.64 0.66
+
+```
+
+For a band statistic of a biased measure, such as spectral Granger or
+partial coherence, center the interval on the jackknife's bias-corrected
+estimate: averaging a band shrinks the spread but not the bias, so an interval
+centered on the estimate misses (see the Notes of `Connectivity.jackknife`).
+Use it for band statistics only: at a single frequency the default center is
+adequate and the bias-corrected one can lower coverage, and for a band maximum
+the bias-corrected one lowers coverage.
+
+```python
+>>> corrected = connectivity.jackknife(
+...     "partial_coherence",
+...     leave_out="trial",
+...     frequency_bands={"beta": (16, 24)},
+...     interval_center="bias_corrected",
+... )
+>>> corrected.interval_center
+'bias_corrected'
+
+```
+
+Leaving out one taper at a time is refused for bands. Different tapers'
+coefficients are uncorrelated at one frequency but correlated at frequencies
+within the bandwidth, so the tapers of a band are not independent
+observations and the interval would be too narrow: a nominal 95% interval
+covered 43-81% of band means in simulation, against 92-96% leaving out trials
+at moderate or strong coherence. (Welch segments, which are not tapers of the
+same samples, may be left out one at a time.)
+
+```python
+>>> connectivity.jackknife("magnitude_squared_coherence", frequency_bands={"beta": (16, 24)})
+Traceback (most recent call last):
+...
+ValueError: jackknife(frequency_bands=...) cannot leave out one taper at a time (leave_out='observation' with expectation_type='trials_tapers'): ...
+
+```
+
+For any other statistic of the measure, compute it from the estimate and from
+each of `result.replicates` (one per trial left out, untransformed, kept with
+`keep_replicates=True`) and pass both to `jackknife_confidence_interval`.
+Here, how much more coherent the signals are in beta than in theta. The
+default `transformation="identity"` suits a difference: it can be negative,
+so neither the log nor the `atanh` scale of a coherence applies to it.
+
+```python
+>>> from spectral_connectivity.statistics import jackknife_confidence_interval
+>>> result.replicates.shape  # (n_trials, *result.estimate.shape)
+(10, 1, 2, 2, 2)
+>>> theta = band("theta")
+>>> difference = jackknife_confidence_interval(
+...     result.estimate[:, beta] - result.estimate[:, theta],
+...     result.replicates[:, :, beta] - result.replicates[:, :, theta],
+... )
+>>> low, high = (bound[0, 0, 1] for bound in difference.confidence_interval)
+>>> print(round(float(low), 2), round(float(high), 2))  # excludes 0
+0.6 0.66
+
+```
+
+Do not average replicates from the default `leave_out="observation"` over
+frequencies: they leave out tapers, and the interval comes out too narrow.
+
 ## Select a frequency range
 
 `frequency_range=(low, high)` includes both endpoints. With 0.5-second windows
@@ -1204,6 +1301,7 @@ facts needed to interpret it. Settings use one JSON record:
 | `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. Not recorded for an exact spectrum. |
 | `expectation_type` | Axes averaged to form each spectral estimate. |
 | `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. `observations_are_independent` is not recorded for an exact spectrum. |
+| `observations_are_time_segments` | 1 when a trial's observations are segments of it in time (`Welch`), 0 for tapers of the same samples; stored as 0/1. Not recorded for an exact spectrum. |
 | `is_exact_spectrum` | 1 when the coefficients are one factor of an exact cross-spectral matrix rather than samples (`VARSpectrum`): the values are a model's population values, and the result records no observation count or independence. 0 otherwise. |
 | `backend` | `cpu` or `gpu`, reflecting the imported backend. |
 | `transform_parameters_json` | Remaining settings in `estimator` and `execution` records; optional settings use JSON `null`. |

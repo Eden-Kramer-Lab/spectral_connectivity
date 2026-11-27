@@ -2673,7 +2673,8 @@ def test_jackknife_requires_three_observations():
     rng = np.random.default_rng(8)
     shape = (1, 2, 1, 8, 2)
     connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
-    with pytest.raises(ValueError, match="at least 3 observations"):
+    # One taper per trial: the observations left out are trials.
+    with pytest.raises(ValueError, match="at least 3 trials, got 2"):
         connectivity.jackknife("magnitude_squared_coherence")
 
 

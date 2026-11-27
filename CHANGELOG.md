@@ -68,7 +68,8 @@ The migration guide for code written against 2.x is
   (weighted) phase lag index, pairwise phase consistency, the zero-coherence
   test of `delay` and `group_delay`, and `jackknife` use each bin's count. A
   bin keeping fewer than two observations is NaN in the debiased measures,
-  and one keeping fewer than three in the jackknife, with a warning.
+  and one keeping fewer than three in the jackknife, with a warning; one
+  keeping none is NaN without one.
 - A boxcar `MorletWavelet(edge_mode="nan")` with an expectation that pools
   time now works with the debiased phase-lag measures, pairwise phase
   consistency, and `delay`/`group_delay`, counting each frequency's valid
@@ -170,7 +171,54 @@ The migration guide for code written against 2.x is
   interval includes the variability between trials; the default interval is
   too narrow when coupling varies across trials. It needs an expectation that
   averages trials and at least 3 trials, and is allowed when the tapers within
-  a trial are correlated. The default (`"observation"`) is unchanged.
+  a trial are correlated. The default (`"observation"`) is unchanged, except
+  that with one taper per trial and `observations_are_independent=False` it is
+  now computed rather than refused, since its units are then whole trials.
+- `Connectivity.jackknife(method, frequency_bands={name: (low, high)},
+  frequency_reduction="mean")` gives intervals for band statistics: the
+  measure of the data and of every leave-one-out replicate is reduced to the
+  bands (as `frequency_band_reduce` reduces them, with its checks and
+  messages) before the interval is formed, and the result has a band axis in
+  place of the frequency axis. It refuses to leave out tapers of the same
+  samples: different tapers' coefficients are correlated across frequencies
+  within the bandwidth, so in simulation a nominal 95% interval leaving out
+  one taper at a time covered only 43-81% of band means (and band maxima very
+  unevenly, 43-95%), while leaving out trials covered 92-96% of band means at
+  moderate or strong coherence (87% at a weak band-mean coherence of 0.07
+  with 5 trials, from the estimate's bias) and 69-96% of band maxima. Allowed
+  units are whole trials (`leave_out="trial"`,
+  `expectation_type="trials"`, or one taper per trial) and Welch segments,
+  which a new optional `SpectralTransform` attribute,
+  `observations_are_time_segments`, records (`Welch` sets it, labeled
+  results record it, and `Connectivity(..., observations_are_time_segments=
+  True)` states it for coefficients passed directly, which are otherwise
+  taken as tapers). `delay` is reduced on the bins of its
+  `frequency_range`, as in the wrappers.
+- `Connectivity.jackknife(..., keep_replicates=True)` returns the
+  leave-one-out replicates as `JackknifeResult.replicates`,
+  `(n_replicates, *estimate.shape)`, untransformed, for an interval on any
+  other statistic through `jackknife_confidence_interval` (use
+  `leave_out="trial"` replicates for a statistic combining frequencies). A
+  replicate is NaN in a bin that never had the unit it leaves out. They take
+  `n_replicates` times the memory of the estimate, so they are `None` unless
+  requested. `JackknifeResult` also gains `frequency_bands` (the mapping that
+  names the band axis), `frequency_reduction`, `leave_out` and
+  `interval_center`; the five new fields default to `None`, and
+  `jackknife_confidence_interval` sets `replicates` to its input.
+- `Connectivity.jackknife(..., interval_center="bias_corrected")`, and the
+  same keyword of `jackknife_confidence_interval`, center the interval on the
+  jackknife's bias-corrected estimate (on the transformed scale, same
+  half-width) instead of on the estimate (the default, unchanged). It is for
+  band statistics of biased measures: band averaging shrinks the spread but
+  not the bias. The gain depends on the model and the pair: with 10 trials
+  intervals centered on the estimate covered 45-78% for band-mean spectral
+  Granger and 40-94% for partial coherence in simulation, against 92-99%
+  centered on the bias-corrected estimate. It does not help at zero
+  coherence, and lowers band-maximum coverage (from 93-96% to 87.5-94%). At a
+  single frequency the default is already adequate (93-100% coverage, except
+  84-87% for magnitude-squared coherence at zero coherence) and the
+  bias-corrected center can lower it (to 87.5-97% for Granger), so use it for
+  band statistics, not for per-frequency intervals.
 - `Multitaper(line_frequencies=[60, 120])` removes line noise and other
   sinusoidal lines (stimulation artifacts) before the coefficients are
   computed, so every measure uses the cleaned data; the wrappers take it in
@@ -720,6 +768,16 @@ The migration guide for code written against 2.x is
   maximum of a 74-point coarse phase grid, so near-equal lobes of the objective
   yield a wrong canonical phase only when two lie within about `2 * pi / 74` of
   each other.
+- `jackknife_confidence_interval` skips NaN replicates element by element:
+  each element's interval is the jackknife of its own non-NaN replicates,
+  with a Student t critical value on their count less one, as
+  `Connectivity.jackknife` forms each bin's interval where observation
+  weights drop units. Callers who passed NaN replicates now get intervals
+  instead of NaN; an element left with fewer than 3 is still NaN, with a
+  warning, and `n_observations` is then one count per element. Passing a
+  jackknife's `estimate` and `replicates` back reproduces its interval
+  wherever the measure is defined in every replicate (the jackknife's
+  interval is NaN where a replicate is NaN for the measure's own reasons).
 - `Connectivity.jackknife` and `jackknife_confidence_interval` use a Student t
   critical value with `n_observations - 1` degrees of freedom (Thomson & Chave
   1991), not the normal quantile, which under-covers at small `n` (Monte Carlo
@@ -972,6 +1030,10 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* the jackknife's whole-circle and saturated-coherence
+  (Fisher boundary) warnings point at the caller's line, not at the package's
+  internals. They did from `jackknife_confidence_interval`, but from
+  `Connectivity.jackknife` they pointed into `connectivity.py`.
 - *Unreleased:* `Connectivity.jackknife` of a measure defined on a
   `Connectivity` subclass failed with `AttributeError` after computing the
   estimate (the replicates were rebuilt as plain `Connectivity`), and a

@@ -413,6 +413,9 @@ variability between trials). It returns a
 bias-corrected estimate, standard error, and confidence interval, and applies
 a variance-stabilizing transformation automatically: log for power,
 `atanh(sqrt(.))` for magnitude-squared coherence, and circular for phase.
+For a band value, `jackknife(method, leave_out="trial", frequency_bands=...)`
+reduces every replicate to the bands first (see the
+[recipe](docs/cookbook.md#intervals-for-band-statistics)).
 
 For significance, `Connectivity.surrogate_test(method, kind=...)` compares a
 measure with its values on surrogate data: trials shuffled between signals,
