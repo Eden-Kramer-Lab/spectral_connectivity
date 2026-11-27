@@ -245,6 +245,8 @@ def test_only_released_multitaper_attributes_are_compatibility_copies(data):
             "adaptive_tolerance": 1e-8,
             "detrend_type": None,
             "is_low_bias": True,
+            "line_frequencies": [],
+            "line_significance_threshold": None,
             "n_fft_samples": 32,
             "n_tapers": 3,
             "n_time_samples_per_step": 32,
@@ -303,6 +305,8 @@ def test_stft_has_no_multitaper_only_settings(data):
         "taper_eigenvalues",
         "taper_weighting",
         "is_low_bias",
+        "line_frequencies",
+        "line_significance_threshold",
         "adaptive_max_iterations",
         "adaptive_tolerance",
     }

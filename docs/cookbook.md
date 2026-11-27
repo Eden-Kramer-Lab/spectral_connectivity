@@ -945,7 +945,47 @@ of 0 Hz and Nyquist are NaN, because there a line overlaps its mirror image.
 A narrow rhythm in the background also tests as line-like. The Notes of
 `Multitaper.harmonic_f_test` give the sizes of these effects. For a false
 discovery rate over the frequencies of each window, trial, and signal, pass
-the p-values to `adjust_for_multiple_comparisons` with `axis=2`.
+the p-values to `adjust_for_multiple_comparisons` with `axis=2`. To remove
+the lines found, see the next recipe.
+
+## Remove line noise before computing connectivity
+
+`line_frequencies` makes the transform fit the named lines in every window,
+trial, and signal (at exactly those frequencies, by the same harmonic
+regression) and subtract them before the coefficients are computed, so every
+measure uses the cleaned data. Through the wrappers it is a `transform_kwargs`
+setting:
+
+```python
+>>> settings = dict(
+...     sampling_frequency=sampling_frequency, time_window_duration=1.0,
+...     time_halfbandwidth_product=4, method="power",
+... )
+>>> raw = multitaper_connectivity(recording, **settings)
+>>> cleaned = multitaper_connectivity(
+...     recording, transform_kwargs={"line_frequencies": [60, 120]}, **settings
+... )
+>>> def power_at(result, frequency):
+...     return float(result.sel(frequency=frequency).isel(source=0).mean())
+>>> # Before, 60 and 120 Hz stand far above the noise (at 90 Hz); after, they do not
+>>> [power_at(raw, f) > 5 * power_at(raw, 90) for f in (60, 120)]
+[True, True]
+>>> [power_at(cleaned, f) < 1.5 * power_at(cleaned, 90) for f in (60, 120)]
+[True, True]
+>>> cleaned.attrs["mt_n_tapers"], "line_frequencies" in cleaned.attrs["transform_parameters_json"]
+(7, True)
+
+```
+
+Name the lines the previous recipe finds. Three things to know, with their
+sizes in the `line_frequencies` docs of `Multitaper`: a line must lie close to
+its named frequency; the fit also takes about `1 / n_tapers` of the noise near
+each line (a shallow notch in the spectrum); and a test there that counts
+`n_observations`, such as `coherence_significance_pvalue`, is then too liberal,
+so count `n_observations - n_trials` within the half-bandwidth of a removed
+line. To subtract a line only where it is present, add
+`line_significance_threshold` (a strict level such as `1e-3`, since each
+window, trial, and signal is a test).
 
 ## Bring your own Fourier coefficients
 

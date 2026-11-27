@@ -162,6 +162,14 @@ The migration guide for code written against 2.x is
   too narrow when coupling varies across trials. It needs an expectation that
   averages trials and at least 3 trials, and is allowed when the tapers within
   a trial are correlated. The default (`"observation"`) is unchanged.
+- `Multitaper(line_frequencies=[60, 120])` removes line noise and other
+  sinusoidal lines (stimulation artifacts) before the coefficients are
+  computed, so every measure uses the cleaned data; the wrappers take it in
+  `transform_kwargs`, and results record it. With
+  `line_significance_threshold`, a line is removed only where its harmonic
+  F-test is significant. The fit also removes about `1 / n_tapers` of the
+  noise near each line, so tests there should count one taper fewer per trial
+  (see the `line_frequencies` docs).
 - `Multitaper.harmonic_f_test()`: Thomson's harmonic F-test for a sinusoid at
   each frequency of every window, trial, and signal, returning a
   `HarmonicFTestResult` with the F statistic, its p-value under

@@ -8,7 +8,6 @@ window keeping fewer than 2 is dropped. Windows without artifacts are the
 ordinary DPSS estimate, bit for bit.
 """
 
-import inspect
 import tracemalloc
 import warnings
 
@@ -563,37 +562,15 @@ def test_a_multitaper_subclass_takes_missing_data_tapers(recording):
     np.testing.assert_array_equal(to_host(subclass.n_kept_tapers), EXPECTED_TAPER_COUNTS)
 
 
-@pytest.mark.parametrize("set_first", [True, False], ids=["lines_first", "lines_last"])
-def test_line_removal_is_refused(recording, set_first):
+def test_line_removal_is_refused(recording):
     """Line removal fits the shared DPSS tapers to every sample of a window,
-    so it is refused whichever setting is stored first. Until Multitaper takes
-    line_frequencies, a subclass that sets it stands in for it."""
-    if "line_frequencies" in inspect.signature(Multitaper).parameters:
-        if not set_first:
-            pytest.skip("Multitaper sets line_frequencies itself")
-        kwargs, transform = {"line_frequencies": [60.0]}, Multitaper
-    else:
-
-        class WithLines(Multitaper):
-            def __init__(self, *args, **kwargs):
-                if set_first:
-                    self.line_frequencies = np.array([60.0])
-                super().__init__(*args, **kwargs)
-                if not set_first:
-                    self.line_frequencies = np.array([60.0])
-
-        kwargs, transform = {}, WithLines
+    so Multitaper refuses line_frequencies with missing-data tapers; it takes
+    them with the default handling, which drops the windows with artifacts.
+    line_frequencies cannot be set after construction, so this is the only
+    way to combine them."""
     with pytest.raises(ValueError, match="line_frequencies cannot be combined with"):
-        _multitaper(*recording, transform=transform, **kwargs)
-    _multitaper(*recording, transform=transform, artifact_handling="drop", **kwargs)
-
-
-def test_a_refused_line_frequencies_is_not_stored(missing_data):
-    """The guard raises before the value is set, so the transform stays valid."""
-    before = getattr(missing_data, "line_frequencies", None)
-    with pytest.raises(ValueError, match="line_frequencies cannot be combined with"):
-        missing_data.line_frequencies = [60.0]
-    assert getattr(missing_data, "line_frequencies", None) is before
+        _multitaper(*recording, line_frequencies=[60.0])
+    _multitaper(*recording, artifact_handling="drop", line_frequencies=[60.0])
 
 
 def test_lanczos_that_does_not_converge_falls_back_to_the_dense_solve(monkeypatch):

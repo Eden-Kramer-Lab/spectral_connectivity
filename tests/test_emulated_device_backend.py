@@ -474,6 +474,30 @@ def test_missing_data_tapers_run_on_the_device(xp, monkeypatch, taper_weighting)
     assert (host["n_valid_observations"][1:3, 0] < 20).all()  # tapers were dropped
 
 
+@pytest.mark.parametrize("line_significance_threshold", [None, 1e-3])
+def test_line_removal_and_the_harmonic_f_test_run_on_the_device(
+    xp, line_significance_threshold
+):
+    """The line fit's small tables are built on the host and the windows stay
+    on the device; the harmonic F-test returns host arrays."""
+    from spectral_connectivity import Multitaper
+
+    time = np.arange(512) / 256
+    signals = np.random.default_rng(7).standard_normal((512, 2, 2))
+    signals += np.cos(2 * np.pi * 60 * time)[:, np.newaxis, np.newaxis]
+    multitaper = Multitaper(
+        signals,
+        sampling_frequency=256,
+        time_window_duration=1.0,
+        line_frequencies=[60.0],
+        line_significance_threshold=line_significance_threshold,
+    )
+    assert isinstance(multitaper.fft(), _DeviceArray)
+    result = multitaper.harmonic_f_test()
+    assert isinstance(result.f_statistic, np.ndarray)
+    assert np.isfinite(result.f_statistic[:, :, result.frequencies == 30.0]).all()
+
+
 def test_phase_lag_family_runs_on_the_device(xp, monkeypatch):
     """The phase-lag tile loop (ufunc ``out=``, ``count_nonzero`` over an axis
     tuple, ``einsum``) runs on device arrays and matches the host result."""
