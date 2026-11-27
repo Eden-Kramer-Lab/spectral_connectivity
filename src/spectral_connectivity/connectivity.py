@@ -2,6 +2,7 @@
 
 import contextlib
 import inspect
+import math
 import re
 import warnings
 from collections.abc import Callable, Iterator, Sequence
@@ -38,8 +39,7 @@ from spectral_connectivity._granger import (
     _estimate_subset_spectral_granger_prediction,
     _factorize_spectrum,
     _var_model_from_factor,
-    _var_model_from_spectrum,
-    _warn_nan_granger_pairs,
+    _warn_granger_failures,
 )
 from spectral_connectivity._multivariate import (
     GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
@@ -55,14 +55,21 @@ from spectral_connectivity.minimum_phase_decomposition import (
 )
 from spectral_connectivity.statistics import (
     JackknifeResult,
+    SurrogateTestResult,
+    _normalized_axes,
+    _surrogate_statistic,
+    _SurrogateTally,
     _validate_alpha,
     _validate_confidence_level,
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
     jackknife_confidence_interval,
 )
+from spectral_connectivity.transforms import VARSpectrum, _var_settings_by_keyword
 from spectral_connectivity.utils import (
     BackendArray,
+    _generator,
+    _real_scalar,
     _validated_flag,
     did_you_mean,
     is_positive_integer,
@@ -85,8 +92,40 @@ _NONFINITE_COEFFICIENTS_WARNING = "fourier_coefficients contains NaN or Inf valu
 
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
-# jackknife validation cannot drift apart.
-_NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife"})
+# the resampling drivers' validation cannot drift apart.
+_NON_MEASURE_METHODS = frozenset(
+    {"clear_cache", "jackknife", "partial_coherence_shrinkage", "surrogate_test"}
+)
+# Connectivity.surrogate_test: the surrogate constructions and alternatives it
+# takes.
+# The question each kind answers, for the message naming them.
+_SURROGATE_QUESTIONS = {
+    "trial_shuffle": "do the signals covary from trial to trial (several trials)?",
+    "phase_rotation": "are the signals independent at all?",
+    "conjugation": "is there more than zero-lag mixing such as volume conduction?",
+}
+_SURROGATE_KINDS = tuple(_SURROGATE_QUESTIONS)
+_SURROGATE_ALTERNATIVES = ("auto", "greater", "less", "two-sided")
+# Why surrogate_test refuses a registered measure, keyed by what the registry
+# says of it (see _surrogate_refusal).
+_SURROGATE_REFUSALS = {
+    "single_signal": (
+        "it describes one signal, and every surrogate keeps each signal's "
+        "spectrum, so its null distribution is the estimate itself. Test a "
+        "measure of the relation between signals."
+    ),
+    "candidate_delays": (
+        "it returns candidate delays at the frequencies its own coherence test "
+        "selects, not a statistic. Test magnitude_squared_coherence, or "
+        "phase_slope_index for the direction of a lag."
+    ),
+    "phase": (
+        "a phase is circular, so no ordering of its values is evidence against "
+        "the null, and it is undefined where coherence is weak. Test "
+        "imaginary_coherence (or imaginary_coherency, two-sided) for a lagged "
+        "relation, or phase_locking_value for phase coupling."
+    ),
+}
 # Measure names released in 2.x and replaced in 3.0, mapped to the canonical
 # name. Each still works through 3.x with a DeprecationWarning and is removed
 # in 4.0; the canonical measure is the one registered and listed.
@@ -254,15 +293,44 @@ class MultivariateConnectivityResult:
     patterns: NDArray[np.floating] | None = None
 
 
+def _is_real_number(value: Any) -> bool:
+    """Whether ``value`` is a Python or NumPy real number other than a boolean."""
+    return not isinstance(value, bool) and isinstance(
+        value, (int, float, np.integer, np.floating)
+    )
+
+
 def _validated_regularization(value: Any) -> float:
     """Return a finite non-negative scalar regularization factor."""
     message = f"regularization must be a finite non-negative scalar, got {value!r}."
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+    if not _is_real_number(value):
         raise ValueError(message)
     regularization = float(value)
     if not np.isfinite(regularization) or regularization < 0:
         raise ValueError(message)
     return regularization
+
+
+def _validated_shrinkage(value: Any) -> float | Literal["auto"] | None:
+    """Return ``None``, ``"auto"``, or a shrinkage intensity in [0, 1]."""
+    if value is None:
+        return None
+    message = (
+        "shrinkage must be None (no shrinkage), 'auto' (estimate the intensity "
+        "for each time window and frequency), or a number from 0 to 1 (a fixed "
+        f"intensity), got {value!r}."
+    )
+    if isinstance(value, str):
+        if value == "auto":
+            return "auto"
+        msg = f"{message} Strings are case-sensitive."
+        raise ValueError(msg)
+    if isinstance(value, bool):
+        msg = f"{message} Booleans are not accepted."
+        raise ValueError(msg)
+    if not _is_real_number(value) or not 0.0 <= float(value) <= 1.0:  # rejects NaN
+        raise ValueError(message)
+    return float(value)
 
 
 def _validated_rank(rank: int | None) -> int | None:
@@ -403,6 +471,88 @@ def _source_first(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
         return cast(_R, np.swapaxes(cast(NDArray[Any], native), -1, -2))
 
     return wrapper
+
+
+# Why a measure that needs samples is refused for an exact spectrum.
+_ExactSpectrumRefusal = Literal[
+    "per_observation", "significance_gate", "sampling_error", "surrogate_null", "shrinkage"
+]
+_SIMULATE_INSTEAD = (
+    "simulate data from the model (spectral_connectivity.simulate.simulate_MVAR) "
+    "and estimate it with Multitaper"
+)
+
+
+def _exact_spectrum_refusal_message(method: str, reason: _ExactSpectrumRefusal) -> str:
+    """What to say when ``method`` is called on an exact spectrum, for ``reason``."""
+    intro = (
+        f"{method} is not defined for an exact spectrum (is_exact_spectrum is "
+        "True, as for VARSpectrum), whose coefficients are one factor of the "
+        "model's cross-spectral matrix, not samples."
+    )
+    if reason == "sampling_error":
+        return (
+            f"{intro} {method} estimates sampling error by leaving out one "
+            "observation at a time, and an exact spectrum has no sampling error "
+            f"to estimate. For the spread of an estimate, {_SIMULATE_INSTEAD}, and "
+            f"apply {method} to that."
+        )
+    if reason == "surrogate_null":
+        return (
+            f"{intro} {method} compares an estimate with surrogates of the "
+            "samples, and an exact spectrum has no sampling error for a null "
+            f"distribution to describe. To test a VAR model's connectivity, "
+            f"{_SIMULATE_INSTEAD}, and apply {method} to that."
+        )
+    if reason == "shrinkage":
+        return (
+            f"{intro} {method} estimates each coherency's sampling variance "
+            "across the observations, and an exact spectrum has none to shrink "
+            "against. Its partial coherence is exact without shrinkage; use "
+            "partial_coherence() or a fixed shrinkage between 0 and 1, or "
+            f"{_SIMULATE_INSTEAD}."
+        )
+    if reason == "significance_gate":
+        return (
+            f"{intro} {method} uses only the frequencies whose coherence passes "
+            "a significance test whose degrees of freedom are n_observations, "
+            "which here counts the columns of that factor, so which frequencies "
+            "it keeps would be arbitrary. phase_slope_index and coherence_phase "
+            f"are computed from the spectral matrix alone; or {_SIMULATE_INSTEAD}."
+        )
+    return (
+        f"{intro} {method} averages a function of each trial/taper "
+        "observation (the debiased measures and pairwise phase consistency "
+        "also count them), so its value would depend on an arbitrary choice "
+        "of factor. Use a measure of the cross-spectral matrix (the coherence "
+        "family, partial coherence, the group and global measures, "
+        "phase_slope_index, and the spectral Granger and transfer-function "
+        f"families), or {_SIMULATE_INSTEAD}."
+    )
+
+
+def _refused_for_exact_spectrum(
+    reason: _ExactSpectrumRefusal,
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Make a method raise, for ``reason``, on a ``Connectivity`` of an exact spectrum.
+
+    For the measures that use each trial/taper observation or count them, and
+    for ``jackknife`` and ``surrogate_test``, which resample observations.
+    Apply it outermost, so
+    nothing is computed before the refusal; the measure registry's
+    ``defined_for_exact_spectrum`` records which measures carry it.
+    """
+
+    def decorate(method: Callable[_P, _R]) -> Callable[_P, _R]:
+        @wraps(method)
+        def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            if cast("Connectivity", args[0])._is_exact_spectrum:
+                raise ValueError(_exact_spectrum_refusal_message(method.__name__, reason))
+            return method(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
 
 
 class DirectedOrientationWarning(UserWarning):
@@ -623,7 +773,9 @@ def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[No
     filters invalidates each module's record of warnings already shown, so a
     warning shown once under the "default" action can be shown again. Only
     NaN or Inf coefficients (``ignore``) take this path;
-    finite input never touches the filters. Recording the warnings and
+    finite input never touches the filters (nor do the jackknife replicates
+    of a bin with too few kept observations, whose single-observation
+    warnings it ignores, on any other input). Recording the warnings and
     re-emitting the others would need ``catch_warnings`` as well, so it would
     not be safer.
     """
@@ -637,6 +789,18 @@ def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[No
 
 
 _ABSENT = object()
+
+# Where the warnings of bins that zero weights leave a single observation say
+# so; the jackknife ignores them in its replicates (see Connectivity.jackknife).
+_SINGLE_OBSERVATION_IN_SOME_BINS = (
+    "in some bins, where observation_weights give only one observation a nonzero "
+    "weight (see n_valid_observations)"
+)
+_SINGLE_KEPT_OBSERVATION = "observation_weights keep a single observation in"
+_SINGLE_KEPT_OBSERVATION_WARNINGS = (
+    ".*" + re.escape(f"computed from a single observation {_SINGLE_OBSERVATION_IN_SOME_BINS}"),
+    ".*" + re.escape(_SINGLE_KEPT_OBSERVATION),
+)
 
 
 def _optional_transform_attribute(transform: Any, name: str, default: Any) -> Any:
@@ -951,14 +1115,20 @@ class Connectivity:
         Finite non-negative weights with shape ``(time, trial, taper,
         frequency, 1)``. They are applied to every expectation and shared
         across signals. Transform constructors supply these automatically when
-        smoothing uses a non-uniform kernel or masks invalid edge estimates.
+        smoothing uses a non-uniform kernel, masks invalid edge estimates, or
+        (``Multitaper(artifact_samples=...)``) drops trial windows with artifact
+        samples. Weights that only drop observations (0, or one common weight
+        in each bin) leave each bin the plain mean of the observations it
+        keeps, which the measures that count observations count
+        (:attr:`n_valid_observations`).
     observations_are_independent : bool, default=True
         Whether the trial/taper observations are statistically independent.
         Transform constructors set this ``False`` when the observation axis
         holds correlated estimates (a ``MorletWavelet`` smoothing neighborhood,
         or ``Welch`` segments overlapping by more than half). Measures whose
         finite-sample corrections or null distributions count observations
-        warn in that case, and ``jackknife`` refuses to leave out tapers.
+        warn in that case, and ``jackknife`` refuses to leave out tapers
+        (``leave_out="trial"``, which leaves out whole trials, still works).
     time_bins_are_independent : bool, default=True
         Whether the time bins may be counted as independent observations when
         the expectation averages over time. Transform constructors set this
@@ -967,6 +1137,34 @@ class Connectivity:
         ``MorletWavelet`` samples closer than four wavelet standard
         deviations). The measures that count observations then warn for
         expectations that include time; it has no effect otherwise.
+    time_bins_are_disjoint : bool, default=False
+        Whether successive time windows share no samples (a step of at least
+        the window length), which :meth:`from_transform` reads from
+        ``Multitaper`` and ``ShortTimeFourierTransform``. Only then does
+        :meth:`surrogate_test` randomize each averaged time window as a
+        separate unit: windows that overlap, even by half, have correlated
+        coefficients. The default assumes that coefficients passed directly
+        may come from overlapping windows; pass ``True`` for ones that do
+        not. It changes no measure.
+    half_bandwidth : float, optional
+        Half-width of the transform's spectral smoothing, in the units of
+        ``frequencies`` (``frequency_resolution / 2`` for ``Multitaper``,
+        which :meth:`from_transform` reads from the transform). Within it of
+        0 Hz and Nyquist the coefficients are not circular;
+        :meth:`surrogate_test` with ``kind="phase_rotation"`` leaves those
+        frequencies untested. ``None`` (the default) when unknown.
+    is_exact_spectrum : bool, default=False
+        Keyword-only. Whether the taper-mean outer product of the coefficients
+        is an exact (population) cross-spectral matrix and the observations
+        only one factorization of it, not samples, as for
+        :class:`~spectral_connectivity.transforms.VARSpectrum`. The measures
+        that use each observation or count them (the phase-locking and
+        phase-lag families, pairwise phase consistency, ``delay``,
+        ``group_delay``), ``jackknife``, ``surrogate_test`` and
+        ``partial_coherence(shrinkage="auto")`` then raise ``ValueError``, and the
+        expectation must average the tapers.
+
+        .. versionadded:: 3.0
 
     Attributes
     ----------
@@ -975,6 +1173,9 @@ class Connectivity:
         the raw count, not a weighted effective sample size, and it is not
         reduced for correlated observations (see
         ``observations_are_independent``).
+    n_valid_observations : ndarray of int
+        The observations with nonzero weight in each bin of a result, the
+        count the measures that count observations use.
 
     See Also
     --------
@@ -1044,6 +1245,8 @@ class Connectivity:
     ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
     :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
     wrappers return an ``xarray.Dataset`` for each of these instead.
+    :meth:`surrogate_test` returns a
+    :class:`~spectral_connectivity.statistics.SurrogateTestResult`.
 
     >>> import numpy as np
     >>> rng = np.random.default_rng(0)
@@ -1132,6 +1335,9 @@ class Connectivity:
         observations_are_independent: bool = True,
         time_bins_are_independent: bool = True,
         *,
+        time_bins_are_disjoint: bool = False,
+        half_bandwidth: float | None = None,
+        is_exact_spectrum: bool = False,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
         # fourier_coefficients and expectation_type are validated in their
@@ -1142,6 +1348,9 @@ class Connectivity:
         # copied, avoiding a transient 2x peak of the largest array. It must not
         # be set for a caller-owned array (see _adopt_fourier_coefficients).
         dtype = _validated_complex_dtype(dtype)
+        # First, so the expectation_type and observation_weights setters can
+        # check what an exact spectrum allows.
+        self._is_exact_spectrum = _validated_flag("is_exact_spectrum", is_exact_spectrum)
         if _adopt_fourier_coefficients:
             self._adopt_fourier_coefficients(fourier_coefficients)
         else:
@@ -1160,6 +1369,12 @@ class Connectivity:
         )
         self._time_bins_are_independent = _validated_flag(
             "time_bins_are_independent", time_bins_are_independent
+        )
+        self._time_bins_are_disjoint = _validated_flag(
+            "time_bins_are_disjoint", time_bins_are_disjoint
+        )
+        self._half_bandwidth = (
+            None if half_bandwidth is None else _validated_half_bandwidth(half_bandwidth)
         )
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
@@ -1229,6 +1444,17 @@ class Connectivity:
             self._observation_weights = None
             self.clear_cache()
             return
+        if self._is_exact_spectrum:
+            msg = (
+                "observation_weights cannot be set on an exact spectrum "
+                "(is_exact_spectrum is True, as for VARSpectrum). Its tapers are "
+                "the columns of one factor of the model's cross-spectral matrix, "
+                "and weighting them would change that matrix into an arbitrary "
+                "other one (power and coherence included). Leave "
+                "observation_weights as None; to weight time windows, change the "
+                "models instead."
+            )
+            raise ValueError(msg)
         weights = xp.asarray(value)
         expected_shape = (*self._fourier_coefficients.shape[:-1], 1)
         if tuple(weights.shape) != expected_shape:
@@ -1411,13 +1637,16 @@ class Connectivity:
         if frequencies_stale or time_stale or weights_stale:
             warnings.warn(
                 "Reassigning fourier_coefficients changed the FFT/time geometry; "
-                "incompatible frequency/time coordinates and observation weights "
-                "were reset to defaults or cleared. Construct a new Connectivity "
+                "incompatible frequency/time coordinates, observation weights, "
+                "half_bandwidth and time_bins_are_disjoint were reset to defaults or "
+                "cleared. Construct a new Connectivity "
                 "if you need specific coordinates or weights for the new data.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
             if frequencies_stale:
+                # A half bandwidth is in the units of the discarded coordinate.
+                self._half_bandwidth = None
                 self._frequencies = (
                     xp.linspace(0.0, 0.5, n_fft_samples)
                     if getattr(self, "_is_one_sided", False)
@@ -1425,6 +1654,8 @@ class Connectivity:
                 )
             if time_stale:
                 self.time = np.arange(n_time_windows)  # host coordinate, as in __init__
+                # Nothing says the new windows are disjoint; assume they may overlap.
+                self._time_bins_are_disjoint = False
             if weights_stale:
                 self._observation_weights = None
 
@@ -1463,6 +1694,7 @@ class Connectivity:
                 error_msg += f"  - '{key}'\n"
             error_msg += "\nMost common: 'trials_tapers' (average over both trials and tapers)"
             raise ValueError(error_msg)
+        self._require_tapers_averaged_for_exact_spectrum(value)
 
         self._expectation_type = value
         self.clear_cache()
@@ -1577,6 +1809,93 @@ class Connectivity:
         )
 
     @classmethod
+    @_var_settings_by_keyword
+    def from_var(
+        cls,
+        coefficients: NDArray[np.floating],
+        noise_covariance: NDArray[np.floating] | None = None,
+        *,
+        sampling_frequency: float,
+        n_fft_samples: int | None = None,
+        time: NDArray[np.floating] | None = None,
+        expectation_type: str = "trials_tapers",
+        dtype: Any = xp.complex128,
+        minimum_phase_tolerance: float = 1e-8,
+        minimum_phase_max_iterations: int = 500,
+    ) -> "Connectivity":
+        """Construct from the exact spectrum of a vector autoregressive (VAR) model.
+
+        The shortcut for ``Connectivity.from_transform(VARSpectrum(coefficients,
+        noise_covariance, sampling_frequency=..., n_fft_samples=..., time=...))``:
+        every measure that is a function of the cross-spectral matrix is then
+        the model's population value, with no estimation error (the directed
+        measures to the accuracy of the Wilson factorization), and the
+        measures that use individual observations raise (see
+        :class:`~spectral_connectivity.transforms.VARSpectrum`). For labeled
+        results, call
+        :func:`~spectral_connectivity.wrapper.connectivity_to_xarray` with the
+        ``VARSpectrum``, once per measure.
+
+        .. versionadded:: 3.0
+
+        Parameters
+        ----------
+        coefficients : array, shape (n_lags, n_signals, n_signals) or (n_time_windows, n_lags, n_signals, n_signals)
+            ``coefficients[k - 1]`` is ``A_k`` of ``x(t) = sum_k A_k x(t - k) +
+            e(t)``, as for :func:`~spectral_connectivity.simulate.simulate_MVAR`
+            and statsmodels' ``VARResults.coefs``; one model per window with
+            the leading axis.
+        noise_covariance : array, shape (n_signals, n_signals) or (n_time_windows, n_signals, n_signals), optional
+            Covariance of the innovations ``e(t)`` (statsmodels' ``sigma_u``);
+            the identity by default.
+        sampling_frequency : float
+            Samples per second; required.
+        n_fft_samples : int, optional
+            Number of frequency bins; by default the shortest fast length on
+            which the directed measures are exact (see
+            :attr:`VARSpectrum.minimum_n_fft_samples
+            <spectral_connectivity.transforms.VARSpectrum.minimum_n_fft_samples>`).
+        time : array, shape (n_time_windows,), optional
+            Time of each window in seconds; window indices by default.
+        expectation_type : str, default="trials_tapers"
+            Must average the tapers: ``"trials_tapers"``, ``"tapers"``,
+            ``"time_tapers"`` (the mean spectrum over windows), or
+            ``"time_trials_tapers"``.
+        dtype, minimum_phase_tolerance, minimum_phase_max_iterations
+            As in :meth:`from_transform`.
+
+        Returns
+        -------
+        Connectivity
+            New instance with ``is_exact_spectrum`` set.
+
+        Examples
+        --------
+        Signal 0 drives signal 1 one sample later, never the reverse:
+
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity
+        >>> coefficients = np.array([[[0.5, 0.0], [0.4, 0.5]]])  # (n_lags, target, source)
+        >>> connectivity = Connectivity.from_var(coefficients, sampling_frequency=100)
+        >>> granger = connectivity.pairwise_spectral_granger_prediction()  # [..., source, target]
+        >>> bool(granger[0, :, 0, 1].min() > 0.05), bool(granger[0, :, 1, 0].max() < 1e-10)
+        (True, True)
+        """
+        return cls.from_transform(
+            VARSpectrum(
+                coefficients,
+                noise_covariance,
+                sampling_frequency=sampling_frequency,
+                n_fft_samples=n_fft_samples,
+                time=time,
+            ),
+            expectation_type=expectation_type,
+            dtype=dtype,
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
+        )
+
+    @classmethod
     def _from_transform(
         cls,
         transform: "SpectralTransform",
@@ -1612,6 +1931,16 @@ class Connectivity:
             init_kwargs["observations_are_independent"] = False
         if not _transform_flag(transform, "time_bins_are_independent", True):
             init_kwargs["time_bins_are_independent"] = False
+        if _transform_flag(transform, "is_exact_spectrum", False):
+            init_kwargs["is_exact_spectrum"] = True
+        # Unlike the flags above, the half bandwidth and whether the time bins
+        # are disjoint do not change any measure, so they are set after
+        # construction: a subclass mirroring the older signature keeps working
+        # with a Multitaper, which defines both.
+        half_bandwidth = _optional_transform_attribute(transform, "half_bandwidth", None)
+        if half_bandwidth is not None:
+            half_bandwidth = _validated_half_bandwidth(half_bandwidth)
+        time_bins_are_disjoint = _transform_flag(transform, "time_bins_are_disjoint", False)
         init_kwargs["fourier_coefficients"] = transform.fft()
         init_kwargs["time"] = transform.time
         init_kwargs["frequencies"] = transform.frequencies
@@ -1634,7 +1963,10 @@ class Connectivity:
             [re.escape(_NONFINITE_COEFFICIENTS_WARNING)],
             not _optional_transform_attribute(transform, "_time_series_is_finite", True),
         ):
-            return cls(**init_kwargs)
+            connectivity = cls(**init_kwargs)
+        connectivity._half_bandwidth = half_bandwidth
+        connectivity._time_bins_are_disjoint = time_bins_are_disjoint
+        return connectivity
 
     @contextlib.contextmanager
     def _decomposition_of_nonfinite_coefficients(self, measure: str) -> Iterator[None]:
@@ -1721,49 +2053,69 @@ class Connectivity:
             raise ValueError(msg)
 
     def _require_uniform_observation_weights(self, measure: str, reason: str) -> None:
-        """Raise if observation weights are non-uniform for a measure that
-        assumes equally weighted independent observations."""
-        if self._observation_weights_are_uniform:
+        """Raise if observation weights reweight observations for a measure
+        that assumes equally weighted independent observations.
+
+        Weights that only keep or drop observations (see
+        :attr:`_observation_weights_only_drop`) pass: the measure counts each
+        bin's kept observations instead.
+        """
+        if self._observation_weights_only_drop:
             return
         msg = (
             f"{measure} does not support non-uniform observation_weights. "
             f"{reason} Non-uniform weights come from a smoothing_kernel other "
-            "than 'boxcar', or from edge_mode='nan' when the time axis is part "
-            "of the expectation (the edge mask zeroes some observations). Use "
-            "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or an "
-            "expectation_type that keeps the time axis."
+            "than 'boxcar'; weights that only drop observations (0 or one common "
+            "weight in each bin, as artifact_samples and edge_mode='nan' give) are "
+            "supported. Use smoothing_kernel='boxcar'."
         )
         raise ValueError(msg)
 
-    def _validate_debiasing_observations(self, measure: str) -> None:
-        """Raise if a bias-corrected measure has too few observations.
+    def _validate_counted_observations(
+        self,
+        measure: str,
+        *,
+        why: str = (
+            "This bias correction divides by a factor that is zero when "
+            "n_observations < 2, so it is undefined for a single observation."
+        ),
+        remedy: str = (
+            "more trials/tapers, or the non-debiased measure "
+            "(phase_lag_index / phase_locking_value)"
+        ),
+        weights_reason: str = (
+            "Its finite-sample correction assumes equally weighted independent "
+            "observations; use a non-debiased measure instead."
+        ),
+        assumption: str = (
+            "Its finite-sample bias correction treats every observation as an "
+            "independent sample"
+        ),
+    ) -> None:
+        """Raise if a measure that counts its observations has too few.
 
-        The debiased phase-lag index and pairwise phase consistency divide by
-        ``n_observations - 1`` (respectively ``n_observations ** 2 -
-        n_observations``), which is zero for a single observation and would
-        otherwise return silent inf/NaN.
+        The debiased phase-lag index and pairwise phase consistency (the
+        defaults describe them) divide by ``n_observations - 1``
+        (respectively ``n_observations ** 2 - n_observations``), which is zero
+        for a single observation and would otherwise return silent inf/NaN;
+        the ``"auto"`` shrinkage intensity of partial coherence estimates a
+        variance across the observations. ``why`` says why one observation is
+        not enough and ``remedy`` what to use instead; ``weights_reason`` and
+        ``assumption`` go to the refusal of reweighting observation weights
+        and to the warning for correlated observations. A bin that zero
+        weights leave with fewer than two is NaN instead (see
+        :meth:`_counts_for_correction`).
         """
         n_observations = self.n_observations
         if n_observations < 2:
             msg = (
                 f"{measure} requires at least 2 observations "
                 f"(n_observations == n_trials * n_tapers), but got "
-                f"{n_observations}. This bias correction divides by a factor "
-                f"that is zero when n_observations < 2, so it is undefined for a "
-                f"single observation. Use more trials/tapers, or the "
-                f"non-debiased measure (phase_lag_index / phase_locking_value)."
+                f"{n_observations}. {why} Use {remedy}."
             )
             raise ValueError(msg)
-        self._require_uniform_observation_weights(
-            measure,
-            "Its finite-sample correction assumes equally weighted independent "
-            "observations; use a non-debiased measure instead.",
-        )
-        self._warn_correlated_observations(
-            measure,
-            "Its finite-sample bias correction treats every observation as an "
-            "independent sample",
-        )
+        self._require_uniform_observation_weights(measure, weights_reason)
+        self._warn_correlated_observations(measure, assumption)
 
     def _warn_correlated_observations(
         self,
@@ -1855,29 +2207,34 @@ class Connectivity:
         warns instead of raising.
         """
         if self.n_observations < 2:
-            remedies = self._more_observations_remedies()
-            warnings.warn(
-                f"{measure} is computed from a single observation "
-                f"(n_observations == 1), so {consequence} "
-                "regardless of the data, and the result carries no information. "
-                f"Use {', or '.join(remedies)}.",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
+            where = "(n_observations == 1)"
+        elif self._fewest_valid_observations() == 1:
+            where = _SINGLE_OBSERVATION_IN_SOME_BINS
+        else:
+            return
+        remedies = self._more_observations_remedies()
+        warnings.warn(
+            f"{measure} is computed from a single observation {where}, so "
+            f"{consequence} regardless of the data, and the result carries no "
+            f"information. Use {', or '.join(remedies)}.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
 
     def _warn_few_global_coherence_observations(self) -> None:
         """Warn when global coherence pools fewer observations than signals.
 
-        With ``n = n_observations`` pooled observations and ``p`` signals the
-        value is at least ``1 / min(n, p)`` whatever the data, so for ``n < p``
-        it cannot reach the ``1 / p`` of independent signals. For ``n >= p`` it
-        is still biased above ``1 / p`` but no longer bounded away from it, so
-        ``n < p`` is where the warning starts. The floor, the bias, and the raw
-        count ``n`` (zero-weight observations included) are described in the
-        Notes of :meth:`global_coherence`.
+        With ``n`` pooled observations and ``p`` signals the value is at least
+        ``1 / min(n, p)`` whatever the data, so for ``n < p`` it cannot reach
+        the ``1 / p`` of independent signals. For ``n >= p`` it is still biased
+        above ``1 / p`` but no longer bounded away from it, so ``n < p`` is
+        where the warning starts. ``n`` counts the observations with nonzero
+        weight in the bin that has fewest (see :attr:`n_valid_observations`);
+        the floor and the bias are described in the Notes of
+        :meth:`global_coherence`.
         """
-        n_observations, n_signals = self.n_observations, self.n_signals
-        if n_observations >= n_signals:
+        n_observations, n_signals = self._fewest_valid_observations(), self.n_signals
+        if n_observations == 0 or n_observations >= n_signals:
             return
         averaged = self.expectation_type.split("_")
         # A labelled wrapper fixed expectation_type at "trials_tapers": name the
@@ -1892,17 +2249,26 @@ class Connectivity:
                 "expectation_type='time_trials_tapers') for coefficients)"
             )
         remedies.append("fewer signals")
+        dropped = n_observations < self.n_observations
         if n_observations == 1:
+            where = _SINGLE_OBSERVATION_IN_SOME_BINS if dropped else "(n_observations == 1)"
             floor = (
-                "is computed from a single observation (n_observations == 1). The "
+                f"is computed from a single observation {where}. The "
                 "cross-spectral matrix then has rank one, so its first component "
                 "holds all of the power. Global coherence is forced to 1 whatever "
                 "the data, and the result carries no information"
             )
         else:
+            pooled = (
+                f"as few as {n_observations} observations with nonzero weight in "
+                "some bins (see n_valid_observations; of the averaged "
+                f"{' x '.join(averaged)})"
+                if dropped
+                else f"n_observations == {n_observations} observations (the averaged "
+                f"{' x '.join(averaged)})"
+            )
             floor = (
-                f"pools n_observations == {n_observations} observations (the "
-                f"averaged {' x '.join(averaged)}) for {n_signals} signals. The "
+                f"pools {pooled} for {n_signals} signals. The "
                 f"cross-spectral matrix then has rank at most {n_observations}, so "
                 f"global coherence is at least 1/{n_observations} = "
                 f"{1 / n_observations:.3g} whatever the data"
@@ -1991,13 +2357,10 @@ class Connectivity:
             *trailing,
         )
         nonnegative = spectrum[index]
-        n_interior = (n_fft_samples - 1) // 2
-        interior: tuple[Any, ...] = (..., slice(1, n_interior + 1), *trailing)
-        partners: tuple[Any, ...] = (
-            ...,
-            slice(n_fft_samples - 1, n_fft_samples - 1 - n_interior, -1),
-            *trailing,
-        )
+        positive, negative = _paired_frequency_bins(n_fft_samples)
+        n_interior = positive.stop - 1
+        interior: tuple[Any, ...] = (..., positive, *trailing)
+        partners: tuple[Any, ...] = (..., negative, *trailing)
         # One output buffer: the partners' conjugate is written into it and the
         # positive bins added in place; 0 Hz and Nyquist are copied as they are.
         density: BackendArray = xp.empty_like(nonnegative)
@@ -2206,7 +2569,10 @@ class Connectivity:
         )
         if weights is None:
             return cross_spectral_matrix / n_observations
-        denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis]
+        # At the product's precision, so the weights do not promote it.
+        denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis].astype(
+            cross_spectral_matrix.real.dtype, copy=False
+        )
         return _divide_where(cross_spectral_matrix, denominator, denominator > 0, xp.nan)
 
     @cached_property
@@ -2306,7 +2672,7 @@ class Connectivity:
 
     @cached_property
     def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
-        return _regularized_inverse(self._transfer_function)
+        return _regularized_inverse(self._transfer_function, per_signal=True)
 
     def _expectation(self, values: BackendArray, *, frequency_axis: int = 3) -> BackendArray:
         """Average observation axes, applying optional spectral weights.
@@ -2333,18 +2699,119 @@ class Connectivity:
         return _divide_where(numerator, denominator, denominator > 0, xp.nan)
 
     @cached_property
-    def _observation_weights_are_uniform(self) -> bool:
-        """Whether every reduced bin gives its observations equal weight."""
-        if self._observation_weights is None:
+    def _kept_observations(self) -> BackendArray | None:
+        """The observations 0/1 weights keep, when they are the same at every
+        frequency: ``(n_time_windows, n_trials, n_tapers, 1, 1)`` booleans.
+
+        ``Multitaper(artifact_samples=...)`` gives such weights. The phase-lag
+        moments then zero each dropped observation of a tile in place and
+        divide by the count kept, the values of the weighted path at a
+        fraction of its cost (the other expectations multiply by the weights
+        either way). ``None`` without weights or for any other weights.
+        """
+        weights = self._observation_weights
+        if weights is None:
+            return None
+        first = weights[..., :1, :]
+        if not bool(xp.all((first == 0) | (first == 1))) or not bool(xp.all(weights == first)):
+            return None
+        kept: BackendArray = first > 0
+        return kept
+
+    @cached_property
+    def _observation_weights_only_drop(self) -> bool:
+        """Whether the observation weights only keep or drop observations.
+
+        True when, in every reduced bin, the observations with nonzero weight
+        share one weight, so the weighted expectation there is the plain mean
+        of the observations it keeps: equal weights, or the 0/1 weights of
+        ``Multitaper(artifact_samples=...)`` and of a boxcar ``MorletWavelet``
+        with ``edge_mode="nan"``. The measures that count observations then
+        count each bin's kept ones (:attr:`n_valid_observations`). False when
+        the weights also reweight the observations they keep (a smoothing
+        kernel other than a boxcar), which those measures refuse.
+        """
+        if self._observation_weights is None or self._kept_observations is not None:
             return True
         weights = self._observation_weights[..., 0]
         kept_axes = self._kept_observation_axes
         order = [*kept_axes, 3, *self._expectation_axes]
         reordered = xp.transpose(weights, order)
         flattened = reordered.reshape((*reordered.shape[: len(kept_axes) + 1], -1))
-        if flattened.shape[-1] < 2:
-            return True
-        return bool(xp.all(flattened == flattened[..., :1]))
+        largest = xp.max(flattened, axis=-1, keepdims=True)
+        return bool(xp.all((flattened == largest) | (flattened == 0)))
+
+    def _valid_counts_over(self, axes: tuple[int, ...]) -> BackendArray:
+        """Observations with nonzero weight over the observation ``axes``.
+
+        Shape: the other observation axes, then ``n_fft_samples``. Only with
+        observation weights.
+        """
+        assert self._observation_weights is not None
+        counts: BackendArray = xp.count_nonzero(
+            self._observation_weights[..., 0] > 0, axis=axes
+        )
+        return counts
+
+    @cached_property
+    def _valid_observation_counts(self) -> BackendArray:
+        """Observations with nonzero weight in each reduced bin, ``(*kept
+        observation axes, n_fft_samples)``; only with observation weights."""
+        return self._valid_counts_over(self._expectation_axes)
+
+    @staticmethod
+    def _fewest_positive(counts: BackendArray) -> int:
+        """The smallest positive count, ignoring the bins that keep none
+        (every measure is NaN there); 0 if none keeps any."""
+        kept = counts[counts > 0]
+        return int(xp.min(kept)) if kept.size else 0
+
+    def _fewest_valid_observations(self) -> int:
+        """The fewest observations any reduced bin keeps (see
+        :meth:`_fewest_positive`); :attr:`n_observations` without weights."""
+        if self._observation_weights is None:
+            return self.n_observations
+        return self._fewest_positive(self._valid_observation_counts)
+
+    @staticmethod
+    def _uses_observations(fewest: int, n_observations: int, where: str) -> str:
+        """ "uses {n} observations", or "uses as few as {n} ... in some bins" with
+        ``where`` saying where the counts are when zero weights drop some."""
+        noun = f"observation{'' if fewest == 1 else 's'}"
+        if fewest == n_observations:
+            return f"uses {fewest} {noun}"
+        return f"uses as few as {fewest} {noun} in some bins ({where})"
+
+    def _counts_for_correction(self, measure: str, dtype: DTypeLike) -> int | BackendArray:
+        """The observation count of each bin of a measure that counts them.
+
+        ``n_observations`` without observation weights; otherwise each bin's
+        count of kept observations, shaped ``(..., n_nonnegative_frequencies,
+        1, 1)`` to broadcast against a pairwise measure, in the measure's real
+        ``dtype`` so they do not promote it. A bin with fewer than
+        two leaves the finite-sample correction undefined: the caller makes it
+        NaN. This warns once if a bin keeps a single observation; a bin that
+        keeps none is NaN in every measure, which the transform reports.
+        """
+        if self._observation_weights is None:
+            return self.n_observations
+        counts = self._valid_observation_counts
+        n_nonnegative = self._nonnegative_frequency_count(counts.shape[-1])
+        counts = counts[..., :n_nonnegative, xp.newaxis, xp.newaxis]
+        single = counts == 1
+        if bool(xp.any(single)):
+            n_single, n_bins = int(xp.count_nonzero(single)), int(single.size)
+            warnings.warn(
+                f"{measure}: {_SINGLE_KEPT_OBSERVATION} "
+                f"{n_single} of {n_bins} bins (one per kept observation index and "
+                "frequency), where its finite-sample correction, which needs two, "
+                "is undefined, so it is NaN there. Connectivity.n_valid_observations "
+                "counts each bin's observations; mark fewer samples as artifacts, or "
+                "use shorter windows or more trials.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return counts.astype(dtype)
 
     @property
     def _expectation_axes(self) -> tuple[int, ...]:
@@ -2369,9 +2836,18 @@ class Connectivity:
             Product of the lengths of the averaged observation axes (for the
             default ``"trials_tapers"`` expectation, ``n_trials * n_tapers``).
             This is a raw count, not an effective number of independent
-            observations: it ignores ``observation_weights`` and is not reduced
-            when the transform's observations are correlated (see
-            ``observations_are_independent``).
+            observations: it ignores ``observation_weights``, so it includes
+            the observations zero weights drop, and is not reduced when the
+            transform's observations are correlated (see
+            ``observations_are_independent``). Use
+            :attr:`n_valid_observations` when ``artifact_samples`` or edge
+            masking drops observations. For an exact spectrum
+            (:attr:`is_exact_spectrum`, e.g. a
+            :class:`~spectral_connectivity.transforms.VARSpectrum`) it counts
+            the columns of one factor of the cross-spectral matrix
+            (``n_signals`` per window), which are not samples: it is no degrees
+            of freedom for a significance test or confidence interval, and the
+            labeled results do not record it.
 
         """
         return int(
@@ -2379,6 +2855,59 @@ class Connectivity:
                 [self._fourier_coefficients.shape[axis] for axis in self._expectation_axes]
             )
         )
+
+    @property
+    def n_valid_observations(self) -> NDArray[np.intp]:
+        """Number of observations each bin of a result averages.
+
+        The observations with nonzero ``observation_weights`` among those the
+        expectation averages: :attr:`n_observations` in every bin without
+        weights, and fewer where zero weights drop observations, such as the
+        trial windows ``Multitaper(artifact_samples=...)`` drops or the
+        edges a ``MorletWavelet(edge_mode="nan")`` masks. The measures that
+        count observations (the debiased phase-lag measures, pairwise phase
+        consistency, the significance test of ``delay`` and ``group_delay``,
+        and ``jackknife``) use these counts; pass them to the statistics
+        functions too (for coherency shaped ``(..., n_frequencies, n_signals,
+        n_signals)``, ``n_valid_observations[..., np.newaxis, np.newaxis]``).
+        Like :attr:`n_observations` it is a raw count, not reduced for
+        correlated observations.
+
+        Returns
+        -------
+        NDArray[int], shape (*kept_observation_axes, n_frequencies)
+            One count per bin of a measure's leading axes: the observation axes
+            ``expectation_type`` keeps (``n_time_windows`` for the default),
+            then the non-negative frequencies of :attr:`frequencies`. A host
+            array.
+
+        Examples
+        --------
+        Drop the windows of a trial that an artifact touches:
+
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> time_series = np.random.default_rng(0).standard_normal((1000, 4, 2))
+        >>> artifact_samples = np.zeros((1000, 4), dtype=bool)
+        >>> artifact_samples[600:620, 1] = True  # trial 1, 0.6-0.62 s
+        >>> multitaper = Multitaper(
+        ...     time_series, sampling_frequency=1000, time_window_duration=0.25,
+        ...     artifact_samples=artifact_samples,
+        ... )
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> connectivity.n_observations  # 4 trials x 5 tapers
+        20
+        >>> connectivity.n_valid_observations[:, 0].tolist()  # per window, at 0 Hz
+        [20, 20, 15, 20]
+        """
+        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[3])
+        if self._observation_weights is None:
+            kept_shape = tuple(
+                self._fourier_coefficients.shape[axis] for axis in self._kept_observation_axes
+            )
+            return np.full((*kept_shape, n_nonnegative), self.n_observations, dtype=np.intp)
+        counts = self._valid_observation_counts[..., :n_nonnegative]
+        return np.asarray(to_numpy(counts), dtype=np.intp)
 
     @property
     def n_signals(self) -> int:
@@ -2405,6 +2934,17 @@ class Connectivity:
         return self._observations_are_independent
 
     @property
+    def half_bandwidth(self) -> float | None:
+        """Half-width of the transform's spectral smoothing, or ``None`` if unknown.
+
+        In the units of :attr:`frequencies`. :meth:`from_transform` reads it
+        from the transform (``frequency_resolution / 2`` for
+        :class:`~spectral_connectivity.transforms.Multitaper`); it is the
+        default ``half_bandwidth`` of :meth:`surrogate_test`.
+        """
+        return self._half_bandwidth
+
+    @property
     def time_bins_are_independent(self) -> bool:
         """Whether the time bins may be counted as independent observations.
 
@@ -2420,6 +2960,132 @@ class Connectivity:
         """
         return self._time_bins_are_independent
 
+    @property
+    def time_bins_are_disjoint(self) -> bool:
+        """Whether successive time windows share no samples.
+
+        :meth:`from_transform` reads it from the transform
+        (:attr:`Multitaper.time_bins_are_disjoint
+        <spectral_connectivity.transforms.Multitaper.time_bins_are_disjoint>`:
+        a step of at least the window length); otherwise it is ``False``
+        unless passed, and reassigning coefficients with another number of
+        windows resets it to ``False``. :meth:`surrogate_test` randomizes each
+        averaged time window as a separate unit only when it and
+        :attr:`time_bins_are_independent` are both ``True``.
+        """
+        return self._time_bins_are_disjoint
+
+    def _resampled_measure(self, method: Any, caller: str) -> tuple[str, Callable[..., Any]]:
+        """The canonical name and bound method of the measure ``caller`` recomputes.
+
+        Shared by the drivers that recompute a measure on resampled
+        coefficients, so they accept and refuse the same names. A deprecated
+        name warns, spelled as ``caller`` takes it.
+
+        Raises
+        ------
+        TypeError
+            If ``method`` is not a string.
+        ValueError
+            If ``method`` is not a public measure of this class.
+        """
+        # The registry imports this module, so its helpers are imported here.
+        from spectral_connectivity._measure_registry import (
+            _method_type_message,
+            _suggest_measure_names,
+        )
+
+        if not isinstance(method, str):
+            raise TypeError(
+                _method_type_message(
+                    "a measure name (str)", f"{type(method).__name__} {method!r}"
+                )
+            )
+        method = _resolve_deprecated_measure_name(method, caller + "({!r})")
+        method_attribute = inspect.getattr_static(type(self), method, None)
+        if (
+            method.startswith("_")
+            or method in _NON_MEASURE_METHODS
+            or not inspect.isfunction(method_attribute)
+        ):
+            msg = (
+                f"{method!r} is not a connectivity measure {caller} can "
+                f"compute.{did_you_mean(_suggest_measure_names(method))} Call "
+                "spectral_connectivity.list_measures() to see the measure names."
+            )
+            raise ValueError(msg)
+        # The static check above guarantees ``method`` names a public function
+        # on the class, so the bound attribute is always callable here.
+        return method, getattr(self, method)
+
+    def _with_coefficients(
+        self,
+        coefficients: BackendArray,
+        observation_weights: BackendArray | None,
+    ) -> "Connectivity":
+        """A copy of this instance holding other coefficients, with empty caches.
+
+        For the resampling drivers: ``coefficients`` are fresh and unshared
+        (a subset or a surrogate of this instance's), with the same time
+        windows and frequencies, so they are adopted without a copy, and the
+        coordinates, settings and flags are kept without validating them
+        again. ``observation_weights`` must match their shape. The copy has
+        this instance's type, so a subclass's own measures and attributes
+        are kept.
+        """
+        clone = object.__new__(type(self))
+        clone.__dict__.update(self.__dict__)
+        clone.clear_cache()
+        clone._fourier_coefficients = mark_readonly_chain_if_supported(coefficients)
+        # A subset or surrogate of finite coefficients is finite.
+        clone._coefficients_are_finite = self._coefficients_are_finite or bool(
+            xp.all(xp.isfinite(coefficients))
+        )
+        clone._observation_weights = (
+            None
+            if observation_weights is None
+            else mark_readonly_if_supported(observation_weights)
+        )
+        return clone
+
+    @property
+    def is_exact_spectrum(self) -> bool:
+        """Whether the coefficients give an exact cross-spectral matrix, not samples.
+
+        ``True`` for a :class:`~spectral_connectivity.transforms.VARSpectrum`:
+        the taper-mean outer product of its coefficients is the model's
+        cross-spectral matrix, and the individual observations are only one
+        factorization of it. Every measure that is a function of that matrix
+        is then exact; those that use each observation or count them,
+        :meth:`jackknife`, :meth:`surrogate_test` and ``shrinkage="auto"`` of
+        :meth:`partial_coherence`, raise ``ValueError``.
+
+        .. versionadded:: 3.0
+        """
+        return self._is_exact_spectrum
+
+    def _require_tapers_averaged_for_exact_spectrum(self, expectation_type: str) -> None:
+        """Raise unless ``expectation_type`` averages the tapers of an exact spectrum.
+
+        Only the taper mean of an exact spectrum's outer products is its
+        cross-spectral matrix; a single taper is one column of a factor of it.
+        """
+        if not self._is_exact_spectrum or 2 in EXPECTATION_AXES[expectation_type]:
+            return
+        supported = ", ".join(
+            repr(name) for name, axes in EXPECTATION_AXES.items() if 2 in axes
+        )
+        msg = (
+            f"expectation_type={expectation_type!r} keeps the tapers as an output "
+            "axis, but these coefficients are an exact spectrum (is_exact_spectrum "
+            "is True, as for VARSpectrum): only their mean over the tapers is the "
+            "model's cross-spectral matrix, and each taper is one column of an "
+            f"arbitrary factor of it. Use an expectation_type that averages the "
+            f"tapers: {supported}."
+        )
+        raise ValueError(msg)
+
+    @_refused_for_exact_spectrum("sampling_error")
     def jackknife(
         self,
         method: str,
@@ -2428,16 +3094,17 @@ class Connectivity:
         transformation: Literal[
             "auto", "identity", "log", "fisher", "fisher_squared", "circular"
         ] = "auto",
+        leave_out: Literal["observation", "trial"] = "observation",
         **method_kwargs: Any,
     ) -> JackknifeResult:
-        """Estimate uncertainty by leaving out one trial/taper observation.
+        """Estimate uncertainty by leaving out one observation or one trial.
 
         The configured expectation must average trials, tapers, or their
-        combination. For ``trials_tapers`` each trial-taper eigencoefficient is
-        treated as one observation. The method is recomputed for every
-        leave-one-out sample, so it supports nonlinear measures without an
-        analytic variance formula (at a computational cost proportional to
-        ``n_observations``).
+        combination. By default each averaged observation is left out in turn,
+        or each whole trial with ``leave_out="trial"``. The method is
+        recomputed for every leave-one-out sample, so it supports nonlinear
+        measures without an analytic variance formula (at a computational cost
+        proportional to the number of samples left out).
 
         Parameters
         ----------
@@ -2464,6 +3131,27 @@ class Connectivity:
               are clamped at 0, since a magnitude cannot be negative;
             - ``"circular"`` for ``coherence_phase``;
             - ``"identity"`` for every other measure.
+        leave_out : {"observation", "trial"}, default="observation"
+            What one leave-one-out replicate omits. ``"observation"`` omits
+            one averaged observation (a trial-taper eigencoefficient for
+            ``trials_tapers``). ``"trial"`` omits one whole trial (the
+            coefficients' trial axis), all of its tapers together, so the
+            interval has ``n_trials - 1`` degrees of freedom and reflects how
+            much the measure varies from trial to trial.
+
+            Prefer ``"trial"`` for recordings of several trials unless they
+            are known to be alike: when trials differ (in coupling strength,
+            state, or noise level), leaving out one taper at a time treats the
+            tapers of one trial as independent draws from one shared spectrum
+            and gives too narrow an interval. Its cost is a wider interval
+            when trials are alike and few (see Notes). Keep ``"observation"``
+            for a single trial.
+
+            ``"trial"`` needs an expectation that averages trials
+            (``"trials_tapers"``, or ``"trials"``, for which the two settings
+            are the same) and at least 3 trials. It assumes the trials are
+            independent, but not the tapers within one, so it is allowed when
+            ``observations_are_independent`` is ``False``.
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -2479,20 +3167,36 @@ class Connectivity:
         Raises
         ------
         ValueError
-            If the expectation averages tapers (``"tapers"`` or
-            ``"trials_tapers"``) but ``observations_are_independent`` is
-            ``False``: correlated observations (a MorletWavelet smoothing
-            neighborhood, overlapping Welch segments) are not valid
-            leave-one-out units. Recompute the transform with independent
-            observations instead: ``Welch`` with ``segment_overlap <= 0.5``, a
-            ``Multitaper`` transform, or ``MorletWavelet`` without
+            If ``leave_out="observation"`` and the expectation averages tapers
+            (``"tapers"`` or ``"trials_tapers"``) but
+            ``observations_are_independent`` is ``False``: correlated
+            observations (a MorletWavelet smoothing neighborhood, overlapping
+            Welch segments) are not valid leave-one-out units. With
+            ``"trials_tapers"`` and at least 3 trials, pass
+            ``leave_out="trial"``; otherwise recompute the transform with
+            independent observations: ``Welch`` with ``segment_overlap <=
+            0.5``, a ``Multitaper`` transform, or ``MorletWavelet`` without
             ``smoothing_time`` on at least 3 trials.
             (``expectation_type="trials"`` is accepted but keeps the correlated
             axis as an output dimension instead of averaging it, a different
             measure.)
 
+            Also raised if ``leave_out`` is not ``"observation"`` or
+            ``"trial"``, or is ``"trial"`` with an expectation that does not
+            average trials or with fewer than 3 trials.
+
         Notes
         -----
+        Where zero ``observation_weights`` drop observations (the invalid
+        windows of ``Multitaper(artifact_samples=...)``, say), each bin's
+        interval is the jackknife of the observations it keeps: leaving out an
+        observation the bin does not have gives no replicate there, and the
+        degrees of freedom are its count of kept observations less one
+        (:attr:`n_valid_observations`; ``JackknifeResult.n_observations`` is
+        then one count per bin). With ``leave_out="trial"`` the units are
+        trials, a trial counting in a bin if any of its tapers is kept there.
+        A bin keeping fewer than 3 is NaN, with a warning.
+
         Circular confidence bounds are wrapped to ``(-pi, pi]``, so when the
         interval crosses ``+/-pi`` the lower bound exceeds the upper bound;
         the interval is then the arc from ``lower`` up through ``pi`` and on
@@ -2518,7 +3222,10 @@ class Connectivity:
           zero-coherence null instead:
           :func:`spectral_connectivity.statistics.coherence_significance_pvalue`
           applied to ``coherency()`` and ``n_observations`` (valid for
-          independent, equally weighted observations), corrected across
+          independent, equally weighted observations; when ``artifact_samples``
+          or edge masking drops observations, pass
+          ``n_valid_observations[..., np.newaxis, np.newaxis]`` instead),
+          corrected across
           frequencies and pairs with
           :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`.
           For measures without an analytic null, use a permutation or
@@ -2530,6 +3237,18 @@ class Connectivity:
         - ``coherence_phase`` (``circular``): under-covers when coherence is
           weak (77-88% at a true ``|coherency|`` of 0.1, 84-93% at 0.2,
           87-94% at 0.3, against 92-95% at 0.6).
+
+        Leaving out trials: with 5 to 20 trials of 3 or 7 tapers each and the
+        same pooled magnitude-squared coherence (0.45 ** 2), the default 95%
+        interval for ``magnitude_squared_coherence`` covers 94-96% with either
+        setting when every trial has the same coherency. When each trial's
+        coherency is drawn from U(0, 0.9), ``leave_out="observation"`` covers
+        82-92% (less with 7 tapers per trial than with 3), because it treats
+        one trial's tapers as independent draws, and ``leave_out="trial"``
+        93.5-96.5%, from ``n_tapers`` times fewer replicates. When the trials
+        are alike, the median ``"trial"`` interval is wider by 19-47% with 3
+        or 4 trials, 13-20% with 5 and 5-8% with 10, at the same coverage
+        (two Monte Carlo runs of 1000-2000 datasets each).
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (
@@ -2542,10 +3261,37 @@ class Connectivity:
             )
             raise ValueError(msg)
         _validate_confidence_level(confidence_level)
-        if not self._observations_are_independent and self.expectation_type in {
-            "tapers",
-            "trials_tapers",
-        }:
+        if leave_out not in ("observation", "trial"):
+            msg = f"leave_out must be 'observation' or 'trial'; got {leave_out!r}."
+            raise ValueError(msg)
+        if leave_out == "trial" and self.expectation_type == "tapers":
+            msg = (
+                "jackknife(leave_out='trial') leaves out one trial at a time, but "
+                "expectation_type='tapers' does not average trials (each trial is "
+                "its own output). Build the Connectivity with "
+                "expectation_type='trials_tapers' to average trials and leave one "
+                "out, or keep leave_out='observation' to leave out one taper."
+            )
+            raise ValueError(msg)
+        coefficients = self._fourier_coefficients
+        n_trials = coefficients.shape[1]
+        # Each replicate leaves out one index of ``observation_axis``; for one
+        # trial-taper observation of ``trials_tapers`` the two axes are
+        # flattened into axis 1 first.
+        flatten_trials_tapers = (
+            self.expectation_type == "trials_tapers" and leave_out == "observation"
+        )
+        observation_axis = 2 if self.expectation_type == "tapers" else 1
+        n_observations = (
+            n_trials * coefficients.shape[2]
+            if flatten_trials_tapers
+            else coefficients.shape[observation_axis]
+        )
+        if (
+            leave_out == "observation"
+            and not self._observations_are_independent
+            and self.expectation_type in {"tapers", "trials_tapers"}
+        ):
             msg = (
                 f"jackknife with expectation_type={self.expectation_type!r} leaves "
                 "out one taper observation at a time, but this transform's "
@@ -2553,6 +3299,13 @@ class Connectivity:
                 "False: a MorletWavelet smoothing neighborhood, or Welch segments "
                 "overlapping by more than half), so leave-one-out intervals over "
                 "them are invalid. For an interval on the same averaged measure, "
+            )
+            if self.expectation_type == "trials_tapers" and n_trials >= 3:
+                msg += (
+                    "pass leave_out='trial', which leaves out whole trials and is "
+                    "valid with correlated tapers, or "
+                )
+            msg += (
                 "recompute the transform with independent observations: Welch "
                 "with segment_overlap <= 0.5, a Multitaper transform, or "
                 "MorletWavelet without smoothing_time on at least 3 trials (the "
@@ -2562,56 +3315,50 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
-        # The registry imports this module, so its helpers are imported here.
-        from spectral_connectivity._measure_registry import (
-            _method_type_message,
-            _suggest_measure_names,
+        method, measure = self._resampled_measure(method, "jackknife")
+
+        if n_observations < 3:
+            if leave_out == "trial":
+                msg = (
+                    "jackknife(leave_out='trial') requires at least 3 trials, got "
+                    f"{n_observations}: an interval over n trials has n - 1 degrees "
+                    "of freedom, so 2 trials give a critical value near 13 and 1 "
+                    "trial gives none."
+                )
+                if (
+                    self.expectation_type == "trials_tapers"
+                    and self._observations_are_independent
+                ):
+                    msg += (
+                        " Keep leave_out='observation' to leave out one trial-taper "
+                        "observation at a time."
+                    )
+                else:
+                    msg += " Collect at least 3 trials for an interval."
+            else:
+                msg = (
+                    "jackknife requires at least 3 observations, got "
+                    f"{n_observations}. With two, each leave-one-out replicate has a "
+                    "single observation, which forces magnitude-normalized measures "
+                    "to 1 and makes the interval degenerate (a zero standard error, "
+                    "or NaN under a variance-stabilizing transform such as the "
+                    "coherence default)."
+                )
+            raise ValueError(msg)
+
+        full_estimate = _real_array_result(
+            measure(**method_kwargs),
+            method,
+            "jackknife",
+            structured_hint=(
+                " Jackknife a measure that returns one real array, such as a "
+                "pairwise measure; group measures are not resampled yet."
+            ),
         )
 
-        if not isinstance(method, str):
-            raise TypeError(
-                _method_type_message(
-                    "a measure name (str)", f"{type(method).__name__} {method!r}"
-                )
-            )
-        method = _resolve_deprecated_measure_name(method, "jackknife({!r})")
-        method_attribute = inspect.getattr_static(type(self), method, None)
-        if (
-            method.startswith("_")
-            or method in _NON_MEASURE_METHODS
-            or not inspect.isfunction(method_attribute)
-        ):
-            msg = (
-                f"{method!r} is not a connectivity measure jackknife can "
-                f"compute.{did_you_mean(_suggest_measure_names(method))} Call "
-                "spectral_connectivity.list_measures() to see the measure names."
-            )
-            raise ValueError(msg)
-        # The static check above guarantees ``method`` names a public function
-        # on the class, so the bound attribute is always callable here.
-        measure = getattr(self, method)
-
-        full_estimate = measure(**method_kwargs)
-        if isinstance(full_estimate, tuple):
-            msg = f"jackknife does not support tuple-valued measure {method!r}."
-            raise TypeError(msg)
-        full_estimate = np.asarray(full_estimate)
-        if full_estimate.dtype == object:
-            msg = (
-                f"jackknife requires a real array result from {method!r}; it "
-                f"returned a structured result. Jackknife the scalar score "
-                "measure instead (e.g. canonical_coherence rather than "
-                "canonical_coherency)."
-            )
-            raise TypeError(msg)
-        if np.iscomplexobj(full_estimate):
-            msg = f"jackknife requires a real-valued measure; {method!r} is complex."
-            raise TypeError(msg)
-
-        coefficients = self._fourier_coefficients
         observation_weights = self._observation_weights
-        if self.expectation_type == "trials_tapers":
-            n_observations = coefficients.shape[1] * coefficients.shape[2]
+        observation_coefficients = coefficients
+        if flatten_trials_tapers:
             observation_coefficients = coefficients.reshape(
                 coefficients.shape[0],
                 n_observations,
@@ -2627,54 +3374,85 @@ class Connectivity:
                     observation_weights.shape[3],
                     1,
                 )
-            observation_axis = 1
-        else:
-            observation_coefficients = coefficients
-            observation_axis = 2 if self.expectation_type == "tapers" else 1
-            n_observations = coefficients.shape[observation_axis]
-        if n_observations < 3:
+        # Where zero weights drop observations, which units each kept bin has:
+        # (n_units, *kept observation axes), a unit counting in a bin if it has
+        # a nonzero weight at any frequency there. Leaving out a unit a bin
+        # never had gives no replicate there.
+        unit_is_valid = None
+        if observation_weights is not None:
+            positive = observation_weights[..., 0] > 0
+            if leave_out == "trial" and self.expectation_type == "trials_tapers":
+                # The unit is a whole trial, kept in a bin if any of its
+                # tapers is.
+                positive = xp.any(positive, axis=2, keepdims=True)
+            present = xp.any(positive, axis=-1)
+            # A frequency keeping only some of a bin's units would need its own
+            # replicates and count; one keeping none is NaN there anyway.
+            if not bool(
+                xp.all(
+                    (positive == present[..., xp.newaxis])
+                    | ~xp.any(positive, axis=observation_axis, keepdims=True)
+                )
+            ):
+                msg = (
+                    "jackknife needs observation_weights that drop the same "
+                    "observations at every frequency of a bin (or all of them), as "
+                    "Multitaper(artifact_samples=...) and MorletWavelet(edge_mode='nan') "
+                    "do; these drop an observation at some frequencies only, which "
+                    "would give those frequencies a different count of replicates. "
+                    "Compute the interval one frequency at a time, or zero an "
+                    "observation's weight at every frequency."
+                )
+                raise ValueError(msg)
+            if self.expectation_type == "trials_tapers":
+                present = present[:, :, 0]
+            present = to_numpy(xp.moveaxis(present, observation_axis, 0))
+            if not present.all():
+                unit_is_valid = present
+        units = "trials" if leave_out == "trial" else "observations"
+        # The raw count was checked above; these are the units kept anywhere.
+        if unit_is_valid is not None and (n_valid := int(unit_is_valid.sum(0).max())) < 3:
+            caller = "jackknife(leave_out='trial')" if leave_out == "trial" else "jackknife"
             msg = (
-                f"jackknife requires at least 3 observations, got {n_observations}. "
-                "With two, each leave-one-out replicate has a single observation, "
-                "which forces magnitude-normalized measures to 1 and makes the "
-                "interval degenerate (a zero standard error, or NaN under a "
+                f"{caller} requires at least 3 {units}, got {n_valid} with "
+                "nonzero weight in any bin. With two, "
+                "each leave-one-out replicate has a single one, which forces "
+                "magnitude-normalized measures to 1 and makes the interval "
+                "degenerate (a zero standard error, or NaN under a "
                 "variance-stabilizing transform such as the coherence default)."
             )
             raise ValueError(msg)
+        omitted_units: Sequence[int] = range(n_observations)
+        if unit_is_valid is not None:
+            omitted_units = np.flatnonzero(
+                unit_is_valid.reshape(n_observations, -1).any(axis=1)
+            ).tolist()
 
         replicates: list[NDArray[np.floating]] = []
-        for omitted in range(n_observations):
-            keep = xp.arange(n_observations) != omitted
-            subset = xp.compress(keep, observation_coefficients, axis=observation_axis)
-            subset_weights = (
-                None
-                if observation_weights is None
-                else xp.compress(keep, observation_weights, axis=observation_axis)
-            )
-            # ``subset`` is a fresh, unshared compress() output, so adopt it in
-            # place instead of copying and re-scanning it for every replicate.
-            replicate_connectivity = Connectivity(
-                subset,
-                expectation_type=self.expectation_type,
-                frequencies=self._frequencies,
-                time=self.time,
-                dtype=self._dtype,
-                minimum_phase_tolerance=self._minimum_phase_tolerance,
-                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
-                is_one_sided=self._is_one_sided,
-                observation_weights=subset_weights,
-                observations_are_independent=self._observations_are_independent,
-                _adopt_fourier_coefficients=True,
-            )
-            token = _emit_migration_notices.set(False)
-            try:
-                replicate = getattr(replicate_connectivity, method)(**method_kwargs)
-            finally:
-                _emit_migration_notices.reset(token)
-            if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
-                msg = f"jackknife requires a real array result from {method!r}."
-                raise TypeError(msg)
-            replicates.append(np.asarray(replicate))
+        # The full estimate carried the migration notices; the replicates do not.
+        token = _emit_migration_notices.set(False)
+        try:
+            for omitted in omitted_units:
+                keep = xp.arange(n_observations) != omitted
+                subset = xp.compress(keep, observation_coefficients, axis=observation_axis)
+                subset_weights = (
+                    None
+                    if observation_weights is None
+                    else xp.compress(keep, observation_weights, axis=observation_axis)
+                )
+                replicate_connectivity = self._with_coefficients(subset, subset_weights)
+                # Only a bin with fewer than 3 kept observations leaves a
+                # replicate a single one, and the interval is NaN there.
+                with _user_warnings_ignored(
+                    _SINGLE_KEPT_OBSERVATION_WARNINGS, unit_is_valid is not None
+                ):
+                    replicate = getattr(replicate_connectivity, method)(**method_kwargs)
+                if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
+                    msg = f"jackknife requires a real array result from {method!r}."
+                    raise TypeError(msg)
+                replicates.append(np.asarray(replicate))
+        finally:
+            _emit_migration_notices.reset(token)
 
         resolved_transformation: Literal[
             "identity", "log", "fisher", "fisher_squared", "circular"
@@ -2695,6 +3473,31 @@ class Connectivity:
                 resolved_transformation = "identity"
         else:
             resolved_transformation = transformation
+        replicate_is_valid = None
+        if unit_is_valid is not None and not unit_is_valid[omitted_units].all():
+            # Each bin's replicates lead the measure's own axes.
+            kept_shape = unit_is_valid.shape[1:]
+            replicate_is_valid = unit_is_valid[omitted_units].reshape(
+                (
+                    len(omitted_units),
+                    *kept_shape,
+                    *(1,) * (full_estimate.ndim - len(kept_shape)),
+                )
+            )
+            too_few = unit_is_valid.sum(axis=0) < 3
+            if too_few.any():
+                warnings.warn(
+                    f"jackknife: observation_weights leave fewer than 3 {units} "
+                    f"in {int(too_few.sum())} of {too_few.size} bins (see "
+                    "n_valid_observations), too few for a leave-one-out interval, so "
+                    "the bias-corrected estimate, standard error and bounds are NaN "
+                    "there.",
+                    UserWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
+                replicate_is_valid = replicate_is_valid & ~too_few.reshape(
+                    replicate_is_valid.shape[1:]
+                )
         result = jackknife_confidence_interval(
             full_estimate,
             np.stack(replicates, axis=0),
@@ -2706,6 +3509,7 @@ class Connectivity:
                 if method == "phase_locking_value"
                 else False
             ),
+            _replicate_is_valid=replicate_is_valid,
         )
         if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:
             # tanh maps the atanh-scale interval onto [-1, 1], but a magnitude
@@ -2718,6 +3522,944 @@ class Connectivity:
                 confidence_interval=(np.maximum(lower, 0.0), upper),
             )
         return result
+
+    @_refused_for_exact_spectrum("surrogate_null")
+    def surrogate_test(
+        self,
+        method: str,
+        *,
+        kind: Literal["trial_shuffle", "phase_rotation", "conjugation"],
+        n_surrogates: int = 999,
+        alternative: Literal["auto", "greater", "less", "two-sided"] = "auto",
+        fwer_axis: int | tuple[int, ...] | None = None,
+        half_bandwidth: float | None = None,
+        random_state: int | np.random.Generator | None = None,
+        **method_kwargs: Any,
+    ) -> SurrogateTestResult:
+        """Test a measure against surrogate data that satisfy a null hypothesis.
+
+        Each surrogate is the coefficients changed in a way that leaves their
+        distribution unchanged when the null hypothesis of ``kind`` holds. The
+        method is recomputed for ``n_surrogates`` surrogates, and each element
+        of the estimate gets a Monte Carlo p-value (the rank of the estimate
+        among the surrogates' values) and a p-value adjusted for testing every
+        element of its family (the maximum statistic over the family).
+
+        Choose ``kind`` for the question:
+
+        ==========================================  ====================  ==================================  =================================
+        Question                                    ``kind``              Needs                               A shared stimulus-locked response
+        ==========================================  ====================  ==================================  =================================
+        Do the signals covary from trial to trial?  ``"trial_shuffle"``   2+ trials                           stays in the null
+        Are the signals independent at all?         ``"phase_rotation"``  2+ units (see Notes), the half      is rejected
+                                                                          bandwidth
+        Is there more than zero-lag mixing?         ``"conjugation"``     2+ units (see Notes)                is rejected if lagged
+        ==========================================  ====================  ==================================  =================================
+
+        A shared stimulus-locked response is one common to the signals and the
+        same in every trial (see Notes).
+
+        Parameters
+        ----------
+        method : str
+            Name of a public, real-valued connectivity measure of pairs of
+            signals, e.g. ``"magnitude_squared_coherence"``. Complex-valued,
+            tuple-valued and structured measures are refused, as are
+            ``power`` (every surrogate keeps each signal's spectrum),
+            ``delay`` (candidate delays, not a statistic) and
+            ``coherence_phase`` (circular).
+        kind : {"trial_shuffle", "phase_rotation", "conjugation"}
+            The surrogate construction, which sets the null hypothesis:
+
+            - ``"trial_shuffle"``: permute each signal's trials independently
+              (signal 0 keeps its order), keeping every trial's coefficients
+              for that signal intact across time windows, tapers and
+              frequencies. Null: the signals are independent from trial to
+              trial; each signal keeps its own spectrum and whatever it does
+              at the same time in every trial. Valid for every measure,
+              including the directed ones. Needs an expectation that averages
+              trials and at least 2 trials; with ``n_trials! <
+              n_surrogates`` (fewer than 7 trials for the default) a warning
+              says how coarse the p-values are.
+            - ``"phase_rotation"``: multiply each signal's coefficients by an
+              independent random phase per unit (each trial, or averaged time
+              window; see Notes), the same for every taper and positive
+              frequency of the unit (and conjugate at the negative
+              frequencies, so a real signal stays real). Null: the signals
+              are independent. The test is exact for circular Gaussian
+              coefficients; the windowed coefficients of stationary Gaussian
+              signals are approximately circular away from 0 Hz and Nyquist,
+              where leakage across 0 Hz (or Nyquist) mixes each frequency with
+              its mirror image. So the frequencies within ``half_bandwidth``
+              of 0 Hz and Nyquist, where rotating does not give valid
+              surrogates, are not tested. Needs at least 2 units: one trial
+              is refused unless its non-overlapping time windows are
+              averaged.
+            - ``"conjugation"``: replace each unit (every taper, signal and
+              frequency of it together) by its complex conjugate with
+              probability 1/2, which for a real signal amounts to reversing
+              that unit in time. Null: the coherency is real at every
+              frequency, as for instantaneous (zero-lag) mixing such as volume
+              conduction of independent sources; exact when the signals are
+              stationary and Gaussian, whose distribution such mixing leaves
+              unchanged by time reversal. Needs at least 2 units. Conjugation
+              leaves real coefficients unchanged, so the frequencies of
+              :attr:`real_valued_frequencies` are not tested, nor are 0 Hz and
+              Nyquist where their coefficients are real to rounding, as they
+              are for a real signal. For the coefficients of a complex signal,
+              passed directly, 0 Hz and Nyquist are tested like any other
+              frequency. Pair it
+              with a measure of lagged interaction: ``imaginary_coherence``,
+              the phase-lag indices, ``phase_slope_index``, or pairwise
+              spectral Granger (for Granger causality beyond what mixing
+              produces). With ``magnitude_squared_coherence`` it asks only
+              whether the coupling exceeds what a real coherency gives.
+        n_surrogates : int, default=999
+            Number of surrogates. The smallest p-value is ``1 / (n_surrogates
+            + 1)``; the computation takes ``n_surrogates`` times as long as
+            the measure.
+        alternative : {"auto", "greater", "less", "two-sided"}, default="auto"
+            Which values are evidence against the null: large values of the
+            measure (``"greater"``), small values (``"less"``), or large
+            magnitudes (``"two-sided"``). ``"auto"`` resolves to
+            ``"two-sided"`` for the measures whose sign says which signal
+            leads (``imaginary_coherency``, ``phase_lag_index``,
+            ``weighted_phase_lag_index``, ``phase_slope_index``) and to
+            ``"greater"`` for every other measure, including the debiased
+            estimators that can fall below 0 by chance
+            (``pairwise_phase_consistency`` and the debiased squared phase-lag
+            indices) and ``directed_phase_lag_index``, whose ``[..., i, j]``
+            above 0.5 means ``i`` leads ``j``. The result records the
+            resolved value.
+        fwer_axis : int or tuple of int or None, default=None
+            The axes of the measure's result whose elements form one family
+            for ``fwer_p_value``, as in
+            :func:`~spectral_connectivity.statistics.adjust_for_multiple_comparisons`:
+            each slice along the remaining axes is its own family. ``None``
+            (the default) makes every tested element one family. For a
+            pairwise result ``(n_time, n_frequencies, n_signals,
+            n_signals)``, ``fwer_axis=(1, 2, 3)`` corrects across
+            frequencies and pairs separately in each time window. The result
+            records the axes as non-negative integers (``None`` as every
+            axis). ``()`` is refused: with each element its own family, use
+            ``p_value``.
+        half_bandwidth : float, optional
+            For ``kind="phase_rotation"`` only (refused otherwise): the
+            half-width of the transform's spectral smoothing, in the units of
+            ``frequencies``. The frequencies below it and above Nyquist minus
+            it are not tested. Defaults to :attr:`half_bandwidth`, which
+            :meth:`from_transform` records for a
+            :class:`~spectral_connectivity.Multitaper` transform
+            (``frequency_resolution / 2``); pass it for coefficients from
+            elsewhere.
+        random_state : int, numpy.random.Generator, or None
+            Seed or generator of the surrogates' random numbers. ``None``
+            draws a fresh seed.
+        **method_kwargs
+            Keyword arguments forwarded to ``method`` on the data and every
+            surrogate.
+
+        Returns
+        -------
+        SurrogateTestResult
+            The estimate, the uncorrected ``p_value`` and the family-wise
+            ``fwer_p_value``, each with the measure's own shape (for a
+            pairwise measure ``(n_time, n_nonnegative_frequencies, n_signals,
+            n_signals)``), and the surrogate maxima of each family. The
+            diagonal, non-finite estimates, the frequencies within
+            ``half_bandwidth`` of 0 Hz and Nyquist (for ``"phase_rotation"``)
+            and the frequencies whose coefficients are real (for
+            ``"conjugation"``: :attr:`real_valued_frequencies`, and 0 Hz and
+            Nyquist of a real signal) are not tested: their p-values are NaN, and
+            they are in no family's maximum. For directed measures
+            ``[..., i, j]`` is ``i -> j``.
+
+        Raises
+        ------
+        ValueError
+            If ``kind``, ``n_surrogates``, ``alternative``, ``fwer_axis`` or
+            ``half_bandwidth`` is invalid, or ``kind="phase_rotation"`` has no
+            half bandwidth; if the expectation does not average what ``kind``
+            randomizes (trials for ``"trial_shuffle"``, units otherwise) or
+            there are fewer than 2 of them (one trial and no averaged
+            non-overlapping time windows, for ``"phase_rotation"`` and
+            ``"conjugation"``); if
+            ``"trial_shuffle"`` meets observation weights that differ between
+            trials; if ``"phase_rotation"`` meets one-sided coefficients, or a
+            measure that does not return one value per frequency, or a
+            ``phase_slope_index`` band within ``half_bandwidth`` of 0 Hz or
+            Nyquist; if this ``Connectivity`` holds an exact spectrum
+            (``is_exact_spectrum``, e.g. from a VAR model), which has no
+            sampling error to test against; or if ``method`` is not a measure
+            this test can use.
+        TypeError
+            If ``method`` is not a string, or the measure's result is not a
+            real array ending in a ``(n_signals, n_signals)`` pair.
+
+        Warns
+        -----
+        UserWarning
+            If the data allow fewer distinct surrogates than ``n_surrogates``
+            (the p-values stay valid but coarse), or if surrogates return NaN
+            at tested elements (each counts as at least the estimate and sets
+            its family's maximum to infinity).
+
+        Notes
+        -----
+        **What a rejection means.** A p-value at or below ``alpha`` rejects
+        the null hypothesis of ``kind`` at that element, not "no
+        connectivity" in general. Under the null, the probability of a
+        p-value at or below ``alpha`` is at most ``alpha`` (exactly
+        ``floor(alpha * (n_surrogates + 1)) / (n_surrogates + 1)`` when the
+        surrogates are exchangeable with the data and there are no ties).
+        Ties count against rejection, including values within rounding (one
+        part in a million) of the estimate, and a surrogate the measure
+        returns NaN for counts as exceeding it.
+
+        **Which p-value to report.** ``fwer_p_value``, to say where the
+        measure is significant; ``p_value`` is uncorrected (see
+        :class:`~spectral_connectivity.statistics.SurrogateTestResult`).
+
+        **Units.** ``"phase_rotation"`` and ``"conjugation"`` draw one phase
+        or flip for each unit the expectation averages: each trial, and each
+        time window too when the expectation averages time and the windows do
+        not overlap (:attr:`time_bins_are_disjoint`, which
+        :meth:`from_transform` reads from a ``Multitaper`` or
+        ``ShortTimeFourierTransform``, and which is ``False`` for coefficients
+        passed directly unless stated). Windows that overlap, even by half,
+        share samples and so have correlated coefficients; all the windows of
+        a trial then share its draw, and a single recording with overlapping
+        windows is one unit. Every taper of a unit shares its draw too. A
+        trial's tapers are uncorrelated only where the spectrum is flat across
+        ``half_bandwidth``; near a spectral peak or on a steep spectrum they
+        are correlated, and randomizing each taper separately would destroy
+        that correlation and make the null too narrow (see Measured sizes).
+        Randomizing whole units keeps it, so for independent units of
+        stationary Gaussian signals the test holds its size whatever their
+        spectrum (for ``"phase_rotation"``, away from 0 Hz and Nyquist). With
+        a single unit (one trial, no averaged non-overlapping windows)
+        whole-unit randomization cannot change the magnitude of a
+        cross-spectrum (rotation) or does no more than conjugate the whole
+        spectrum (conjugation), so it is refused: average non-overlapping time
+        windows (an ``expectation_type`` that includes ``"time"``), record
+        more trials, or use ``"trial_shuffle"`` where there are trials.
+        Windows of one recording are independent units only if they are
+        longer than the signals' memory: a narrow spectral peak has a long one
+        (see Measured sizes). The axes the expectation keeps (each time window
+        by default) share the draws, so the surrogates keep the dependence
+        between them that the family maximum depends on.
+
+        **Shared stimulus-locked responses.** ``"trial_shuffle"`` keeps each
+        signal's response in every surrogate, so a response common to the
+        signals is in its null: the test asks about trial-by-trial
+        covariation beyond it. ``"phase_rotation"`` randomizes each trial's
+        phase, which destroys stimulus-locked timing, so a shared response
+        alone is significant. ``"conjugation"`` keeps a response
+        shared at zero lag in its null (its coherency is real) and rejects
+        one that reaches the signals at different times. To ask about
+        interaction beyond a common drive, use ``"trial_shuffle"``.
+        Subtracting each signal's mean across trials before the transform
+        removes the response but leaves every trial's residual correlated
+        with the others (by ``-1 / (n_trials - 1)``), which per-trial
+        randomization ignores, so the other two kinds then give p-values that
+        are too small unless there are many trials (see Measured sizes).
+
+        **Multiple comparisons.** ``fwer_p_value`` controls the family-wise
+        error rate within each family, not across families: choose the
+        families before looking at the results, to match the claims you will
+        make (see the Notes of
+        :func:`~spectral_connectivity.statistics.adjust_for_multiple_comparisons`).
+        The raw maximum is dominated by the elements whose null distribution
+        is widest, so elements with a narrow null (frequencies with fewer
+        effective observations, or a measure with a smaller range there) lose
+        power to the others. The diagonal is never in a family. Each pair of
+        a symmetric measure appears twice, which does not change the
+        maximum. For a false discovery rate instead, pass ``p_value`` to
+        :func:`~spectral_connectivity.statistics.adjust_for_multiple_comparisons`.
+
+        **Measures that combine frequencies.** For ``"phase_rotation"`` the
+        frequencies near 0 Hz and Nyquist are left untested in the output, but
+        the measures that factor the whole spectrum (the spectral Granger
+        family, the transfer-function measures) still use them, which spreads
+        an excess past ``half_bandwidth``, and with it an excess family-wise
+        rate (see Measured sizes). For these measures prefer
+        ``"trial_shuffle"`` where the trials allow it, or exclude the
+        frequencies within about two half bandwidths of an edge from a claim.
+        ``phase_slope_index`` sums over its ``frequency_range``, so for
+        ``"phase_rotation"`` that band must avoid the untested frequencies;
+        for ``"conjugation"`` it is tested whole.
+
+        **Measured sizes.** Monte Carlo rejection rates at nominal 5% with 99
+        surrogates per dataset and multitaper transforms. These were measured
+        once, during development; the test suite checks each kind's size and
+        the family-wise error rate in smaller designs, within stated limits.
+
+        - ``"trial_shuffle"``, three independent AR(1) signals (coefficient
+          0.5) at 200 Hz, 10 trials, 1 s windows with NW=3 (5 tapers), 2100
+          datasets: 4.9-5.1% for magnitude-squared and imaginary coherence and
+          pairwise spectral Granger, including 0 Hz and Nyquist.
+        - ``"phase_rotation"``, two independent AR(1) signals (coefficient
+          0.5) at 200 Hz, 5 trials, 2 s windows with NW=4 (7 tapers, half
+          bandwidth 2 Hz), 2000 datasets: 5.0% for magnitude-squared and
+          imaginary coherence at frequencies more than 2.5 half bandwidths
+          from an edge and 4.7-5.4% nearer, but past one half bandwidth.
+          Within one half bandwidth of 0 Hz or Nyquist (computed apart, 1000
+          datasets) rotation rejected up to 7.9% (coherence) and 7.4%
+          (Granger) at single frequencies, which is why those are not tested.
+          Pairwise spectral Granger rejected 6.5% from one to 1.5 half
+          bandwidths from an edge, 5.8-5.9% up to 2.5, and 5.1% farther away.
+        - ``"conjugation"``, instantaneous mixing of two independent AR(2)
+          sources at 200 Hz, peaked at 20 and 40 Hz with pole radii 0.9 and
+          0.8 (each signal one source plus 0.7 times the other), 10 trials, 2
+          s windows with NW=4 (7 tapers), 400 datasets: 4.9-5.2% for
+          ``imaginary_coherence``, 5.0-5.1% for pairwise spectral Granger and
+          4.0-4.5% for a two-sided ``phase_slope_index`` over 10-30 Hz, where
+          the trial shuffle finds Granger causality in 96% of datasets. With a
+          3-sample lag instead (unmixed, the second source plus half the first
+          delayed by 3 samples), conjugation rejects the imaginary coherence
+          at its 20 Hz peak, and the phase slope index, in every dataset, and
+          pairwise Granger in 93% (10-90 Hz).
+        - Spectra that are not flat across the half bandwidth, two independent
+          signals at 128 Hz, 1 s windows with NW=4 (7 tapers, half bandwidth 4
+          Hz), 300-400 datasets. Around a narrow 20 Hz peak (AR(2), pole
+          radius 0.99), at 17-23 Hz, with 10 trials: 4.6% (rotation) and 5.2%
+          (conjugation), against 41% and 27% when each taper was randomized
+          separately (57% and 28% with one trial). Just past the half
+          bandwidth of a steep spectrum (AR(1), coefficient 0.99), at 4-7 Hz,
+          with 10 trials: 5.1% and 4.7%, against 18% and 14% per taper (19%
+          and 10% with one trial). For one 10 s recording, its ten 1 s windows
+          averaged (``expectation_type="time_tapers"``): 4.3-4.8% for the
+          steep spectrum and 5.3-5.4% for a broadband one (AR(1), coefficient
+          0.5), but 13% (rotation) and 10% (conjugation) around the narrow
+          peak, whose memory (about 0.8 s) spans the windows.
+        - Overlapping windows, two independent AR(1) signals (coefficient 0.5)
+          at 128 Hz, magnitude-squared coherence at every tested frequency,
+          300 datasets. One 10 s recording in 1 s windows with NW=4 every 0.5
+          s (19 windows, ``expectation_type="time_tapers"``): randomizing each
+          window separately rejected 19.5% (rotation) and 15.0% (conjugation),
+          against 4.5% and 5.0% for ten non-overlapping windows of the same
+          data. With 5 trials of 4 s in the same windows
+          (``expectation_type="time_trials_tapers"``, 7 windows each): 17.7%
+          and 13.3% per window, against 5.3% and 1.7% with one draw per trial,
+          the unit used for windows that overlap (5 trials allow only 16
+          distinct conjugations, so those p-values are coarse and
+          conservative).
+        - Family-wise error under the global null, 2100 datasets of the
+          trial-shuffle design with every tested frequency and pair one
+          family: some element was rejected in 5.0-5.1% of datasets with
+          ``"trial_shuffle"``, 4.9-5.1% with ``"phase_rotation"`` and 4.8-5.3%
+          with ``"conjugation"`` for magnitude-squared and imaginary
+          coherence, against every dataset with the uncorrected p-values.
+          Pairwise spectral Granger gave 6.7% with ``"phase_rotation"`` (the
+          excess near Nyquist above) and 5.8% with ``"conjugation"``. In the
+          rotation design above (5 trials) the family-wise rate was 4.0%
+          (magnitude-squared coherence), 5.4% (imaginary coherence) and 5.5%
+          (Granger).
+        - Correlated observations, ``Welch`` segments of 0.5 s overlapping by
+          75% (13 per 2 s trial) of the AR(2) sources of the conjugation
+          design at 200 Hz, 1000 datasets: one phase per trial held 5.0-5.2%
+          for the independent sources (5 trials, magnitude-squared coherence
+          and pairwise Granger), against 19.6% when each segment was rotated
+          separately; under the mixing above with 10 trials, conjugation of
+          whole trials held 4.9%, against 11.5-14.8% per segment.
+        - A shared stimulus-locked response: the two AR(2) sources of the
+          conjugation design, unmixed, plus the same 10 Hz burst in each of 10
+          trials (a cosine of amplitude 3 under a Gaussian envelope of
+          standard deviation 50 ms, centered 0.8 s into each 2 s trial; NW=4,
+          600 datasets), rejection at 5-15 Hz. With the burst at zero lag:
+          4.5-5.6% for the trial shuffle, 3.9-5.5% for conjugation, and 71-72%
+          (magnitude-squared coherence) and 51-52% (pairwise Granger) for
+          phase rotation (1.4-1.9% for the imaginary coherence, which a
+          zero-lag response does not change); rotation's pairwise Granger also
+          rejected 6.5-6.6% at 25-90 Hz, away from the burst. With the burst
+          15 ms later in one signal: 4.2-6.0% for the trial shuffle and 58-81%
+          for the other two. After subtracting each signal's mean across
+          trials, phase rotation rejected 5.5-7.0% and conjugation 5.0-6.3% at
+          every frequency with 10 trials (6.9% and 6.0% at 5-95 Hz for
+          magnitude-squared coherence of independent AR(1) signals,
+          coefficient 0.5, with no response, 400 datasets) and 5.3% and 5.2%
+          with 40 trials, while the trial shuffle kept 4.9-6.1%.
+
+        References
+        ----------
+        .. [1] Nichols, T. E., and Holmes, A. P. (2002). Nonparametric
+               permutation tests for functional neuroimaging: a primer with
+               examples. Human Brain Mapping 15, 1-25.
+
+        Examples
+        --------
+        Signal 1 is signal 0 delayed by 3 samples (6 ms), plus noise; signal 2
+        is independent. Conjugation tests for lagged interaction:
+
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(1)
+        >>> leader = rng.standard_normal((503, 10))
+        >>> signals = np.stack(
+        ...     [leader[3:], leader[:-3], rng.standard_normal((500, 10))], axis=-1
+        ... )  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500, time_halfbandwidth_product=2)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> result = connectivity.surrogate_test(
+        ...     "imaginary_coherence", kind="conjugation", n_surrogates=199, random_state=0
+        ... )
+        >>> result.p_value.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 251, 3, 3)
+        >>> significant = result.fwer_p_value <= 0.05  # one family: every frequency and pair
+        >>> bool(significant[0, 40, 0, 1]), bool(significant[..., [0, 1], [2, 2]].any())
+        (True, False)
+
+        ``kind="phase_rotation"`` takes the half bandwidth that
+        :meth:`from_transform` recorded (here 2 Hz); the cookbook recipe "Test
+        against surrogate data" shows more.
+        """
+        if kind not in _SURROGATE_KINDS:
+            msg = (
+                f"kind must be one of {', '.join(map(repr, _SURROGATE_KINDS))}, got "
+                f"{kind!r}. Each answers a different question: "
+                + "; ".join(
+                    f"{name!r}: {question}" for name, question in _SURROGATE_QUESTIONS.items()
+                )
+                + " See Connectivity.surrogate_test."
+            )
+            raise ValueError(msg)
+        if not is_positive_integer(n_surrogates):
+            msg = (
+                f"n_surrogates must be a positive integer, got {n_surrogates!r}. "
+                "The smallest p-value is 1 / (n_surrogates + 1), e.g. 0.001 for 999."
+            )
+            raise ValueError(msg)
+        n_surrogates = int(n_surrogates)
+        if alternative not in _SURROGATE_ALTERNATIVES:
+            msg = (
+                "alternative must be one of "
+                f"{', '.join(map(repr, _SURROGATE_ALTERNATIVES))}, got {alternative!r}."
+            )
+            raise ValueError(msg)
+        if isinstance(fwer_axis, tuple) and not fwer_axis:
+            msg = (
+                "fwer_axis=() makes every element its own family, so fwer_p_value "
+                "would equal p_value while null_maxima kept every surrogate's whole "
+                "result (n_surrogates times the measure's size). Use "
+                "result.p_value for the uncorrected test of each element, or name "
+                "the axes of one family, e.g. fwer_axis=(1, 2, 3) for every "
+                "frequency and pair within each time window."
+            )
+            raise ValueError(msg)
+        rotation_half_bandwidth = None
+        if kind == "phase_rotation":
+            rotation_half_bandwidth = self._rotation_half_bandwidth(half_bandwidth)
+        elif half_bandwidth is not None:
+            msg = (
+                f"half_bandwidth applies only to kind='phase_rotation', whose "
+                f"surrogates are invalid within it of 0 Hz and Nyquist; "
+                f"kind={kind!r} does not use it. Drop half_bandwidth."
+            )
+            raise ValueError(msg)
+        method, measure = self._resampled_measure(method, "surrogate_test")
+        refusal = _surrogate_refusal(method)
+        if refusal is not None:
+            msg = f"surrogate_test cannot test {method!r}: {_SURROGATE_REFUSALS[refusal]}"
+            raise ValueError(msg)
+        unit_axes = self._surrogate_unit_axes(kind, n_surrogates)
+        if alternative == "auto":
+            alternative = _signed_measure_alternative(method)
+        estimate = _real_array_result(
+            measure(**method_kwargs),
+            method,
+            "surrogate_test",
+            complex_hint=(
+                " Test a real measure of it: magnitude_squared_coherence (coupling), "
+                "imaginary_coherence or imaginary_coherency (lagged coupling), or "
+                "phase_locking_value (phase coupling)."
+            ),
+        )
+        if estimate.shape[-2:] != (self.n_signals, self.n_signals):
+            msg = (
+                "surrogate_test tests relations between pairs of signals, so the "
+                f"measure must end in a (n_signals, n_signals) = ({self.n_signals}, "
+                f"{self.n_signals}) pair; {method!r} returned shape {estimate.shape}."
+            )
+            raise TypeError(msg)
+        family_axes = (
+            tuple(range(estimate.ndim))
+            if fwer_axis is None
+            else _normalized_axes(
+                fwer_axis,
+                estimate.ndim,
+                "fwer_axis",
+                array_description=(
+                    f"{method}'s result, "
+                    f"{_axes_description(self._result_dims(method, estimate.ndim))}"
+                    f"shape {estimate.shape}"
+                ),
+            )
+        )
+        tested = (
+            np.isfinite(estimate)
+            & ~np.eye(self.n_signals, dtype=bool)
+            & self._valid_surrogate_frequencies(
+                kind, method, estimate, rotation_half_bandwidth, method_kwargs
+            )
+        )
+        tally = _SurrogateTally(
+            _surrogate_statistic(estimate, alternative), tested, family_axes, n_surrogates
+        )
+        rng = _generator(random_state)
+        # The estimate carried the migration notices; the surrogates do not.
+        token = _emit_migration_notices.set(False)
+        try:
+            for _ in range(n_surrogates):
+                surrogate_connectivity = self._with_coefficients(
+                    self._surrogate_coefficients(kind, unit_axes, rng),
+                    self._observation_weights,
+                )
+                values = getattr(surrogate_connectivity, method)(**method_kwargs)
+                tally.add(
+                    _surrogate_statistic(
+                        _real_array_result(values, method, "surrogate_test"), alternative
+                    )
+                )
+        finally:
+            _emit_migration_notices.reset(token)
+        if tally.n_surrogates_with_nan:
+            warnings.warn(
+                f"surrogate_test({method!r}): {tally.n_surrogates_with_nan} of "
+                f"{n_surrogates} surrogates returned NaN at tested elements "
+                f"({tally.n_nan_values} values in all). Each such value counts as at "
+                "least the estimate, which raises p_value there, and sets its "
+                "family's maximum to inf, which raises fwer_p_value for the whole "
+                "family. Check why the measure is undefined on surrogates (for the "
+                "directed measures, a non-convergence warning; raise "
+                "minimum_phase_max_iterations), or test fewer elements.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        p_value, fwer_p_value = tally.p_values()
+        return SurrogateTestResult(
+            estimate=estimate,
+            p_value=p_value,
+            fwer_p_value=fwer_p_value,
+            null_maxima=tally.null_maxima,
+            n_surrogates=n_surrogates,
+            kind=kind,
+            alternative=alternative,
+            fwer_axis=family_axes,
+        )
+
+    def _result_dims(self, method: str, ndim: int) -> tuple[str, ...] | None:
+        """The axis names of ``method``'s ``ndim``-dimensional result, if known.
+
+        A registered measure's dimensions (:attr:`_MeasureSpec.dims`, which
+        lead with the default expectation's one time axis) with the axes this
+        expectation keeps in place of that time axis; ``None`` for an
+        unregistered measure or a result of another size.
+        """
+        # The registry imports this module, so it is imported here.
+        from spectral_connectivity._measure_registry import _MEASURE_SPECS
+
+        spec = _MEASURE_SPECS.get(method)
+        if spec is None:
+            return None
+        kept = tuple(("time", "trial", "taper")[axis] for axis in self._kept_observation_axes)
+        dims = kept + spec.dims[1:]
+        return dims if len(dims) == ndim else None
+
+    def _rotation_half_bandwidth(self, half_bandwidth: float | None) -> float:
+        """The half bandwidth ``kind="phase_rotation"`` masks with, or the error it raises.
+
+        An explicit ``half_bandwidth`` overrides the one this instance holds.
+        """
+        if self._is_one_sided:
+            msg = (
+                "surrogate_test(kind='phase_rotation') needs two-sided coefficients: "
+                "its surrogates are invalid within the half-bandwidth of 0 Hz and of "
+                "Nyquist, and one-sided coefficients (e.g. MorletWavelet) state "
+                "neither the Nyquist frequency nor one bandwidth for every "
+                "frequency. Use kind='trial_shuffle' (at least 2 trials) or "
+                "kind='conjugation', or a two-sided transform such as Multitaper."
+            )
+            raise ValueError(msg)
+        if half_bandwidth is None:
+            half_bandwidth = self._half_bandwidth
+        if half_bandwidth is None:
+            msg = (
+                "surrogate_test(kind='phase_rotation') needs the half-width of the "
+                "transform's spectral smoothing, and this Connectivity does not "
+                "know it (half_bandwidth is None). Rotated coefficients within it "
+                "of 0 Hz or Nyquist are not valid surrogates, so those frequencies "
+                "are not tested. Build the Connectivity with "
+                "Connectivity.from_transform(multitaper), which records it, or pass "
+                "half_bandwidth= in the units of frequencies (for a Multitaper, "
+                "multitaper.frequency_resolution / 2)."
+            )
+            raise ValueError(msg)
+        return _validated_half_bandwidth(half_bandwidth)
+
+    def _surrogate_unit_axes(self, kind: str, n_surrogates: int) -> tuple[int, ...]:
+        """Observation axes indexing the independent units a surrogate randomizes.
+
+        For ``trial_shuffle`` the trials (axis 1). For ``phase_rotation`` and
+        ``conjugation`` the averaged trials, and the averaged time windows
+        when they do not overlap (``time_bins_are_disjoint``); never the
+        tapers.
+        Coefficients sharing a unit (every taper of a trial) get the same phase
+        or flip.
+
+        Raises
+        ------
+        ValueError
+            If there are fewer than 2 units (one trial and no averaged
+            non-overlapping time windows).
+        """
+        shape = self._fourier_coefficients.shape
+        averaged = self._expectation_axes
+        if kind == "trial_shuffle":
+            if 1 not in averaged:
+                msg = (
+                    "surrogate_test(kind='trial_shuffle') pairs each signal's trials "
+                    "with other signals' trials, so the expectation must average "
+                    f"trials; this Connectivity has expectation_type="
+                    f"{self.expectation_type!r}. Build it with "
+                    "expectation_type='trials_tapers' (the default), or average "
+                    "non-overlapping time windows (e.g. "
+                    "expectation_type='time_tapers') and use kind='phase_rotation' "
+                    "or 'conjugation', which randomize each averaged window."
+                )
+                raise ValueError(msg)
+            n_trials = shape[1]
+            if n_trials < 2:
+                msg = (
+                    "surrogate_test(kind='trial_shuffle') needs at least 2 trials to "
+                    f"shuffle; got {n_trials}. With one trial, average "
+                    "non-overlapping time windows (e.g. expectation_type='time_tapers' "
+                    "with time_window_step >= time_window_duration) and use "
+                    "kind='phase_rotation' (independence) or kind='conjugation' (no "
+                    "lagged interaction); windows that overlap are not independent "
+                    "units."
+                )
+                raise ValueError(msg)
+            weights = self._observation_weights
+            if weights is not None and not bool(xp.all(weights == weights[:, :1])):
+                msg = (
+                    "surrogate_test(kind='trial_shuffle') moves each signal's trials, "
+                    "but observation_weights differ between trials and are shared by "
+                    "the signals, so a shuffled trial would take another trial's "
+                    "weight. Use weights equal across trials, or "
+                    "kind='phase_rotation' or 'conjugation'."
+                )
+                raise ValueError(msg)
+            # Two signals' trials can be aligned in n_trials! ways; a
+            # Monte Carlo p-value cannot resolve finer than that.
+            if math.lgamma(n_trials + 1) < math.log(n_surrogates):
+                warnings.warn(
+                    f"surrogate_test(kind='trial_shuffle'): only {n_trials} trials, "
+                    f"so one signal's trials can be paired with another's in only "
+                    f"{n_trials}! = {math.factorial(n_trials)} ways (fewer than "
+                    f"n_surrogates={n_surrogates}): p-values cannot go below about "
+                    f"1/{math.factorial(n_trials)}. They remain valid. Use more "
+                    "trials for a finer test.",
+                    UserWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
+            return (1,)
+        # Whole trials, and the time windows when the expectation averages
+        # windows that do not overlap and are independent; never the tapers
+        # of one trial (see Notes).
+        windows_are_units = self._time_bins_are_disjoint and self._time_bins_are_independent
+        unit_axes = tuple(
+            axis for axis in averaged if axis == 1 or (axis == 0 and windows_are_units)
+        )
+        n_units = int(np.prod([shape[axis] for axis in unit_axes]))
+        if n_units < 2:
+            raise ValueError(self._single_unit_message(kind, n_units))
+        if kind == "conjugation" and n_units - 1 < math.log2(n_surrogates):
+            # Flipping every unit conjugates the whole spectrum, which leaves
+            # the measures symmetric under conjugation unchanged.
+            n_distinct = 2 ** (n_units - 1)
+            warnings.warn(
+                f"surrogate_test(kind='conjugation'): only {n_units} independent "
+                f"units (trials and averaged non-overlapping time windows), so "
+                f"conjugation can make "
+                f"only 2**{n_units - 1} = {n_distinct} distinct surrogates (fewer "
+                f"than n_surrogates={n_surrogates}): p-values cannot go below about "
+                f"1/{n_distinct}. They remain valid. Use more trials, or average "
+                "more time windows, for a finer test.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return unit_axes
+
+    def _single_unit_message(self, kind: str, n_units: int) -> str:
+        """Why ``kind`` cannot randomize these coefficients, and what would let it.
+
+        The remedies follow what the expectation already averages: windows
+        that overlap are told to stop overlapping, not to be averaged, and
+        the tapers are mentioned only where there are several.
+        """
+        n_windows, n_trials, n_tapers = self._fourier_coefficients.shape[:3]
+        averaged = self._expectation_axes
+        msg = (
+            f"surrogate_test(kind={kind!r}) randomizes whole independent units "
+            "(each trial, and each time window when the expectation averages "
+            f"windows that do not overlap), and this Connectivity has {n_units} "
+            f"({n_trials} trial(s), {n_windows} time window(s), expectation_type="
+            f"{self.expectation_type!r}); it needs at least 2."
+        )
+        windows_overlap = 0 in averaged and n_windows > 1
+        if windows_overlap:
+            msg += (
+                " Its time windows are averaged but may overlap "
+                "(time_bins_are_disjoint is False), and windows that overlap are "
+                "not independent units: their coefficients are correlated, and "
+                "randomizing each 50%-overlapping window separately rejected "
+                "independent signals in 19.5% (phase rotation) and 15.0% "
+                "(conjugation) of tests at nominal 5% (one 10 s recording, 1 s "
+                "windows, 99 surrogates)."
+            )
+        if n_tapers > 1:
+            msg += (
+                " Randomizing the tapers of one trial separately is not offered: "
+                "their coefficients are correlated wherever the spectrum is not "
+                "flat across the half bandwidth, and for independent signals with "
+                "one trial (1 s, 7 tapers, 99 surrogates, nominal 5%) it rejected "
+                "57% (phase rotation) and 28% (conjugation) of tests around a "
+                "narrow spectral peak, and 19% and 10% just past the half "
+                "bandwidth of a steep 1/f**2 spectrum."
+            )
+        if windows_overlap:
+            windows_remedy = (
+                "use non-overlapping windows (a Multitaper or "
+                "ShortTimeFourierTransform with time_window_step >= "
+                "time_window_duration; for coefficients passed directly, "
+                "time_bins_are_disjoint=True says their windows do not overlap)"
+            )
+        elif 0 in averaged:
+            windows_remedy = (
+                "split the recording into more non-overlapping time windows, "
+                "each longer than the signals' memory"
+            )
+        else:
+            windows_remedy = (
+                "average non-overlapping time windows (an expectation_type that "
+                "includes 'time', e.g. 'time_tapers' for one recording, with "
+                "windows longer than the signals' memory, which a narrow spectral "
+                "peak makes long)"
+            )
+        trials_remedy = (
+            "use an expectation that averages the trials (kind='trial_shuffle' then works too)"
+            if n_trials > 1
+            else "record more trials (kind='trial_shuffle' then works too)"
+        )
+        return f"{msg} To get 2 or more units, {windows_remedy}, or {trials_remedy}."
+
+    def _surrogate_coefficients(
+        self,
+        kind: str,
+        unit_axes: tuple[int, ...],
+        rng: np.random.Generator,
+    ) -> BackendArray:
+        """One surrogate of the coefficients, a fresh array of their shape.
+
+        Random numbers are drawn on the host from ``rng``, so a seed gives the
+        same surrogates on every backend.
+        """
+        coefficients = self._fourier_coefficients
+        n_trials, n_frequencies, n_signals = (
+            coefficients.shape[1],
+            coefficients.shape[3],
+            coefficients.shape[4],
+        )
+        if kind == "trial_shuffle":
+            # One permutation of the trials per signal, the same in every time
+            # window, taper and frequency; signal 0 keeps its order.
+            order = np.tile(np.arange(n_trials), (n_signals, 1))
+            order[1:] = rng.permuted(order[1:], axis=-1)
+            shuffled: BackendArray = xp.empty(coefficients.shape, dtype=coefficients.dtype)
+            shuffled[..., 0] = coefficients[..., 0]
+            for signal in range(1, n_signals):
+                shuffled[..., signal] = xp.take(
+                    coefficients[..., signal], xp.asarray(order[signal]), axis=1
+                )
+            return shuffled
+        unit_shape = tuple(
+            coefficients.shape[axis] if axis in unit_axes else 1 for axis in range(3)
+        )
+        if kind == "conjugation":
+            # One flip per unit, shared by every signal and frequency.
+            flip = xp.asarray(rng.random((*unit_shape, 1, 1)) < 0.5)
+            conjugated: BackendArray = xp.where(flip, xp.conj(coefficients), coefficients)
+            return conjugated
+        # phase_rotation: one phase per unit and signal. A real signal's
+        # coefficients at -f are the conjugates of those at +f, so -f turns the
+        # other way and the surrogate stays the coefficients of a real signal
+        # (that of the analytic signal rotated by the phase); the real 0 Hz and
+        # Nyquist bins, which have no partner, get the sign of its cosine.
+        phase = rng.uniform(0.0, 2 * np.pi, (*unit_shape, 1, n_signals))
+        rotation = np.exp(1j * phase)
+        # The factor is built on the device with only the units' shape (one
+        # phase per unit and signal, repeated over frequency), then applied in
+        # one broadcast product.
+        rotation = xp.asarray(rotation.astype(coefficients.dtype))
+        factor = xp.empty((*unit_shape, n_frequencies, n_signals), dtype=coefficients.dtype)
+        positive, negative = _paired_frequency_bins(n_frequencies)
+        factor[..., positive, :] = rotation
+        factor[..., negative, :] = xp.conj(rotation)
+        sign = xp.where(xp.real(rotation) < 0, -1.0, 1.0)
+        factor[..., 0:1, :] = sign
+        if n_frequencies % 2 == 0:
+            factor[..., n_frequencies // 2 : n_frequencies // 2 + 1, :] = sign
+        rotated: BackendArray = coefficients * factor
+        return rotated
+
+    def _valid_surrogate_frequencies(
+        self,
+        kind: str,
+        method: str,
+        estimate: NDArray[np.floating],
+        half_bandwidth: float | None,
+        method_kwargs: dict[str, Any],
+    ) -> NDArray[np.bool_]:
+        """Where ``kind``'s surrogates are valid, broadcastable to ``estimate``.
+
+        ``"phase_rotation"``: rotated coefficients within ``half_bandwidth``
+        of 0 Hz or Nyquist are not valid surrogates (the coefficients there
+        are not circular), so the frequencies there are not tested, and a
+        measure that sums over a band (``phase_slope_index``) is tested only
+        if its band avoids them. ``"conjugation"`` leaves unchanged, and so
+        does not test, every frequency of :attr:`real_valued_frequencies`
+        (each coefficient's imaginary part exactly 0, as at Nyquist of
+        one-sided input of an even FFT length), and 0 Hz and Nyquist of an
+        even two-sided FFT where their coefficients are real to rounding (as
+        for a real signal); a band-summed measure, or one whose frequency axis
+        cannot be located, is tested whole. ``"trial_shuffle"`` tests every
+        frequency.
+
+        Raises
+        ------
+        ValueError
+            For ``"phase_rotation"``: if no frequency is valid, the band of a
+            band-summed measure includes an invalid one, or the measure does
+            not return one value per frequency.
+        """
+        everywhere = np.ones((), dtype=bool)
+        if kind == "trial_shuffle":
+            return everywhere
+        frequencies = self.frequencies
+        grid = frequencies.astype(np.float64)
+        n_fft_samples = len(self._frequencies)
+        # A registered measure without a frequency axis sums over its
+        # frequency_range. Otherwise the frequency axis follows the kept
+        # observation axes; an unregistered measure is taken to have it there
+        # if its length is right.
+        dims = self._result_dims(method, estimate.ndim)
+        band_summed = dims is not None and "frequency" not in dims
+        frequency_axis = (
+            dims.index("frequency")
+            if dims is not None and not band_summed
+            else len(self._kept_observation_axes)
+        )
+        per_frequency = (
+            not band_summed
+            and estimate.ndim >= frequency_axis + 3
+            and estimate.shape[frequency_axis] == len(frequencies)
+        )
+        trailing = [1] * (estimate.ndim - frequency_axis - 1)
+        if kind == "conjugation":
+            if not per_frequency:
+                return everywhere
+            # Exactly real coefficients also mark Nyquist of one-sided input,
+            # which does not record whether its FFT length was even. 0 Hz and
+            # Nyquist of an even two-sided FFT are real for a real signal but
+            # may carry rounding from an FFT computed elsewhere, so they are
+            # left out when real to rounding; for a complex signal they are
+            # not real, and conjugation changes them like any other bin.
+            untouched = self._real_valued_frequency_mask.copy()
+            edges = grid == 0
+            if not self._is_one_sided and n_fft_samples % 2 == 0:
+                edges[-1] = True
+            if edges.any():
+                untouched[edges] |= self._real_to_rounding(np.flatnonzero(edges))
+            conjugated: NDArray[np.bool_] = ~untouched.reshape(-1, *trailing)
+            return conjugated
+        assert half_bandwidth is not None
+        # Nyquist is the last non-negative bin for an even FFT length and half a
+        # bin above it for an odd one.
+        nyquist = float(frequencies[-1])
+        if n_fft_samples % 2 and n_fft_samples > 1:
+            nyquist += float(frequencies[1] - frequencies[0]) / 2
+        # The bounds are inclusive, by the package's rule for a bin lying on a
+        # bound (that of frequency_range), so a band starting at half_bandwidth
+        # is accepted below whenever its bins are.
+        lower, upper = half_bandwidth, nyquist - half_bandwidth
+        on_lower, on_upper = _bins_on_bounds(frequencies, (lower, upper))
+        valid = ((grid > lower) | on_lower) & ((grid < upper) | on_upper)
+        if not valid.any():
+            msg = (
+                f"surrogate_test(kind='phase_rotation') tests no frequency: every "
+                f"frequency lies within half_bandwidth={half_bandwidth!r} of 0 or "
+                f"of Nyquist ({nyquist!r}). Check half_bandwidth is in the units "
+                "of frequencies (half the transform's frequency resolution)."
+            )
+            raise ValueError(msg)
+        if band_summed:
+            band = _select_measure_frequencies(
+                frequencies,
+                method_kwargs.get("frequency_range"),
+                method_kwargs.get("frequencies_of_interest"),
+            ).mask
+            if not valid[band].all():
+                msg = (
+                    f"surrogate_test(kind='phase_rotation') cannot test {method!r} over "
+                    f"a band within half_bandwidth={half_bandwidth!r} of 0 Hz or "
+                    f"Nyquist ({nyquist!r}), where rotated coefficients are not valid "
+                    "surrogates. Pass frequency_range=(low, high) with "
+                    f"low >= {lower!r} and high <= {upper!r}."
+                )
+                raise ValueError(msg)
+            return everywhere
+        if not per_frequency:
+            msg = (
+                "surrogate_test(kind='phase_rotation') leaves untested the frequencies "
+                "within half_bandwidth of 0 Hz and Nyquist, so the measure must "
+                f"return one value per frequency on axis {frequency_axis}; {method!r} "
+                f"returned shape {estimate.shape}. Use kind='trial_shuffle' or "
+                "kind='conjugation'."
+            )
+            raise ValueError(msg)
+        valid_by_frequency: NDArray[np.bool_] = valid.reshape(-1, *trailing)
+        return valid_by_frequency
+
+    def _real_to_rounding(self, bins: NDArray[np.intp]) -> NDArray[np.bool_]:
+        """Whether every finite coefficient at each of ``bins`` is real to rounding.
+
+        Rounding is the square root of the coefficients' machine epsilon
+        times their largest finite magnitude anywhere, so a bin whose own
+        coefficients are small (0 Hz after detrending) is judged on the
+        scale of the FFT that computed it. Coefficients computed in a lower
+        precision and then upcast carry that precision's rounding, which can
+        exceed this tolerance; their edge bins are then tested.
+
+        Parameters
+        ----------
+        bins : NDArray[intp], shape (n_bins,)
+            Indices into the frequency axis of the coefficients.
+
+        Returns
+        -------
+        NDArray[bool], shape (n_bins,)
+            Host array.
+        """
+        coefficients = self._fourier_coefficients
+        magnitude = xp.abs(coefficients)
+        scale = xp.max(xp.where(xp.isfinite(magnitude), magnitude, 0.0))
+        tolerance = np.sqrt(np.finfo(coefficients.real.dtype).eps) * scale
+        imaginary = xp.abs(coefficients[..., xp.asarray(bins), :].imag)
+        real: NDArray[np.bool_] = to_numpy(
+            xp.all((imaginary <= tolerance) | xp.isnan(imaginary), axis=(0, 1, 2, 4))
+        )
+        return real
 
     @_asnumpy
     def power(self, *, one_sided: bool | None = None) -> NDArray[np.floating]:
@@ -3157,7 +4899,9 @@ class Connectivity:
         **Range**: ``[-1, 1]``. ``Im(S_ij) / sqrt(S_ii * S_jj)``. Pairs
         involving a zero-power signal are 0, not NaN: :meth:`coherency` masks
         them with ``nan + 0j``, whose imaginary part is 0, so use
-        :meth:`power` to find such signals. The diagonal is NaN, a mask
+        :meth:`power` to find such signals. A pair is NaN where a signal's
+        power is not finite: NaN, as in a bin that keeps no observation (see
+        :attr:`n_valid_observations`), or infinite. The diagonal is NaN, a mask
         matching :meth:`coherency`: the imaginary part of a signal's coherency
         with itself is 0, which :meth:`imaginary_coherence` returns there.
 
@@ -3180,6 +4924,12 @@ class Connectivity:
         True
         """
         imaginary = self._coherency().imag
+        # Coherency is nan + 0j both where a signal has zero power (0 here, as
+        # documented) and where its power is not finite: NaN, such as a bin
+        # that keeps no observation, or infinite, from overflow. Those stay NaN.
+        n_nonnegative = self._nonnegative_frequency_count(self._power.shape[-2])
+        bad_power = ~xp.isfinite(self._power[..., :n_nonnegative, :])
+        imaginary[bad_power[..., :, xp.newaxis] | bad_power[..., xp.newaxis, :]] = xp.nan
         diagonal = xp.arange(self.n_signals)
         imaginary[..., diagonal, diagonal] = xp.nan
         return imaginary
@@ -3189,6 +4939,7 @@ class Connectivity:
         self,
         *,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+        shrinkage: float | Literal["auto"] | None = None,
     ) -> NDArray[np.floating]:
         """Return magnitude-squared coherence conditional on all other signals.
 
@@ -3201,14 +4952,38 @@ class Connectivity:
         ----------
         regularization : float, default=1e-12
             Non-negative relative diagonal loading applied independently to
-            each time-frequency cross-spectral matrix before inversion.  The
-            absolute loading is ``regularization * rms(abs(S))``. Increase this
-            value for statistically rank-deficient or ill-conditioned spectra.
+            each time-frequency cross-spectral matrix before inversion: each
+            signal's power ``S_ii`` is increased by ``regularization * S_ii``,
+            so the result does not depend on the signals' scales; the matrix
+            inverted is the coherency matrix, loaded by ``regularization``.
+            Increase this value for statistically rank-deficient or
+            ill-conditioned spectra.
+        shrinkage : {None, "auto"} or float, default=None
+            Shrink each time-frequency cross-spectral matrix toward its
+            diagonal before inversion, ``(1 - lambda) * S + lambda * diag(S)``:
+            every coherency is multiplied by ``1 - lambda`` and the powers are
+            kept, so the result does not depend on the signals' scales.
+            ``None`` does not shrink. A number in ``[0, 1]`` is ``lambda`` for
+            every bin: 0 does not shrink, and 1 makes every partial coherence 0.
+            ``"auto"`` estimates ``lambda`` for each time window and frequency
+            from the averaged observations, and
+            :meth:`partial_coherence_shrinkage` returns it. Unlike
+            ``regularization``, a tiny loading for numerical stability,
+            shrinkage is a statistical choice that changes the estimate; see
+            Notes for when it helps and what to report.
 
         Returns
         -------
         partial_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+
+        Raises
+        ------
+        ValueError
+            If ``regularization`` is negative or not finite, if ``shrinkage``
+            is not ``None``, ``"auto"``, or a number in ``[0, 1]``, or, for
+            ``shrinkage="auto"``, if there is a single observation or the
+            observation weights are not uniform.
 
         Notes
         -----
@@ -3222,7 +4997,102 @@ class Connectivity:
         observations than signals the cross-spectral matrix is rank-deficient
         and its (regularized) inverse is dominated by the null space; with
         exactly one null direction every partial coherence is forced to 1 for
-        any data. This case warns.
+        any data. This case warns, with shrinkage too: shrinkage makes the
+        matrix invertible, but the estimate then rests on the intensity. A
+        small one leaves it dominated by the null space; as the intensity
+        approaches 1, partial coherence approaches ``(1 - lambda)**2`` times
+        the coherence, which no longer conditions on the other signals.
+
+        **Shrinkage intensity.** With ``n`` observations ``x_k`` (one trial x
+        taper eigencoefficient vector each) of a time window and frequency,
+        ``S = (1/n) sum_k x_k x_k^H`` and the coherency is
+        ``r_ij = S_ij / sqrt(S_ii S_jj)``. ``"auto"`` takes the intensity that
+        minimizes the expected squared error of the shrunk coherencies,
+        ``sum_{i != j} E|(1 - lambda) r_ij - rho_ij|^2`` for true coherencies
+        ``rho``, with ``E r = rho`` to first order. That is the analytic
+        intensity of Ledoit & Wolf [1]_ [2]_ for the target of Schäfer &
+        Strimmer [3]_ that keeps the powers and shrinks the correlations
+        toward 0 (their "target D", Eq. 10), for complex data,
+
+            lambda = sum_{i != j} var(r_ij) / sum_{i != j} |r_ij|^2,
+
+        clipped to ``[0, 1]``. ``var(r_ij)`` estimates ``E|r_ij - rho_ij|^2``
+        by the delta method,
+
+            var(r_ij) = sum_k |w_kij - (r_ij / 2) (u_ki + u_kj)|^2 / (n (n - 1)),
+
+        with ``w_kij = x_ki conj(x_kj) / sqrt(S_ii S_jj)`` and
+        ``u_ki = |x_ki|^2 / S_ii``. The ``u`` terms account for the estimated
+        powers that normalize ``r``. Schäfer & Strimmer leave them out, which
+        for complex Gaussian data estimates ``1/n`` whatever the coherence,
+        where the variance is ``(1 - |rho|^2) (1 - |rho|^2 / 2) / n``: it
+        overstates the intensity where coherence is high. ``lambda``
+        decreases as ``1/n``, so with many observations the result approaches
+        the unshrunk one. Partial coherence is then read from the shrunk
+        matrix, as Schäfer & Strimmer read partial correlations (their
+        Sections 2.4 and 3). ``"auto"`` took 1.4-2.4 times as long as no
+        shrinkage and allocated 1.3-1.6 times its peak memory, the input
+        aside (16 to 64 signals, 100 to 1400 observations, 251 to 1001
+        frequencies, one or 100 time windows, on the CPU);
+        :meth:`partial_coherence_shrinkage` then reuses the intensity.
+
+        The intensity is a first-order estimate. At 5 observations it
+        averaged 0.77-0.98 of the Monte Carlo optimum (4 to 32 signals, lowest
+        with the most). With 10 to 40 observations it was within about 10% of
+        the optimum in the VARs simulated below; where the optimum is near 0
+        (strongly coherent signals) it can be several times the optimum while
+        staying small. For independent signals, whose optimum is 1, it
+        averaged 0.74-0.96.
+
+        In simulations of a chain and a dense VAR with 4, 8 and 16 signals
+        (complex Gaussian observations with the model's exact spectrum, 500
+        replicates), ``"auto"`` changed the mean squared error against the
+        model's partial coherence as follows, by observations per signal:
+
+        - 0.5 to 2.5: lowered it in every case, to 0.01-0.80 of the unshrunk
+          error (to 0.01-0.21 at 1 to 1.25; with fewer observations than
+          signals, for 8 and 16 signals, also below the error of estimating 0
+          for every pair);
+        - 5: lowered it in four of the six cases (to 0.54-0.86) and raised it
+          in two (to 1.12 and 1.63 times, by at most 4.9e-3);
+        - 10 to 100: lowered it for the chain with 4 and 8 signals (to
+          0.73-0.97) and otherwise left it unchanged or raised it, by up to
+          2.2 times (by at most 3.2e-3).
+
+        The intensity minimizes the error of the coherencies, not of their
+        inverse, which is why it can hurt with many observations. Use
+        ``"auto"`` with at most about 2.5 observations per signal.
+
+        **What to report.** Shrinkage changes the estimand, toward 0. Report
+        the setting, for ``"auto"`` the median and range of the intensities,
+        and the numbers of trials, tapers and signals. The wrappers record the
+        setting (``arg_shrinkage``) but not the intensities; compute them with
+        ``Connectivity.from_transform(transform).partial_coherence_shrinkage()``.
+        Under ``"auto"`` the intensity falls with the number of observations,
+        so conditions with different trial counts are shrunk by different
+        amounts and biased differently: compare them with one fixed intensity
+        or with matched counts. :meth:`jackknife` re-estimates the intensity
+        in every leave-one-out replicate, so its intervals are for the shrunk
+        estimand.
+
+        See Also
+        --------
+        partial_coherence_shrinkage : The intensities ``shrinkage="auto"`` uses.
+
+        References
+        ----------
+        .. [1] Ledoit O, Wolf M (2003) Improved estimation of the covariance
+               matrix of stock returns with an application to portfolio
+               selection. Journal of Empirical Finance 10(5):603-621.
+               https://doi.org/10.1016/S0927-5398(03)00007-0
+        .. [2] Ledoit O, Wolf M (2004) A well-conditioned estimator for
+               large-dimensional covariance matrices. Journal of Multivariate
+               Analysis 88(2):365-411.
+               https://doi.org/10.1016/S0047-259X(03)00096-4
+        .. [3] Schäfer J, Strimmer K (2005) A shrinkage approach to large-scale
+               covariance matrix estimation and implications for functional
+               genomics. Statistical Applications in Genetics and Molecular
+               Biology 4(1):Article 32. https://doi.org/10.2202/1544-6115.1175
 
         Examples
         --------
@@ -3246,32 +5116,62 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         regularization = _validated_regularization(regularization)
-        self._warn_single_observation_degenerate(
-            "partial_coherence",
-            "the cross-spectral matrix has rank one and its inverse is fixed by "
-            "the null space: the estimate is 1 for every pair of two signals and "
-            "otherwise unrelated to the data",
+        # Before any warning: "auto" raises for a single observation.
+        cross_spectral_density, intensity, shrinkage = (
+            self._cross_spectral_matrix_and_intensity(shrinkage)
         )
-        n_observations = self.n_observations
-        # The inverse of a rank-deficient cross-spectral matrix is dominated by
-        # its null space: with one null direction the normalized off-diagonal
-        # precision has unit magnitude for every pair, and with more it is still
-        # unrelated to the data. (A single observation already warned above.)
-        if 2 <= n_observations < self.n_signals:
+        # With observations dropped by zero weights, the bin keeping fewest.
+        n_observations, n_signals = self._fewest_valid_observations(), self.n_signals
+        if shrinkage is None:
+            # The inverse of a rank-deficient cross-spectral matrix is dominated
+            # by its null space: with one null direction the normalized
+            # off-diagonal precision has unit magnitude for every pair, and with
+            # more it is still unrelated to the data.
+            self._warn_single_observation_degenerate(
+                "partial_coherence",
+                "the cross-spectral matrix has rank one and its inverse is fixed "
+                "by the null space: the estimate is 1 for every pair of two "
+                "signals and otherwise unrelated to the data",
+            )
+            consequence = (
+                "and its inverse is dominated by the null space: the estimate is "
+                "forced to 1 for every pair (one missing observation) or is "
+                "otherwise unrelated to the data."
+            )
+            few = 2 <= n_observations < n_signals
+        else:
+            # Shrinkage makes the matrix invertible, but the estimate then rests
+            # on the intensity. ("auto" has raised for a single observation.)
+            used = (
+                "see Connectivity.partial_coherence_shrinkage()"
+                if shrinkage == "auto"
+                else f"{shrinkage:g}"
+            )
+            consequence = (
+                "and only the shrinkage makes it invertible: the result is set by "
+                f"the shrinkage intensity ({used}), not conditioned on the other "
+                "signals. Near 1 it is about (1 - intensity)**2 times the "
+                "coherence; near 0 the null space dominates it."
+                + (
+                    " With one observation it does not depend on the data."
+                    if n_observations == 1
+                    else ""
+                )
+            )
+            few = 1 <= n_observations < n_signals
+        if few:
+            uses = self._uses_observations(
+                n_observations, self.n_observations, "see n_valid_observations"
+            )
             warnings.warn(
-                f"partial_coherence uses {n_observations} observations (the "
-                f"averaged trials x tapers), fewer than the {self.n_signals} "
-                "signals, so the cross-spectral matrix is rank-deficient and its "
-                "inverse is dominated by the null space: the estimate is forced "
-                "to 1 for every pair (one missing observation) or is otherwise "
-                "unrelated to the data. Provide more trials or tapers than "
-                "signals, or analyze fewer signals.",
+                f"partial_coherence {uses} (the averaged "
+                f"trials x tapers), fewer than the {n_signals} signals, so the "
+                f"cross-spectral matrix is rank-deficient {consequence} Provide "
+                "more trials or tapers than signals, or analyze fewer signals.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
 
-        # Drop negative frequencies before the per-bin inversion, not after.
-        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
         matrix_rms = xp.sqrt(
             xp.mean(
                 xp.real(xp.conj(cross_spectral_density) * cross_spectral_density),
@@ -3287,9 +5187,31 @@ class Connectivity:
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
-        identity = xp.eye(self.n_signals, dtype=cross_spectral_density.dtype)
-        safe_spectrum = xp.where(zero_power, identity, cross_spectral_density)
-        precision = _regularized_inverse(safe_spectrum, regularization=regularization)
+        # Invert the coherency matrix D^-1/2 S D^-1/2 (D = diag(S)) loaded by
+        # regularization * I: the inverse of S + regularization * D up to the
+        # diagonal scaling the normalization below removes, but with the
+        # signals' scales out of the solve, so that its rounding does not
+        # depend on them. Shrinkage keeps the powers, so it multiplies the
+        # coherencies by 1 - lambda in place. A zero-power bin is solved as
+        # the identity (its result is NaN); a signal with no power keeps a
+        # zero diagonal, loaded by regularization alone, which decouples it.
+        power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
+        inverse_root_power = 1 / xp.sqrt(xp.where(power > 0, power, 1))
+        coherency_matrix = cross_spectral_density * inverse_root_power[..., :, xp.newaxis]
+        coherency_matrix *= inverse_root_power[..., xp.newaxis, :]
+        if intensity is not None:
+            off_diagonal = 1 - xp.eye(n_signals, dtype=power.dtype)
+            coherency_matrix *= 1 - intensity * off_diagonal
+        coherency_matrix *= ~zero_power
+        diagonal = xp.arange(n_signals)
+        coherency_matrix[..., diagonal, diagonal] = (
+            xp.where((power > 0) | zero_power[..., 0], 1.0, 0.0) + regularization
+        )
+        identity = xp.eye(n_signals, dtype=coherency_matrix.dtype)
+        # Broadcast so that CuPy's batched solve accepts the right-hand side.
+        precision: BackendArray = xp.linalg.solve(
+            coherency_matrix, xp.broadcast_to(identity, coherency_matrix.shape)
+        )
         precision_diagonal = xp.maximum(
             xp.real(xp.diagonal(precision, axis1=-2, axis2=-1)), 0.0
         )
@@ -3304,9 +5226,234 @@ class Connectivity:
         )
         result = xp.clip(_squared_magnitude(partial_coherency), 0.0, 1.0)
         result = xp.where(zero_power, xp.nan, result)
-        diagonal = xp.arange(self.n_signals)
         result[..., diagonal, diagonal] = xp.nan
         return result
+
+    def _cross_spectral_matrix_and_intensity(
+        self, shrinkage: Any
+    ) -> tuple[BackendArray, BackendArray | float | None, float | Literal["auto"] | None]:
+        """The cross-spectral matrix at the non-negative frequencies and its shrinkage.
+
+        Validates ``shrinkage`` (0 means none), runs the checks of ``"auto"``,
+        and returns ``(S, intensity, shrinkage)``: ``S``, ``(...,
+        n_nonnegative_frequencies, n_signals, n_signals)``; the intensity
+        ``lambda`` by which every coherency is multiplied by ``1 - lambda``
+        (``None`` without shrinkage, an array ``(..., n_nonnegative_frequencies,
+        1, 1)`` for ``"auto"``); and the validated ``shrinkage`` (``None``,
+        ``"auto"``, or a float in ``(0, 1]``).
+        """
+        shrinkage = _validated_shrinkage(shrinkage)
+        if shrinkage == 0:
+            shrinkage = None
+        # Drop negative frequencies before the per-bin inversion, not after.
+        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
+        if shrinkage is None:
+            return cross_spectral_density, None, None
+        intensity = (
+            self._auto_shrinkage_intensity(
+                'partial_coherence(shrinkage="auto")',
+                other_remedy="a fixed shrinkage between 0 and 1",
+            )[..., xp.newaxis, xp.newaxis]
+            if shrinkage == "auto"
+            else shrinkage
+        )
+        return cross_spectral_density, intensity, shrinkage
+
+    @_asnumpy
+    def partial_coherence_shrinkage(self) -> NDArray[np.floating]:
+        """Return the shrinkage intensity of ``partial_coherence(shrinkage="auto")``.
+
+        Returns
+        -------
+        intensity : array
+            Shape ``(..., n_nonnegative_frequencies)``: for each time window
+            (the observation axes the expectation keeps) and frequency, the
+            ``lambda`` in ``[0, 1]`` by which ``partial_coherence`` shrinks
+            every coherency, ``r -> (1 - lambda) * r``. NaN where the
+            cross-spectral matrix has zero power, or where zero observation
+            weights leave fewer than two observations.
+
+        Raises
+        ------
+        ValueError
+            If there is a single observation, or the observation weights are
+            not uniform.
+
+        Notes
+        -----
+        Values near 0 mean the coherencies are estimated precisely enough to
+        be kept; values near 1 mean they are indistinguishable from sampling
+        noise. The estimator, its accuracy, and what to report are in the
+        Notes of :meth:`partial_coherence`. It treats the observations as
+        independent, and warns when the transform reports them correlated.
+
+        See Also
+        --------
+        partial_coherence : The estimate these intensities shrink.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity
+        >>> rng = np.random.default_rng(0)
+        >>> def coefficients(n_trials):  # 3 tapers, 8 FFT bins, 6 signals
+        ...     shape = (1, n_trials, 3, 8, 6)
+        ...     values = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        ...     values[..., 1:] += values[..., :1]  # every signal shares signal 0
+        ...     return values
+        >>> few = Connectivity(coefficients(4)).partial_coherence_shrinkage()
+        >>> few.shape  # (n_time_windows, n_nonnegative_frequencies)
+        (1, 5)
+        >>> # Ten times the trials: the intensity falls about tenfold.
+        >>> many = Connectivity(coefficients(40)).partial_coherence_shrinkage()
+        >>> bool(np.all(many < few / 3))
+        True
+        """
+        self._validate_multiple_signals()
+        return self._auto_shrinkage_intensity("partial_coherence_shrinkage()").copy()
+
+    def _auto_shrinkage_intensity(
+        self, caller: str, other_remedy: str | None = None
+    ) -> BackendArray:
+        """``lambda`` of ``partial_coherence(shrinkage="auto")`` for each bin,
+        ``(..., n_nonnegative_frequencies)``, after the checks of a measure
+        that counts its observations. ``caller`` names the call in their
+        errors and warning; ``other_remedy`` is offered besides more trials or
+        tapers."""
+        if self._is_exact_spectrum:
+            raise ValueError(_exact_spectrum_refusal_message(caller, "shrinkage"))
+        alternative = "" if other_remedy is None else f", or {other_remedy}"
+        self._validate_counted_observations(
+            caller,
+            why="The intensity estimates each coherency's variance across the "
+            "observations, which is undefined for one.",
+            remedy=f"more trials or tapers{alternative}",
+            weights_reason="The intensity estimates each coherency's variance "
+            "from equally weighted independent observations"
+            + ("." if other_remedy is None else f"; use {other_remedy} instead."),
+            assumption="The intensity estimates each coherency's sampling "
+            "variance from the observations as independent samples",
+        )
+        return self._partial_coherence_shrinkage_intensity
+
+    @cached_property
+    def _partial_coherence_shrinkage_intensity(self) -> BackendArray:
+        """``lambda`` of ``partial_coherence(shrinkage="auto")`` for each bin,
+        ``(..., n_nonnegative_frequencies)``, cached: ``"auto"`` has no
+        settings, so :meth:`partial_coherence_shrinkage` after
+        ``partial_coherence(shrinkage="auto")`` reuses it. Read-only for its
+        consumers. The estimator is in the Notes of :meth:`partial_coherence`.
+        With zero observation weights each bin counts the observations it
+        keeps.
+        """
+        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
+        power = xp.real(xp.diagonal(cross_spectral_density, axis1=-2, axis2=-1))
+        root_power = xp.sqrt(power)
+        has_power = power > 0  # False for NaN (a bin with no observation weights)
+        # Count each bin's kept observations, not n_observations: where zero
+        # weights drop observations (artifact_samples, say), the raw count
+        # would give a wrong intensity without any error.
+        counts = (
+            self.n_observations
+            if self._observation_weights is None
+            else self._valid_observation_counts[..., : power.shape[-2]]
+        )
+        squared_coherency, mean_squared_influence = self._coherency_influence(
+            cross_spectral_density, root_power, has_power, counts
+        )
+        off_diagonal = 1 - xp.eye(self.n_signals, dtype=power.dtype)
+        variance_sum = xp.sum(mean_squared_influence * off_diagonal, axis=(-2, -1)) / (
+            xp.maximum(counts, 2) - 1
+        )
+        coherence_sum = xp.sum(squared_coherency * off_diagonal, axis=(-2, -1))
+        # Every coherency exactly 0: nothing to keep, and any intensity gives
+        # the same partial coherence.
+        intensity = xp.clip(
+            _divide_where(variance_sum, coherence_sum, coherence_sum > 0, 1.0), 0.0, 1.0
+        )
+        # Also NaN where non-finite coefficients reach the powers.
+        undefined = (
+            (counts < 2) | ~xp.any(has_power, axis=-1) | ~xp.all(xp.isfinite(power), axis=-1)
+        )
+        return xp.where(undefined, xp.nan, intensity)
+
+    def _coherency_influence(
+        self,
+        cross_spectral_density: BackendArray,
+        root_power: BackendArray,
+        has_power: BackendArray,
+        counts: int | BackendArray,
+    ) -> tuple[BackendArray, BackendArray]:
+        """``(|r_ij|^2, mean_k |psi_kij|^2)`` for each bin of the coherency
+        ``r`` of ``cross_spectral_density`` (non-negative frequencies), with
+        ``psi_kij = w_kij - (r_ij / 2) (u_ki + u_kj)`` the delta-method
+        influence of observation ``k`` (see the Notes of
+        :meth:`partial_coherence`). ``root_power`` and ``has_power`` are
+        ``sqrt(S_ii)`` and ``S_ii > 0``, ``(..., n_nonnegative_frequencies,
+        n_signals)``, and ``counts`` the observations each bin keeps. Pairs
+        with a zero-power signal are 0. Observation weights must only keep or
+        drop observations, which the callers' guard ensures.
+        """
+        coefficients = self._nonnegative_fourier_coefficients()
+        bins = root_power.shape[:-1]  # (*kept observation axes, frequency)
+        n_observations, n_signals = self.n_observations, self.n_signals
+        averaged_last = [*self._kept_observation_axes, 3, *self._expectation_axes]
+        # One layout, (*bins, observation, signal), with each observation over
+        # its signal's root power in its bin (0 for a signal without power).
+        scale = xp.where(has_power, 1 / xp.where(has_power, root_power, 1), 0)
+        observations = (
+            xp.transpose(coefficients, [*averaged_last, 4]).reshape(
+                (*bins, n_observations, n_signals)
+            )
+            * scale[..., xp.newaxis, :]
+        )
+        if self._observation_weights is not None:
+            # Leave out the zero-weight observations, which may be NaN.
+            kept = xp.transpose(
+                self._observation_weights[..., : bins[-1], 0] > 0, averaged_last
+            ).reshape((*bins, n_observations))
+            observations = _weight_observations(
+                observations, kept[..., xp.newaxis].astype(root_power.dtype)
+            )
+        per_bin = xp.maximum(xp.asarray(counts, dtype=root_power.dtype), 1)[
+            ..., xp.newaxis, xp.newaxis
+        ]
+        relative_power = observations.real**2 + observations.imag**2  # u
+        # Means over the observations of u_i u_j (a real product) and of
+        # u_i w_ij = conj(sum_k conj(u_ki x_ki) x_kj) / n.
+        power_products = (
+            xp.matmul(xp.swapaxes(relative_power, -1, -2), relative_power) / per_bin
+        )
+        conjugated = relative_power * observations
+        xp.conj(conjugated, out=conjugated)
+        weighted_coherency = (
+            xp.conj(xp.matmul(xp.swapaxes(conjugated, -1, -2), observations)) / per_bin
+        )
+        pair_has_power = has_power[..., :, xp.newaxis] & has_power[..., xp.newaxis, :]
+        coherency = _divide_where(
+            cross_spectral_density,
+            root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :],
+            pair_has_power,
+            0.0,
+        )
+        product_diagonal = xp.diagonal(power_products, axis1=-2, axis2=-1)
+        squared_coherency = _squared_magnitude(coherency)
+        # mean_k |w_kij - (r_ij / 2) (u_ki + u_kj)|^2, expanded.
+        mean_squared_influence = (
+            power_products
+            - xp.real(
+                xp.conj(coherency)
+                * (weighted_coherency + _conjugate_transpose(weighted_coherency))
+            )
+            + squared_coherency
+            / 4
+            * (
+                product_diagonal[..., :, xp.newaxis]
+                + product_diagonal[..., xp.newaxis, :]
+                + 2 * power_products
+            )
+        )
+        return squared_coherency, mean_squared_influence
 
     def _validated_group_indices(
         self, group_labels: NDArray[Any]
@@ -3434,36 +5581,50 @@ class Connectivity:
         True
         """
         labels, group_indices, _ = self._validated_group_indices(group_labels)
-        # The estimate treats trials x tapers as observations. When a group pair
-        # has more signals than observations, the two groups' observation
-        # subspaces must intersect and the value is forced to 1 for any data.
+        n_frequencies = self._fourier_coefficients.shape[-2]
+        non_negative_frequencies = xp.arange(
+            0, self._nonnegative_frequency_count(n_frequencies)
+        )
+        observation_weights = None
+        # The estimate treats each window's trials x tapers as observations,
+        # less those zero weights drop: (n_time_windows, n_frequencies) counts.
         n_observations = (
             self._fourier_coefficients.shape[1] * self._fourier_coefficients.shape[2]
         )
+        valid_counts = None
+        fewest = n_observations
+        if self._observation_weights is not None:
+            observation_weights = self._observation_weights[..., non_negative_frequencies, :]
+            # Whatever expectation_type is: canonical coherence always pools
+            # each window's trials and tapers.
+            valid_counts = self._valid_counts_over((1, 2))[..., non_negative_frequencies]
+            fewest = self._fewest_positive(valid_counts) or n_observations
+        # When a group pair has more signals than observations, the two groups'
+        # observation subspaces must intersect and the value is forced to 1 for
+        # any data.
         degenerate_pairs = [
             (labels[first], labels[second])
             for first, second in combinations(range(len(labels)), 2)
-            if len(group_indices[first]) + len(group_indices[second]) > n_observations
+            if len(group_indices[first]) + len(group_indices[second]) > fewest
         ]
         if degenerate_pairs:
             pairs = ", ".join(f"({first}, {second})" for first, second in degenerate_pairs)
+            uses = self._uses_observations(
+                fewest,
+                n_observations,
+                "time windows and frequencies whose trials x tapers observation_weights "
+                "partly drop",
+            )
             warnings.warn(
-                f"canonical_coherence uses {n_observations} "
-                f"observation{'' if n_observations == 1 else 's'} (trials x "
+                f"canonical_coherence {uses} (trials x "
                 f"tapers), fewer than the signals in group pair(s) {pairs}; "
                 "their canonical coherence is forced to 1 regardless of the data. "
                 "Provide more trials or tapers, or use smaller groups.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
-        n_frequencies = self._fourier_coefficients.shape[-2]
-        non_negative_frequencies = xp.arange(
-            0, self._nonnegative_frequency_count(n_frequencies)
-        )
         fourier_coefficients = self._fourier_coefficients[..., non_negative_frequencies, :]
-        observation_weights = None
-        if self._observation_weights is not None:
-            observation_weights = self._observation_weights[..., non_negative_frequencies, :]
+        if observation_weights is not None:
             # Canonical correlation is computed from observation covariance
             # matrices. Multiplying every observation by sqrt(weight) gives the
             # weighted covariance while retaining the existing whitening
@@ -3505,8 +5666,8 @@ class Connectivity:
         magnitude = _clip_rounding_above_one(_squared_magnitude(canonical_coherency))
         # (n_time_windows, n_frequencies) bins already reported as undefined.
         no_valid_observations = xp.zeros(ranks[0].shape, dtype=bool)
-        if observation_weights is not None:
-            no_valid_observations = xp.sum(observation_weights[..., 0], axis=(1, 2)) <= 0
+        if valid_counts is not None:
+            no_valid_observations = valid_counts == 0
         # A group with no power at a bin has no direction left after whitening;
         # its canonical coherence there is 0/0, so report NaN (as coherency does)
         # rather than the 0 the empty projection would give.
@@ -3519,8 +5680,12 @@ class Connectivity:
             xp.nan,
             magnitude,
         )
-        full_rank = xp.asarray(
-            [min(len(indices), n_observations) for indices in group_indices]
+        # A group spans at most as many directions as the bin has observations.
+        group_sizes = xp.asarray([len(indices) for indices in group_indices])
+        full_rank = (
+            xp.minimum(group_sizes, n_observations)
+            if valid_counts is None
+            else xp.minimum(group_sizes, valid_counts[..., xp.newaxis])
         )
         reported = ~no_valid_observations[..., xp.newaxis]
         # One host synchronization for both warnings: (2, n_groups) flags.
@@ -4215,8 +6380,9 @@ class Connectivity:
             (``n_observations < n_signals``): the value is then at least
             ``1 / n_observations`` whatever the data (1 for a single
             observation), above the ``1 / n_signals`` of independent signals.
-            The count is :attr:`n_observations`, which includes observations
-            that zero ``observation_weights`` omit. Also if the expectation
+            Where zero ``observation_weights`` drop observations, the count is
+            that of the bin keeping fewest (:attr:`n_valid_observations`).
+            Also if the expectation
             pools time windows the transform reports as correlated
             (``time_bins_are_independent`` is ``False``, e.g. windows
             overlapping by more than half), which add fewer effective
@@ -4264,10 +6430,11 @@ class Connectivity:
           trials x tapers by default, times the windows when time is pooled)
           and ``p`` signals, the leading value is at least ``1 / min(n, p)``
           whatever the data, and 1 for one observation; it warns when
-          ``n < p``. ``n`` is the raw count: observations that zero
-          ``observation_weights`` omit (the masked edges of a Morlet
-          transform, say) still count, so the floor can be higher than
-          ``1 / min(n, p)`` there, and the warning does not see it.
+          ``n < p``. Observations that zero ``observation_weights`` drop (the
+          dropped windows of ``Multitaper(artifact_samples=...)`` or the masked
+          edges of a Morlet transform, say) do not count: ``n`` is each bin's
+          :attr:`n_valid_observations`, and the warning sees the bin keeping
+          fewest.
         - *Bias without coupling*: independent signals of equal power have the
           value ``1 / p``, but the estimate is well above it unless
           ``n >> p``. As ``n`` and ``p`` grow with ``p / n`` fixed, the largest
@@ -4547,7 +6714,7 @@ class Connectivity:
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
     def _phase_locking_value(
-        self, dtype: DTypeLike | None = None
+        self, dtype: DTypeLike | None = None, *, warn_single_observation: bool = True
     ) -> NDArray[np.complexfloating]:
         # Normalize each Fourier coefficient to unit magnitude, then reuse the
         # batched reduced cross-spectral matmul: because
@@ -4559,7 +6726,8 @@ class Connectivity:
         # O(observations * signals**2). Kept on the active namespace (xp); the
         # public ``phase_locking_value`` wrapper converts to NumPy.
         self._validate_multiple_signals()
-        self._warn_single_observation_degenerate("phase_locking_value")
+        if warn_single_observation:
+            self._warn_single_observation_degenerate("phase_locking_value")
         # Normalize at the computation dtype (``self._dtype``, complex128 by
         # default): the previous materialized path formed the outer product at
         # that dtype, so normalizing complex64 inputs at their own precision here
@@ -4571,6 +6739,10 @@ class Connectivity:
         coefficients = self._nonnegative_fourier_coefficients(dtype)
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
+        if self._observation_weights is not None:
+            # An observation zero weights drop (a zero-filled invalid window)
+            # never reaches the average.
+            zero_magnitude &= self._observation_weights[..., : coefficients.shape[-2], :] > 0
         if bool(xp.any(zero_magnitude)):
             warnings.warn(
                 "Some cross-spectrum entries have zero magnitude (e.g. a "
@@ -4590,6 +6762,7 @@ class Connectivity:
         )
         return self._reduced_cross_spectral_matrix(normalized, dtype=dtype)
 
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def phase_locking_value(self) -> NDArray[np.floating]:
         """Return the cross-spectrum with power scaled to magnitude 1.
@@ -4639,6 +6812,7 @@ class Connectivity:
         # ulp above 1 (matching the bounds clipping magnitude_squared_coherence applies).
         return xp.clip(xp.abs(self._phase_locking_value()), 0.0, 1.0)
 
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def corrected_imaginary_phase_locking_value(self) -> NDArray[np.floating]:
         """Return corrected imaginary phase-locking value (ciPLV).
@@ -4827,9 +7001,8 @@ class Connectivity:
             # Filled here and cached only once complete, so an error partway
             # through leaves no uninitialized moments behind.
             if (
-                self._observation_weights is None
-                and self.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS
-            ):
+                self._observation_weights is None or self._kept_observations is not None
+            ) and self.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS:
                 computed_keys = list(_IMAGINARY_MOMENTS)
             else:
                 computed_keys = list(dict.fromkeys(key for key in keys if key not in cache))
@@ -4951,7 +7124,8 @@ class Connectivity:
         :meth:`_expectation`, which needs the per-observation values.
         """
         block = (..., slice(start, stop), slice(start, None))
-        if self._observation_weights is not None:
+        keep = self._kept_observations
+        if self._observation_weights is not None and keep is None:
             if "sign" in moments or "nonzero" in moments:
                 # One sign pass into the scratch buffer serves both moments.
                 xp.sign(imaginary, out=scratch)
@@ -4966,29 +7140,56 @@ class Connectivity:
             return
 
         observation_axes = self._expectation_axes
-        n_observations = self.n_observations
+        if keep is not None:
+            # Zero the dropped observations in place (they add nothing to any
+            # sum) and divide each sum by the count kept.
+            keep = keep[..., 0, 0].reshape((*keep.shape[:3], 1, 1, 1))
+            xp.copyto(imaginary, 0, where=~keep)
+            count = xp.sum(keep, axis=observation_axes)
+
+            def mean(total: BackendArray) -> BackendArray:
+                return _divide_where(total, count, count > 0, xp.nan)
+
+        else:
+            n_observations = self.n_observations
+
+            def mean(total: BackendArray) -> BackendArray:
+                return total / n_observations
+
         if "sign" in moments or "nonzero" in moments:
             positive = xp.count_nonzero(imaginary > 0, axis=observation_axes)
             negative = xp.count_nonzero(imaginary < 0, axis=observation_axes)
             invalid = xp.any(xp.isnan(imaginary), axis=observation_axes)
             if "sign" in moments:
-                moments["sign"][block] = xp.where(
-                    invalid, xp.nan, (positive - negative) / n_observations
-                )
+                moments["sign"][block] = xp.where(invalid, xp.nan, mean(positive - negative))
             if "nonzero" in moments:
                 moments["nonzero"][block] = xp.where(
-                    invalid, xp.nan, (positive + negative) / n_observations
+                    invalid, xp.nan, mean(positive + negative)
                 )
         if "imaginary" in moments:
-            moments["imaginary"][block] = xp.mean(imaginary, axis=observation_axes)
+            moments["imaginary"][block] = (
+                xp.mean(imaginary, axis=observation_axes)
+                if keep is None
+                else mean(xp.sum(imaginary, axis=observation_axes))
+            )
         if "squared" in moments:
-            # Sum of squares without materializing imaginary * imaginary.
-            squared_sum = xp.einsum(squared_subscripts, imaginary, imaginary)
-            moments["squared"][block] = squared_sum / n_observations
+            if keep is None:
+                # Sum of squares without materializing imaginary * imaginary.
+                squared_sum = xp.einsum(squared_subscripts, imaginary, imaginary)
+            else:
+                # As the weighted path sums them, to the bit.
+                xp.multiply(imaginary, imaginary, out=scratch)
+                squared_sum = xp.sum(scratch, axis=observation_axes)
+            moments["squared"][block] = mean(squared_sum)
         if "absolute" in moments:
             xp.abs(imaginary, out=scratch)
-            moments["absolute"][block] = xp.mean(scratch, axis=observation_axes)
+            moments["absolute"][block] = (
+                xp.mean(scratch, axis=observation_axes)
+                if keep is None
+                else mean(xp.sum(scratch, axis=observation_axes))
+            )
 
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def phase_lag_index(self) -> NDArray[np.floating]:
         """Return non-parametric synchrony measure mitigating power differences.
@@ -5059,6 +7260,7 @@ class Connectivity:
         )
         return pli
 
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def directed_phase_lag_index(self) -> NDArray[np.floating]:
         """Return the directed phase-lag index (dPLI).
@@ -5121,6 +7323,7 @@ class Connectivity:
         )
         return directed_pli
 
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return weighted average of phase lag index using imaginary coherency magnitudes.
@@ -5186,6 +7389,7 @@ class Connectivity:
         no_lag = self._has_no_phase_lag(mean_absolute)
         return _divide_where(mean_imaginary, mean_absolute, ~no_lag, 0.0)
 
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of phase lag index corrected for positive bias.
@@ -5234,20 +7438,28 @@ class Connectivity:
         >>> bool(debiased_pli[0, 20, 0, 1] > 0.05)  # lagged coupling at 10 Hz (bin 20)
         True
         """
-        self._validate_debiasing_observations("debiased_squared_phase_lag_index")
-        n_observations = self.n_observations
+        self._validate_counted_observations("debiased_squared_phase_lag_index")
         mean_sign, mean_nonzero, mean_absolute = self._imaginary_cross_spectrum_moments(
             "sign", "nonzero", "absolute"
+        )
+        n_observations = self._counts_for_correction(
+            "debiased_squared_phase_lag_index", mean_sign.dtype
         )
         # The mean of s_k s_l over ordered pairs of distinct observations,
         # (n**2 m**2 - sum_k s_k**2) / (n (n - 1)), is unbiased for E[s]**2.
         # sum_k s_k**2 / n is the fraction of observations whose Im is not 0;
-        # Vinck's closed form (n m**2 - 1) / (n - 1) takes it as 1.
-        debiased = (n_observations * mean_sign**2 - mean_nonzero) / (n_observations - 1.0)
+        # Vinck's closed form (n m**2 - 1) / (n - 1) takes it as 1. With
+        # observations dropped by zero weights, n is each bin's kept count and
+        # the moments are means over the kept observations.
+        # A bin of one kept observation divides by 0; it is NaN below.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            debiased = (n_observations * mean_sign**2 - mean_nonzero) / (n_observations - 1.0)
         # Where there is no phase lag (in-phase signals, the zeroed diagonal)
         # the signs are rounding noise; there is no lag to estimate, so 0.
-        return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
+        result = xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
+        return self._nan_where_too_few(result, n_observations)
 
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def debiased_squared_weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of weighted phase lag index corrected for bias.
@@ -5297,12 +7509,16 @@ class Connectivity:
         >>> bool(debiased_wpli[0, 20, 0, 1] > 0.3)  # lagged coupling at 10 Hz (bin 20)
         True
         """
-        self._validate_debiasing_observations("debiased_squared_weighted_phase_lag_index")
-        n_observations = self.n_observations
+        self._validate_counted_observations("debiased_squared_weighted_phase_lag_index")
         mean_imaginary, mean_squared, mean_absolute = self._imaginary_cross_spectrum_moments(
             "imaginary", "squared", "absolute"
         )
+        n_observations = self._counts_for_correction(
+            "debiased_squared_weighted_phase_lag_index", mean_imaginary.dtype
+        )
         # Each product is a fresh array, so the cached moments are not mutated.
+        # With observations dropped by zero weights the moments are means over
+        # each bin's kept observations, and these their sums.
         imaginary_csm_sum = mean_imaginary * n_observations
         squared_imaginary_csm_sum = mean_squared * n_observations
         imaginary_csm_magnitude_sum = mean_absolute * n_observations
@@ -5317,8 +7533,9 @@ class Connectivity:
                 imaginary_csm_sum**2 - squared_imaginary_csm_sum, weights, weights != 0, xp.nan
             ),
         )
-        return debiased
+        return self._nan_where_too_few(debiased, n_observations)
 
+    @_refused_for_exact_spectrum("per_observation")
     @_asnumpy
     def pairwise_phase_consistency(self) -> NDArray[np.floating]:
         """Return square of phase locking value corrected for bias.
@@ -5363,13 +7580,43 @@ class Connectivity:
         >>> bool(ppc[0, 20, 0, 1] > 0.3)  # consistent phase difference at 10 Hz (bin 20)
         True
         """
-        self._validate_debiasing_observations("pairwise_phase_consistency")
-        n_observations = self.n_observations
-        plv_sum = self._phase_locking_value() * n_observations
-        ppc = (plv_sum * plv_sum.conjugate() - n_observations) / (
-            n_observations**2 - n_observations
+        self._validate_counted_observations("pairwise_phase_consistency")
+        # A bin of a single observation is reported once, as PPC's.
+        phase_locking_value = self._phase_locking_value(warn_single_observation=False)
+        n_observations = self._counts_for_correction(
+            "pairwise_phase_consistency", phase_locking_value.real.dtype
         )
-        return ppc.real
+        # The mean over ordered pairs of distinct observations of
+        # Re(u_k conj(u_l)), unit phasors u: (|sum_k u_k|**2 - n) / (n (n - 1)).
+        # With observations dropped by zero weights, n is each bin's kept count
+        # and the PLV their mean.
+        plv_sum = phase_locking_value * n_observations
+        if isinstance(n_observations, int):
+            ppc = (plv_sum * plv_sum.conjugate() - n_observations) / (
+                n_observations**2 - n_observations
+            )
+            return ppc.real
+        ppc_values: NDArray[np.floating] = _divide_where(
+            (plv_sum * plv_sum.conjugate()).real - n_observations,
+            n_observations**2 - n_observations,
+            n_observations >= 2,
+            xp.nan,
+        )
+        return ppc_values
+
+    @staticmethod
+    def _nan_where_too_few(
+        values: BackendArray, n_observations: int | BackendArray
+    ) -> BackendArray:
+        """``values`` with NaN in the bins of fewer than two observations.
+
+        ``n_observations`` is :meth:`_counts_for_correction`'s count: an
+        ``int`` (every bin has it, so ``values`` is returned as it is) or one
+        count per bin.
+        """
+        if isinstance(n_observations, int):
+            return values
+        return xp.where(n_observations >= 2, values, xp.nan)
 
     @_orientation_changed
     @_source_first
@@ -5451,14 +7698,14 @@ class Connectivity:
         csm = self._expectation_cross_spectral_matrix()
         if time_reversed:
             csm = xp.swapaxes(csm, -1, -2)
-        result = _estimate_spectral_granger_prediction(
+        result, not_minimum_phase = _estimate_spectral_granger_prediction(
             self._power,
             csm,
             combinations(range(self.n_signals), 2),
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
-        _warn_nan_granger_pairs(result, measure)
+        _warn_granger_failures(result, not_minimum_phase, measure)
         return result
 
     @_orientation_changed
@@ -5517,7 +7764,7 @@ class Connectivity:
         """
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
-        result = _estimate_subset_spectral_granger_prediction(
+        result, not_minimum_phase = _estimate_subset_spectral_granger_prediction(
             self._power,
             self._subset_cross_spectral_matrix(pairs),
             pairs,
@@ -5527,8 +7774,11 @@ class Connectivity:
         )
         requested = np.zeros((self.n_signals, self.n_signals), dtype=bool)
         requested[pairs[:, 0], pairs[:, 1]] = requested[pairs[:, 1], pairs[:, 0]] = True
-        _warn_nan_granger_pairs(
-            result, "subset_pairwise_spectral_granger_prediction", requested=requested
+        _warn_granger_failures(
+            result,
+            not_minimum_phase,
+            "subset_pairwise_spectral_granger_prediction",
+            requested=requested,
         )
         return result
 
@@ -5695,35 +7945,37 @@ class Connectivity:
         max_iterations = self._minimum_phase_max_iterations
         if self.n_signals == 2:
             # No conditioning set: the measure is pairwise Geweke Granger.
-            result = _estimate_blockwise_spectral_granger(
+            result, not_minimum_phase = _estimate_blockwise_spectral_granger(
                 spectrum,
                 [np.array([0]), np.array([1])],
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
         else:
-            # The forward full model is the instance's cached factorization
-            # (the same CSM, tolerance and iteration cap), shared with the
-            # other directed measures, whose failure warning it keeps. The
-            # reversed one is factored here for this measure alone, so its
-            # failures are reported only by the warning naming the NaN pairs.
+            # The full model is factored with its own warnings: the forward one
+            # is the instance's cached factorization (the same CSM, tolerance
+            # and iteration cap), shared with the other directed measures; the
+            # reversed one goes through the same path. The pair warnings below
+            # name the failures of the reduced models.
             transfer_function, noise_covariance = (
-                _var_model_from_spectrum(
-                    spectrum,
-                    minimum_phase_tolerance=tolerance,
-                    minimum_phase_max_iterations=max_iterations,
+                _var_model_from_factor(
+                    _factorize_spectrum(
+                        spectrum,
+                        minimum_phase_tolerance=tolerance,
+                        minimum_phase_max_iterations=max_iterations,
+                    )
                 )
                 if time_reversed
                 else (self._transfer_function, self._noise_covariance)
             )
-            result = _estimate_all_conditional_spectral_granger(
+            result, not_minimum_phase = _estimate_all_conditional_spectral_granger(
                 spectrum,
                 transfer_function,
                 noise_covariance,
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
-        _warn_nan_granger_pairs(result, measure)
+        _warn_granger_failures(result, not_minimum_phase, measure)
         return result
 
     @_source_first
@@ -5868,13 +8120,13 @@ class Connectivity:
         spectrum = self._expectation_cross_spectral_matrix()
         if time_reversed:
             spectrum = xp.swapaxes(spectrum, -1, -2)
-        result = _estimate_blockwise_spectral_granger(
+        result, not_minimum_phase = _estimate_blockwise_spectral_granger(
             spectrum,
             indices,
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
-        _warn_nan_granger_pairs(result, measure, names=to_numpy(labels))
+        _warn_granger_failures(result, not_minimum_phase, measure, names=to_numpy(labels))
         # Swap on the host, like _source_first: [..., target, source] -> source first.
         return np.swapaxes(to_numpy(result), -1, -2), to_numpy(labels)
 
@@ -6354,7 +8606,9 @@ class Connectivity:
             self._transfer_function / _total_inflow(self._transfer_function, axis=(-1, -3))
         )
         mvar_coefficients = self._MVAR_Fourier_coefficients
-        inverse_noise_covariance = _regularized_inverse(self._noise_covariance)
+        inverse_noise_covariance = _regularized_inverse(
+            self._noise_covariance, per_signal=True
+        )
         inverse_spectrum = xp.matmul(
             xp.matmul(
                 _conjugate_transpose(mvar_coefficients),
@@ -6514,9 +8768,14 @@ class Connectivity:
             ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
         ]
 
+        # One count per window and frequency where zero weights drop
+        # observations, (..., n_band_frequencies, 1) against the pairs.
+        n_observations: int | NDArray[np.intp] = self.n_observations
+        if self._observation_weights is not None:
+            n_observations = self.n_valid_observations[..., frequency_mask, np.newaxis]
         is_significant = _find_significant_frequencies(
             bandpassed_coherency,
-            self.n_observations,
+            n_observations,
             independent_frequency_step,
             significance_threshold=significance_threshold,
             real_valued=self._real_valued_frequency_mask[frequency_mask][:, np.newaxis],
@@ -6527,6 +8786,7 @@ class Connectivity:
         )
         return coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals
 
+    @_refused_for_exact_spectrum("significance_gate")
     def group_delay(
         self,
         frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None = None,
@@ -6678,6 +8938,7 @@ class Connectivity:
 
         return delay, slope, r_value
 
+    @_refused_for_exact_spectrum("significance_gate")
     @_asnumpy
     def delay(
         self,
@@ -6913,6 +9174,136 @@ class Connectivity:
             xp.conj(bandpassed_coherency[..., :-1, :, :]) * bandpassed_coherency[..., 1:, :, :]
         ).sum(axis=-3)
         return adjacent_product.imag
+
+
+def _paired_frequency_bins(n_fft_samples: int) -> tuple[slice, slice]:
+    """The interior positive bins of a two-sided FFT and their negative partners.
+
+    In standard FFT order bin ``k`` (``1 <= k <= (n_fft_samples - 1) // 2``)
+    is frequency ``k`` and bin ``n_fft_samples - k`` is ``-k``; the second
+    slice lists the partners in the order of the first. 0 Hz (bin 0) and,
+    for an even length, Nyquist (bin ``n_fft_samples // 2``) have no partner.
+    """
+    n_interior = (n_fft_samples - 1) // 2
+    return (
+        slice(1, n_interior + 1),
+        slice(n_fft_samples - 1, n_fft_samples - 1 - n_interior, -1),
+    )
+
+
+def _axes_description(dims: tuple[str, ...] | None) -> str:
+    """``"axes (time, frequency, ...) with "`` for known ``dims``, else ``""``."""
+    return "" if dims is None else f"axes ({', '.join(dims)}) with "
+
+
+def _surrogate_refusal(method: str) -> str | None:
+    """Why ``surrogate_test`` refuses a registered measure (a key of
+    ``_SURROGATE_REFUSALS``), or ``None``.
+
+    A measure of one signal (``output_kind="power"``), candidate delays
+    (``"delay"``), and a phase (``quantity="phase"``) are refused.
+    """
+    # The registry imports this module, so it is imported here.
+    from spectral_connectivity._measure_registry import _MEASURE_SPECS
+
+    spec = _MEASURE_SPECS.get(method)
+    if spec is None:
+        return None
+    if spec.output_kind == "power":
+        return "single_signal"
+    if spec.output_kind == "delay":
+        return "candidate_delays"
+    if spec.quantity == "phase":
+        return "phase"
+    return None
+
+
+def _signed_measure_alternative(method: str) -> Literal["greater", "two-sided"]:
+    """``surrogate_test``'s ``alternative="auto"`` for ``method``.
+
+    ``"two-sided"`` for a registered measure whose range is signed and whose
+    sign says which signal leads; ``"greater"`` otherwise, including the
+    debiased estimators whose range is signed only because a bias correction
+    can push them below 0, and unregistered extension measures.
+    """
+    # The registry imports this module, so it is imported here.
+    from spectral_connectivity._measure_registry import _MEASURE_SPECS
+
+    spec = _MEASURE_SPECS.get(method)
+    if spec is not None and spec.value_range[0] < 0 and spec.sign_convention is not None:
+        return "two-sided"
+    return "greater"
+
+
+def _validated_half_bandwidth(half_bandwidth: Any) -> float:
+    """``half_bandwidth`` as a float, validated like a sampling frequency.
+
+    Raises
+    ------
+    TypeError
+        If it is not one real number (see :func:`_real_scalar`).
+    ValueError
+        If it is not finite and positive.
+    """
+    value = _real_scalar(half_bandwidth)
+    advice = (
+        "the half-width of the transform's spectral smoothing in the units of "
+        "frequencies (for a Multitaper, frequency_resolution / 2)"
+    )
+    if value is None:
+        msg = (
+            f"half_bandwidth must be a number, {advice}; got "
+            f"{type(half_bandwidth).__name__} {half_bandwidth!r}."
+        )
+        raise TypeError(msg)
+    if not np.isfinite(value) or value <= 0:
+        msg = f"half_bandwidth must be a positive number, {advice}; got {half_bandwidth!r}."
+        raise ValueError(msg)
+    return value
+
+
+def _real_array_result(
+    result: Any,
+    method: str,
+    caller: str,
+    *,
+    structured_hint: str = "",
+    complex_hint: str = "",
+) -> NDArray[np.floating]:
+    """``result`` of ``method`` as a real array, or the error ``caller`` raises.
+
+    Raises
+    ------
+    TypeError
+        If the measure returned a tuple, a structured (object) result, or a
+        complex array. ``structured_hint`` and ``complex_hint`` are appended
+        to the structured-result and complex-result messages.
+    """
+    if isinstance(result, tuple):
+        # The registry imports this module, so its helper is imported here.
+        from spectral_connectivity._measure_registry import _is_group_measure
+
+        if _is_group_measure(method):
+            msg = (
+                f"{caller} does not support the group measure {method!r}: it "
+                "returns its values together with the group labels, and "
+                f"{caller} does not resample group measures yet. Use a pairwise "
+                "measure, or call the group measure directly."
+            )
+        else:
+            msg = f"{caller} does not support tuple-valued measure {method!r}."
+        raise TypeError(msg)
+    values: NDArray[np.floating] = np.asarray(result)
+    if values.dtype == object:
+        msg = (
+            f"{caller} requires a real array result from {method!r}; it "
+            f"returned a structured result.{structured_hint}"
+        )
+        raise TypeError(msg)
+    if np.iscomplexobj(values):
+        msg = f"{caller} requires a real-valued measure; {method!r} is complex.{complex_hint}"
+        raise TypeError(msg)
+    return values
 
 
 def _divide_masking_zero_denominator(
@@ -7442,7 +9833,7 @@ def _largest_independent_group_along_frequency(
 
 def _find_significant_frequencies(
     coherency: NDArray[np.complexfloating],
-    n_obs: int,
+    n_obs: int | NDArray[np.integer],
     frequency_step: int = 1,
     significance_threshold: float = 0.05,
     min_group_size: int = 3,
@@ -7464,8 +9855,11 @@ def _find_significant_frequencies(
     ----------
     coherency : array, shape (..., n_frequencies, n_signals, n_signals)
         The complex coherency between signals.
-    n_obs : int
-        The number of observations used to estimate the coherency.
+    n_obs : int or array of int
+        The number of observations used to estimate the coherency: one count,
+        or one per estimate, broadcastable against ``coherency``. An estimate
+        of fewer than 2 observations has no test (its p-value is NaN, so it is
+        never significant and does not count in the correction).
     frequency_step : int
         The number of points between each independent frequency step
     significance_threshold : float
@@ -7487,7 +9881,13 @@ def _find_significant_frequencies(
     # Test each frequency's coherence against zero using the exact
     # magnitude-squared-coherence null distribution. The Fisher z-transform is
     # miscalibrated at the zero boundary and over-rejects the null ~3-4x.
-    p_values = coherence_significance_pvalue(coherency, n_obs, real_valued=real_valued)
+    counts = np.asarray(n_obs)
+    too_few = counts < 2
+    p_values = coherence_significance_pvalue(
+        coherency, np.where(too_few, 2, counts), real_valued=real_valued
+    )
+    if np.any(too_few):
+        p_values = np.where(too_few, np.nan, p_values)
     is_significant = adjust_for_multiple_comparisons(
         p_values, alpha=significance_threshold, method=multiple_comparisons_method
     )

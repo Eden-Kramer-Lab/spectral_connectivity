@@ -76,7 +76,9 @@ uv run mypy src/
 ```bash
 # Time the default measures and save their outputs; re-run with --compare after
 # any connectivity.py change to cached intermediates (fails above 1e-12). Add
-# --cases a b c for the time-resolved few-observation case (several minutes)
+# --cases a b c for the time-resolved few-observation case (several minutes).
+# Baselines saved before the covariant Wilson start (3.0) differ in pairwise
+# Granger by up to 2e-7; re-baseline on master rather than compare to them
 uv run python benchmarks/bench_default_measures.py --save baseline.npz
 uv run python benchmarks/bench_default_measures.py --compare baseline.npz
 ```
