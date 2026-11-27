@@ -19,6 +19,7 @@ from spectral_connectivity._frequency_bands import (
     _decimate_and_reduce_frequencies,
     _nyquist_frequency,
     _reduce_frequency_bands,
+    _requests_two_sided_density,
     _with_frequency_attrs,
 )
 from spectral_connectivity._input_handling import (
@@ -625,11 +626,7 @@ def _check_measure_settings(
         frequency_bands=frequency_bands,
     )
     measure_settings = {key: value for key, value in settings.items() if key != "group_labels"}
-    if (
-        "power" in methods
-        and "one_sided" in measure_settings
-        and not _validated_flag("one_sided", measure_settings["one_sided"])
-    ):
+    if "power" in methods and _requests_two_sided_density(measure_settings):
         # Checked for the whole request, so the answer does not depend on
         # where power stands among the methods.
         msg = (

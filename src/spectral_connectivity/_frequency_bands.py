@@ -2,6 +2,7 @@
 
 import warnings
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, NamedTuple
 
 import numpy as np
@@ -19,7 +20,11 @@ from spectral_connectivity.connectivity import (
     _frequency_interval_mask,
     _FrequencySelection,
 )
-from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
+from spectral_connectivity.utils import (
+    _validated_flag,
+    is_positive_integer,
+    stacklevel_outside_package,
+)
 
 # The bins ``frequency_range`` selects on a grid left uncropped, as a mask over
 # that grid, and the range's bounds.
@@ -162,8 +167,7 @@ def _band_masks(
 ) -> list[tuple[NDArray[np.bool_], tuple[float, float]]]:
     """Validate a band request on a frequency grid; each band's bins and bounds.
 
-    With :func:`_require_integral_bin_widths`, the one validation of
-    ``frequency_bands`` and ``frequency_reduction`` for
+    The one validation of ``frequency_bands`` and ``frequency_reduction`` for
     :func:`frequency_band_reduce`, the wrappers, and
     ``Connectivity.jackknife``. Each band's bins are those
     :func:`_frequency_interval_mask` places in ``[low, high]``, both endpoints
@@ -220,48 +224,14 @@ def _band_masks(
         mask = np.zeros(frequencies.shape, dtype=bool)
         mask[in_range] = kept_mask
         band_masks_and_bounds.append((mask, band_bounds))
-    return band_masks_and_bounds
-
-
-def _require_integral_bin_widths(frequency_reduction: str, n_bins: int) -> None:
-    """Raise if an integral is asked of a grid of fewer than two bins.
-
-    Checked after :func:`_band_masks`: a bin's width is the distance to its
-    neighbours.
-    """
-    if frequency_reduction == "integral" and n_bins < 2:
+    # A bin's width is the distance to its neighbours.
+    if frequency_reduction == "integral" and np.count_nonzero(in_range) < 2:
         msg = (
             "frequency_reduction='integral' needs at least two frequency bins to "
             "know their widths."
         )
         raise ValueError(msg)
-
-
-def _band_bins(
-    frequencies: NDArray[np.floating],
-    band_masks_and_bounds: Sequence[tuple[NDArray[np.bool_], tuple[float, float]]],
-    *,
-    frequency_reduction: str,
-    nyquist_frequency: float | None,
-    kept: _KeptBins | None = None,
-) -> list[_BandBins]:
-    """The bins each band of :func:`_band_masks` reduces, with integral weights.
-
-    A mean reads the band's bins. An integral reads every bin whose cell
-    overlaps the band, and the bins inside it even with zero weight (a
-    zero-width band), so an invalid bin is never read as zero.
-    """
-    bands = []
-    for mask, (low, high) in band_masks_and_bounds:
-        if frequency_reduction == "integral":
-            weights = _band_integration_weights(
-                frequencies, low, high, nyquist_frequency, kept
-            )
-            used = np.flatnonzero((weights > 0) | mask)
-            bands.append(_BandBins(used, weights[used]))
-        else:
-            bands.append(_BandBins(np.flatnonzero(mask), None))
-    return bands
+    return band_masks_and_bounds
 
 
 def _band_reduction(
@@ -332,6 +302,142 @@ def _reduce_band(
     return np.where(np.all(~np.isnan(values), axis=axis), reduced, np.nan)
 
 
+@dataclass(frozen=True)
+class _BandReducer:
+    """Replaces a frequency axis with a band axis: see :func:`_band_reducer`.
+
+    ``bands`` are the bins each band reads (and an integral's weights),
+    ``bounds`` each band's ``(low, high)`` as resolved, ``reduction`` a key of
+    ``_BAND_VALUE_DESCRIPTIONS``, and ``n_frequencies`` the length of the grid
+    the bands select from.
+    """
+
+    bands: tuple[_BandBins, ...]
+    bounds: tuple[tuple[float, float], ...]
+    reduction: str
+    n_frequencies: int
+
+    def __call__(self, values: Any, axis: int) -> Any:
+        """``values`` with its frequency axis ``axis`` replaced by the bands.
+
+        Parameters
+        ----------
+        values : array, shape (..., n_frequencies, ...)
+            A NumPy array, or one that NumPy functions dispatch on (dask).
+        axis : int
+            The frequency axis.
+
+        Returns
+        -------
+        array, shape (..., n_bands, ...)
+            The bands in the mapping's order, at ``axis``.
+        """
+        return np.stack(
+            [
+                _reduce_band(
+                    np.take(values, bins, axis=axis),
+                    axis,
+                    reduction=self.reduction,
+                    weights=weights,
+                )
+                for bins, weights in self.bands
+            ],
+            axis=axis,
+        )
+
+
+def _band_reducer(
+    frequencies: NDArray[np.floating],
+    frequency_bands: Mapping[str, tuple[float, float]],
+    *,
+    frequency_reduction: str,
+    measure: str,
+    units: object,
+    nyquist_frequency: float | None,
+    circular: bool | None = None,
+    is_complex: bool = False,
+    kept: _KeptBins | None = None,
+) -> _BandReducer:
+    """The band reduction of one measure on a frequency grid, validated.
+
+    The one implementation of band reduction, for
+    :func:`frequency_band_reduce`, the wrappers, and
+    ``Connectivity.jackknife``: the request is checked by
+    :func:`_band_masks` and :func:`_band_reduction` before anything is
+    computed.
+
+    Parameters
+    ----------
+    frequencies : NDArray[floating], shape (n_frequencies,)
+        The grid of the measure's frequency axis.
+    frequency_bands : mapping of str to (float, float)
+    frequency_reduction : {"mean", "integral"}
+    measure : str
+        The measure's name, which decides whether it may be integrated and
+        whether its mean is circular.
+    units : object
+        The measure's units (``"rad"`` makes a mean circular).
+    nyquist_frequency : float or None
+        See :func:`_band_integration_weights`.
+    circular : bool, optional
+        Overrides whether the mean is circular.
+    is_complex : bool, default=False
+        Whether the measure is complex (its mean is then a vector mean).
+    kept : tuple, optional
+        See :func:`_band_integration_weights`.
+    """
+    band_masks_and_bounds = _band_masks(
+        frequencies, frequency_bands, frequency_reduction=frequency_reduction, kept=kept
+    )
+    reduction = _band_reduction(
+        measure, frequency_reduction, circular=circular, units=units, is_complex=is_complex
+    )
+    bands = []
+    for mask, (low, high) in band_masks_and_bounds:
+        if frequency_reduction == "integral":
+            weights = _band_integration_weights(
+                frequencies, low, high, nyquist_frequency, kept
+            )
+            # Bins inside the band count for validity even with zero weight (a
+            # zero-width band), so an invalid bin is never read as zero.
+            used = np.flatnonzero((weights > 0) | mask)
+            bands.append(_BandBins(used, weights[used]))
+        else:
+            bands.append(_BandBins(np.flatnonzero(mask), None))
+    return _BandReducer(
+        bands=tuple(bands),
+        bounds=tuple(bounds for _, bounds in band_masks_and_bounds),
+        reduction=reduction,
+        n_frequencies=frequencies.size,
+    )
+
+
+def _requests_two_sided_density(settings: Mapping[str, Any]) -> bool:
+    """Whether measure ``settings`` ask ``power`` for its two-sided density.
+
+    ``one_sided=False`` (validated as a bool, so ``np.False_`` counts): a band
+    integral of that density at the non-negative frequencies is half the band
+    power.
+    """
+    return "one_sided" in settings and not _validated_flag("one_sided", settings["one_sided"])
+
+
+def _frequency_reduced_message(operation: str, methods: Sequence[str]) -> str:
+    """Why ``operation`` cannot act on ``methods``, which have no frequency axis.
+
+    The opening the wrappers and ``Connectivity.jackknife`` share; each adds
+    how to call it instead.
+    """
+    return (
+        f"{operation} cannot be applied to {_listed(methods)}: these measures "
+        "already reduce their frequency bins (every bin, or those of "
+        "frequency_range) to one value, while frequency_bands and "
+        "frequency_decimation act on the frequency axis of frequency-resolved "
+        "measures. To summarize several bands, call once per band with "
+        "frequency_range=(low, high)"
+    )
+
+
 def _reduce_frequency_bands(
     result: xr.DataArray | xr.Dataset,
     frequency_bands: Mapping[str, tuple[float, float]],
@@ -355,11 +461,6 @@ def _reduce_frequency_bands(
     if "frequency" not in result.dims:
         msg = "result must have a 'frequency' dimension."
         raise ValueError(msg)
-    frequencies = np.asarray(result.coords["frequency"].values)
-    band_masks_and_bounds = _band_masks(
-        frequencies, frequency_bands, frequency_reduction=frequency_reduction, kept=kept
-    )
-    band_names = list(frequency_bands)
     discarded = [
         name
         for name in ("band", "band_lower", "band_upper", "valid_time_band")
@@ -377,65 +478,70 @@ def _reduce_frequency_bands(
         # Discard them first: one left on a Dataset would take precedence over
         # the per-band coordinate of each reduced variable.
         result = result.drop_vars(discarded)
-    _require_integral_bin_widths(
-        frequency_reduction,
-        frequencies.size if kept is None else int(np.count_nonzero(kept[0])),
+    frequencies = np.asarray(result.coords["frequency"].values)
+    band_names = list(frequency_bands)
+    # Validates the request once, before any variable is reduced.
+    _band_masks(
+        frequencies, frequency_bands, frequency_reduction=frequency_reduction, kept=kept
     )
 
     def _reduce_dataarray(data: xr.DataArray) -> xr.DataArray:
         measure = str(data.attrs.get("measure", "" if data.name is None else data.name))
-        reduction = _band_reduction(
-            measure,
-            frequency_reduction,
-            circular=circular,
-            units=data.attrs.get("units"),
-            is_complex=np.iscomplexobj(data),
-        )
         recorded_nyquist = _recorded_nyquist_frequency(data.attrs)
-        variable_nyquist = nyquist_frequency if recorded_nyquist is None else recorded_nyquist
-        reduced_bands: list[xr.DataArray] = []
-        band_validity: list[xr.DataArray] = []
-        for bins, weights in _band_bins(
+        reducer = _band_reducer(
             frequencies,
-            band_masks_and_bounds,
+            frequency_bands,
             frequency_reduction=frequency_reduction,
-            nyquist_frequency=variable_nyquist,
+            measure=measure,
+            units=data.attrs.get("units"),
+            nyquist_frequency=nyquist_frequency
+            if recorded_nyquist is None
+            else recorded_nyquist,
+            circular=circular,
+            is_complex=np.iscomplexobj(data),
             kept=kept,
-        ):
-            selected = data.isel(frequency=bins)
-            reduced = selected.reduce(
-                _reduce_band,
-                dim="frequency",
-                keep_attrs=True,
-                reduction=reduction,
-                weights=weights,
-            )
-            reduced_bands.append(reduced)
-            if "valid_time_frequency" in selected.coords:
-                band_validity.append(selected.coords["valid_time_frequency"].all("frequency"))
-
+        )
         band = ("band", band_names, {"long_name": "Frequency band"})
-        reduced = xr.concat(reduced_bands, dim="band").assign_coords(band=band)
         units = {
             key: value
             for key, value in data.coords["frequency"].attrs.items()
             if key == "units"
         }
-        reduced = reduced.assign_coords(
+        reduced = xr.DataArray(
+            reducer(data.data, data.get_axis_num("frequency")),
+            dims=tuple(
+                "band" if dimension == "frequency" else dimension for dimension in data.dims
+            ),
+            coords={
+                name: coordinate
+                for name, coordinate in data.coords.items()
+                if "frequency" not in coordinate.dims
+            },
+            name=data.name,
+            attrs=dict(data.attrs),
+        ).assign_coords(
+            band=band,
             band_lower=(
                 "band",
-                [low for _, (low, _) in band_masks_and_bounds],
+                [low for low, _ in reducer.bounds],
                 {"long_name": "Lower edge of the frequency band", **units},
             ),
             band_upper=(
                 "band",
-                [high for _, (_, high) in band_masks_and_bounds],
+                [high for _, high in reducer.bounds],
                 {"long_name": "Upper edge of the frequency band", **units},
             ),
         )
-        if band_validity:
+        if "valid_time_frequency" in data.coords:
+            support = data.coords["valid_time_frequency"]
             reduced = reduced.assign_coords(
-                valid_time_band=xr.concat(band_validity, dim="band")
+                valid_time_band=xr.concat(
+                    [
+                        support.isel(frequency=bins).all("frequency")
+                        for bins, _ in reducer.bands
+                    ],
+                    dim="band",
+                )
                 # The same labeled band coordinate, so the merge keeps its attrs.
                 .assign_coords(band=band)
                 # Any surviving non-frequency axes (typically "time", but none
@@ -446,14 +552,7 @@ def _reduce_frequency_bands(
                     long_name="Every bin of the band has full wavelet and smoothing support"
                 )
             )
-        desired_dims = tuple(
-            "band" if dimension == "frequency" else dimension for dimension in data.dims
-        )
-        reduced = reduced.transpose(*desired_dims)
-        # xr.dot returns an unnamed array on older xarray (2023.1).
-        reduced.name = data.name
-        reduced.attrs = dict(data.attrs)
-        description = _BAND_VALUE_DESCRIPTIONS[reduction]
+        description = _BAND_VALUE_DESCRIPTIONS[reducer.reduction]
         if "interpretation" in reduced.attrs:
             reduced.attrs["interpretation"] = (
                 f"Each value is {description} of the per-frequency values. "
@@ -569,13 +668,8 @@ def _check_frequency_operations(
             if frequency_bands is not None
             else "frequency_decimation"
         )
-        msg = (
-            f"{operation} cannot be applied to {_listed(methods)}: these measures "
-            "already reduce their frequency bins (every bin, or those of "
-            "frequency_range) to one value, while frequency_bands and "
-            "frequency_decimation act on the frequency axis of frequency-resolved "
-            "measures. To summarize several bands, call once per band with "
-            "frequency_range=(low, high); to combine fewer, independent bins, pass "
+        msg = _frequency_reduced_message(operation, methods) + (
+            "; to combine fewer, independent bins, pass "
             "connectivity_kwargs={'frequency_resolution': ...}."
         )
         raise ValueError(msg)

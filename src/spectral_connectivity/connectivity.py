@@ -1,6 +1,7 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import contextlib
+import functools
 import inspect
 import math
 import re
@@ -83,6 +84,7 @@ from spectral_connectivity.utils import (
 )
 
 if TYPE_CHECKING:
+    from spectral_connectivity._frequency_bands import _BandReducer
     from spectral_connectivity.transforms import SpectralTransform
 
 logger = getLogger(__name__)
@@ -546,6 +548,11 @@ _NO_BAND_JACKKNIFE_ADVICE = (
     "without frequency_bands, and do not average those intervals or their "
     "replicates over a band."
 )
+
+
+def _unreduced(values: NDArray[np.floating]) -> NDArray[np.floating]:
+    """``jackknife``'s band reduction without ``frequency_bands``: none."""
+    return values
 
 
 def _refused_for_exact_spectrum(
@@ -3184,60 +3191,48 @@ class Connectivity:
             f"trials, and these data have {n_trials}. " + _SEGMENTS_ADVICE
         )
 
-    def _band_reducer(
+    def _jackknife_band_reducer(
         self,
         method: str,
         frequency_bands: Mapping[str, tuple[float, float]],
         frequency_reduction: str,
         method_kwargs: Mapping[str, Any],
-    ) -> Callable[[NDArray[np.floating]], NDArray[np.floating]]:
+    ) -> "_BandReducer":
         """Validate ``jackknife``'s band request and return its band reduction.
 
-        The request is checked as :func:`frequency_band_reduce` checks it
-        (bands, reduction, and which measures may be integrated), before any
-        measure is computed. The returned function replaces the frequency axis
-        of a result of ``method``, ``(..., n_nonnegative_frequencies, ...)``,
-        with a band axis, ``(..., n_bands, ...)``, in the mapping's order.
+        Checked before any measure is computed: the bands and the reduction
+        as :func:`frequency_band_reduce` checks them, and the measures it
+        cannot band-reduce. ``delay``'s grid is its ``frequency_range``, as
+        in the wrappers.
         """
         # These modules import this one, so their helpers are imported here.
         from spectral_connectivity._frequency_bands import (
-            _band_bins,
-            _band_masks,
-            _band_reduction,
+            _band_reducer,
+            _frequency_reduced_message,
             _nyquist_frequency,
-            _reduce_band,
-            _require_integral_bin_widths,
+            _requests_two_sided_density,
         )
         from spectral_connectivity._measure_registry import (
             _MEASURE_SPECS,
             _consumes_frequency_range,
+            _reduces_frequency,
         )
 
-        if _consumes_frequency_range(method):
-            msg = (
-                f"jackknife cannot reduce {method!r} to frequency_bands: bands act on "
-                f"frequency-resolved measures, and {method} already combines the "
-                "frequency bins of its frequency_range (phase_slope_index and "
-                "group_delay reduce them to one value)"
-            )
-            if method == "group_delay":
+        spec = _MEASURE_SPECS.get(method)
+        if _reduces_frequency(method):
+            msg = _frequency_reduced_message("frequency_bands", [method])
+            if spec is not None and spec.companions:
                 msg += (
-                    ", and returns a tuple (delay, slope, r_value), which jackknife "
-                    "does not resample."
+                    f"; but jackknife does not resample {method} in any case, "
+                    "since it returns several arrays."
                 )
             else:
                 msg += (
-                    ". For one interval per band, call jackknife once per band with "
-                    "frequency_range=(low, high) and without frequency_bands; "
-                    "leave_out='trial' (at least 3 trials) is the safer choice."
+                    ", in jackknife without frequency_bands; leave_out='trial' (at "
+                    "least 3 trials) is the safer choice."
                 )
             raise ValueError(msg)
-        frequencies = self.frequencies
-        band_masks_and_bounds = _band_masks(
-            frequencies, frequency_bands, frequency_reduction=frequency_reduction
-        )
-        _require_integral_bin_widths(frequency_reduction, frequencies.size)
-        if frequency_reduction == "integral" and method_kwargs.get("one_sided") is False:
+        if frequency_reduction == "integral" and _requests_two_sided_density(method_kwargs):
             msg = (
                 "frequency_reduction='integral' integrates the one-sided power "
                 "density, but one_sided=False makes power return the two-sided "
@@ -3245,56 +3240,44 @@ class Connectivity:
                 "the band power. Pass one_sided=True (or omit it)."
             )
             raise ValueError(msg)
-        spec = _MEASURE_SPECS.get(method)
-        reduction = _band_reduction(
-            method,
-            frequency_reduction,
-            circular=None,
-            units=None if spec is None else spec.units,
-            is_complex=False,
-        )
+        frequencies = self.frequencies
+        if _consumes_frequency_range(method):
+            frequencies = frequencies[
+                _select_measure_frequencies(
+                    frequencies,
+                    method_kwargs.get("frequency_range"),
+                    method_kwargs.get("frequencies_of_interest"),
+                ).mask
+            ]
         # A two-sided FFT grid has a Nyquist bin only for an even length; a
         # one-sided grid is read as frequency_band_reduce reads one without a
         # recorded Nyquist frequency.
         nyquist_frequency = (
-            _nyquist_frequency({}, frequencies)
+            _nyquist_frequency({}, self.frequencies)
             if self._is_one_sided
-            else (float(frequencies[-1]) if len(self._frequencies) % 2 == 0 else None)
+            else (float(self.frequencies[-1]) if len(self._frequencies) % 2 == 0 else None)
         )
-        bands = _band_bins(
+        return _band_reducer(
             frequencies,
-            band_masks_and_bounds,
+            frequency_bands,
             frequency_reduction=frequency_reduction,
+            measure=method,
+            units=None if spec is None else spec.units,
             nyquist_frequency=nyquist_frequency,
         )
-        # The kept observation axes lead every measure's result.
-        frequency_axis = len(self._kept_observation_axes)
 
-        def reduce_to_bands(values: NDArray[np.floating]) -> NDArray[np.floating]:
-            if values.ndim <= frequency_axis or values.shape[frequency_axis] != len(
-                frequencies
-            ):
-                msg = (
-                    f"jackknife cannot reduce {method!r} to frequency_bands: its "
-                    f"result, of shape {values.shape}, has no axis of the "
-                    f"{len(frequencies)} non-negative frequencies at position "
-                    f"{frequency_axis}."
-                )
-                raise ValueError(msg)
-            return np.stack(
-                [
-                    _reduce_band(
-                        np.take(values, bins, axis=frequency_axis),
-                        frequency_axis,
-                        reduction=reduction,
-                        weights=weights,
-                    )
-                    for bins, weights in bands
-                ],
-                axis=frequency_axis,
-            )
+    def _frequency_axis(self, method: str, ndim: int) -> int | None:
+        """The frequency axis of ``method``'s ``ndim``-dimensional result.
 
-        return reduce_to_bands
+        ``None`` for a registered measure without one (it reduces the bins of
+        its ``frequency_range``); otherwise its axis among the registry's
+        dimensions (see :meth:`_result_dims`), or, for an unregistered
+        measure, the axis after the kept observation axes.
+        """
+        dims = self._result_dims(method, ndim)
+        if dims is None:
+            return len(self._kept_observation_axes)
+        return dims.index("frequency") if "frequency" in dims else None
 
     @_refused_for_exact_spectrum("sampling_error")
     def jackknife(
@@ -3592,10 +3575,10 @@ class Connectivity:
             )
             raise ValueError(msg)
         method, measure = self._resampled_measure(method, "jackknife")
-        reduce_to_bands = (
+        band_reducer = (
             None
             if frequency_bands is None
-            else self._band_reducer(
+            else self._jackknife_band_reducer(
                 method, frequency_bands, frequency_reduction, method_kwargs
             )
         )
@@ -3684,8 +3667,22 @@ class Connectivity:
                 "pairwise measure; group measures are not resampled yet."
             ),
         )
-        if reduce_to_bands is not None:
-            full_estimate = reduce_to_bands(full_estimate)
+        reduce_to_bands: Callable[[NDArray[np.floating]], NDArray[np.floating]] = _unreduced
+        if band_reducer is not None:
+            frequency_axis = self._frequency_axis(method, full_estimate.ndim)
+            if (
+                frequency_axis is None
+                or full_estimate.shape[frequency_axis] != band_reducer.n_frequencies
+            ):
+                msg = (
+                    f"jackknife cannot reduce {method!r} to frequency_bands: its "
+                    f"result, of shape {full_estimate.shape}, has no axis of its "
+                    f"{band_reducer.n_frequencies} frequencies at position "
+                    f"{frequency_axis}."
+                )
+                raise ValueError(msg)
+            reduce_to_bands = functools.partial(band_reducer, axis=frequency_axis)
+        full_estimate = reduce_to_bands(full_estimate)
 
         observation_weights = self._observation_weights
         observation_coefficients = coefficients
@@ -3781,10 +3778,7 @@ class Connectivity:
                 if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
                     msg = f"jackknife requires a real array result from {method!r}."
                     raise TypeError(msg)
-                replicate = np.asarray(replicate)
-                replicates.append(
-                    replicate if reduce_to_bands is None else reduce_to_bands(replicate)
-                )
+                replicates.append(reduce_to_bands(np.asarray(replicate)))
         finally:
             _emit_migration_notices.reset(token)
 
@@ -4688,13 +4682,9 @@ class Connectivity:
         # frequency_range. Otherwise the frequency axis follows the kept
         # observation axes; an unregistered measure is taken to have it there
         # if its length is right.
-        dims = self._result_dims(method, estimate.ndim)
-        band_summed = dims is not None and "frequency" not in dims
-        frequency_axis = (
-            dims.index("frequency")
-            if dims is not None and not band_summed
-            else len(self._kept_observation_axes)
-        )
+        located = self._frequency_axis(method, estimate.ndim)
+        band_summed = located is None
+        frequency_axis = len(self._kept_observation_axes) if located is None else located
         per_frequency = (
             not band_summed
             and estimate.ndim >= frequency_axis + 3

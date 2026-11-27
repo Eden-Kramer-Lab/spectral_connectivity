@@ -19,7 +19,9 @@ from spectral_connectivity import (
     Multitaper,
     Welch,
     frequency_band_reduce,
+    multitaper_connectivity,
 )
+from spectral_connectivity.connectivity import _select_measure_frequencies
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.statistics import JackknifeResult, jackknife_confidence_interval
 from tests._backend_helpers import to_host
@@ -509,8 +511,7 @@ def test_two_trials_have_no_band_jackknife(time_series):
     [
         ("magnitude_squared_coherenc", _BANDS, "mean", "is not a connectivity measure"),
         ("phase_slope_index", _BANDS, "mean", "once per band with frequency_range"),
-        ("delay", _BANDS, "mean", "once per band with frequency_range"),
-        ("group_delay", _BANDS, "mean", "returns a tuple"),
+        ("group_delay", _BANDS, "mean", "does not resample group_delay"),
         ("magnitude_squared_coherence", _BANDS, "integral", "defined only for power"),
         (
             "magnitude_squared_coherence",
@@ -519,7 +520,7 @@ def test_two_trials_have_no_band_jackknife(time_series):
             "contains no frequency bin",
         ),
     ],
-    ids=["misspelled", "phase_slope_index", "delay", "group_delay", "integral", "empty_band"],
+    ids=["misspelled", "phase_slope_index", "group_delay", "integral", "empty_band"],
 )
 def test_the_method_and_bands_are_checked_before_the_taper_refusal(
     time_series, monkeypatch, method, frequency_bands, frequency_reduction, match
@@ -535,7 +536,8 @@ def test_the_method_and_bands_are_checked_before_the_taper_refusal(
         )
 
 
-def test_a_two_sided_band_integral_is_refused(time_series):
+@pytest.mark.parametrize("one_sided", [False, np.False_])
+def test_a_two_sided_band_integral_is_refused(time_series, one_sided):
     """Integrating power(one_sided=False) would give half the band power."""
     _, connectivity = _connectivity(time_series)
     kwargs = {
@@ -544,7 +546,7 @@ def test_a_two_sided_band_integral_is_refused(time_series):
         "frequency_reduction": "integral",
     }
     with pytest.raises(ValueError, match="Pass one_sided=True"):
-        connectivity.jackknife("power", one_sided=False, **kwargs)
+        connectivity.jackknife("power", one_sided=one_sided, **kwargs)
     np.testing.assert_array_equal(
         connectivity.jackknife("power", one_sided=True, **kwargs).estimate,
         _band_reduced(connectivity, "power", "integral"),
@@ -762,6 +764,57 @@ def test_welch_segment_band_intervals_cover(segment_overlap, allowance):
     )
     assert result.n_observations == welch.n_segments
     assert abs(coverage - 0.95) <= limit + allowance, coverage
+
+
+def test_delay_bands_are_bands_of_its_frequency_range():
+    """``delay`` is frequency-resolved over the bins of its ``frequency_range``,
+    which the bands select from, as in the wrappers: the band jackknife's
+    estimate is the wrapper's band value, and each replicate the band value of
+    the data without one trial."""
+    rng = np.random.default_rng(0)
+    leader = rng.standard_normal((503, 6))
+    signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # signal 1 lags by 3 samples
+    signals += 0.5 * rng.standard_normal(signals.shape)
+    bands = {"low": (10, 20), "high": (30, 40)}
+    kwargs = {"frequency_range": (5, 50)}
+
+    def connectivity(data):
+        return Connectivity.from_transform(Multitaper(data, sampling_frequency=500))
+
+    result = connectivity(signals).jackknife(
+        "delay", leave_out="trial", frequency_bands=bands, keep_replicates=True, **kwargs
+    )
+
+    labeled = multitaper_connectivity(
+        signals, sampling_frequency=500, method="delay", frequency_bands=bands, **kwargs
+    )
+    np.testing.assert_allclose(
+        result.estimate,
+        labeled.transpose("time", "band", ...).values,
+        rtol=1e-12,
+        equal_nan=True,
+    )
+    assert np.isfinite(result.estimate[0, :, 3, 0, 1]).all()  # the zero-wrap candidate
+
+    def band_values(data):
+        full = connectivity(data)
+        selection = _select_measure_frequencies(full.frequencies, (5, 50), None)
+        return frequency_band_reduce(
+            xr.DataArray(
+                full.delay(**kwargs),
+                dims=("time", "frequency", "candidate", "source", "target"),
+                coords={"frequency": full.frequencies[selection.mask]},
+                attrs={"measure": "delay"},
+            ),
+            bands,
+        ).values
+
+    np.testing.assert_allclose(
+        result.replicates,
+        np.stack([band_values(np.delete(signals, k, axis=1)) for k in range(6)]),
+        rtol=1e-12,
+        equal_nan=True,
+    )
 
 
 def test_an_exact_spectrum_is_refused_first():
