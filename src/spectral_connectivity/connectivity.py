@@ -531,6 +531,15 @@ def _exact_spectrum_refusal_message(method: str, reason: _ExactSpectrumRefusal) 
     )
 
 
+# What jackknife says when only tapers could be left out for frequency_bands.
+_NO_BAND_JACKKNIFE_ADVICE = (
+    "A band statistic of tapers of the same samples has no valid jackknife with "
+    "fewer than 3 trials: collect at least 3 trials, or jackknife each frequency "
+    "without frequency_bands, and do not average those intervals or their "
+    "replicates over a band."
+)
+
+
 def _refused_for_exact_spectrum(
     reason: _ExactSpectrumRefusal,
 ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
@@ -3085,40 +3094,49 @@ class Connectivity:
         )
         raise ValueError(msg)
 
+    def _units_are_tapers(self, leave_out: str) -> bool:
+        """Whether ``jackknife(leave_out=...)`` leaves out tapers of the same samples.
+
+        Leaving out an observation of ``"tapers"``, or of ``"trials_tapers"``
+        with more than one taper per trial, leaves out one taper of a trial's
+        window; ``"trials"`` and one taper per trial leave out whole trials.
+        """
+        if leave_out != "observation":
+            return False
+        if self.expectation_type == "tapers":
+            return True
+        return (
+            self.expectation_type == "trials_tapers"
+            and self._fourier_coefficients.shape[2] > 1
+        )
+
     def _band_taper_jackknife_message(self, n_trials: int) -> str:
         """Why ``jackknife`` refuses to leave out tapers for ``frequency_bands``."""
-        units = (
-            "one taper of one trial"
-            if self.expectation_type == "tapers"
-            else "one trial-taper observation"
-        )
         msg = (
-            f"jackknife(frequency_bands=...) with leave_out='observation' and "
-            f"expectation_type={self.expectation_type!r} leaves out {units} at "
-            "a time, but the DPSS tapers' coefficients, uncorrelated at one "
-            "frequency, are correlated at frequencies within their bandwidth, so "
-            "leave-one-taper-out replicates of a statistic over several "
-            "frequencies are not independent and its interval is too narrow (a "
-            "nominal 95% interval covered 43-81% of band means and band maxima "
-            "in simulation). "
+            "jackknife(frequency_bands=...) cannot leave out one taper at a time "
+            "(leave_out='observation' with "
+            f"expectation_type={self.expectation_type!r}): a taper's Fourier "
+            "coefficients are correlated with the other tapers' across the "
+            "frequencies of a band, so the replicates are not independent and the "
+            "band interval is too narrow (a nominal 95% interval covered 43-81% in "
+            "simulation). "
         )
         if n_trials < 3:
             return msg + (
-                "Leaving out whole trials (leave_out='trial') is valid but needs at "
-                f"least 3 trials, and these data have {n_trials}, so there is no "
-                "valid jackknife for a band statistic on these data. Collect at "
-                "least 3 trials, or jackknife each frequency (without "
-                "frequency_bands), for which leaving out tapers is valid."
+                "Leaving out whole trials (leave_out='trial') needs at least 3, and "
+                f"these data have {n_trials}. " + _NO_BAND_JACKKNIFE_ADVICE
             )
-        how = (
-            "Pass leave_out='trial'"
-            if self.expectation_type == "trials_tapers"
-            else "Build the Connectivity with expectation_type='trials_tapers' and "
-            "pass leave_out='trial'"
-        )
+        if self.expectation_type == "trials_tapers":
+            how = "Pass leave_out='trial'"
+        else:
+            how = (
+                "Build the Connectivity with expectation_type='trials_tapers' "
+                "(which averages the trials into one estimate; per-trial band "
+                "intervals have no valid jackknife) and pass leave_out='trial'"
+            )
         return msg + (
-            f"{how}, which leaves out one whole trial at a time (all its tapers "
-            f"together) and needs at least 3 trials; these data have {n_trials}."
+            f"{how} to leave out one whole trial at a time; it needs at least 3 "
+            f"trials, and these data have {n_trials}."
         )
 
     def _band_reducer(
@@ -3126,6 +3144,7 @@ class Connectivity:
         method: str,
         frequency_bands: Mapping[str, tuple[float, float]],
         frequency_reduction: str,
+        method_kwargs: Mapping[str, Any],
     ) -> Callable[[NDArray[np.floating]], NDArray[np.floating]]:
         """Validate ``jackknife``'s band request and return its band reduction.
 
@@ -3151,18 +3170,36 @@ class Connectivity:
 
         if _consumes_frequency_range(method):
             msg = (
-                f"jackknife cannot reduce {method!r} to frequency_bands: it selects "
-                "its own frequency bins with frequency_range, so its result is not "
-                "on the frequency grid the bands select from. To restrict it to "
-                "one band, pass frequency_range=(low, high) without "
-                "frequency_bands; jackknife forwards it to the measure."
+                f"jackknife cannot reduce {method!r} to frequency_bands: bands act on "
+                f"frequency-resolved measures, and {method} already combines the "
+                "frequency bins of its frequency_range (phase_slope_index and "
+                "group_delay reduce them to one value)"
             )
+            if method == "group_delay":
+                msg += (
+                    ", and returns a tuple (delay, slope, r_value), which jackknife "
+                    "does not resample."
+                )
+            else:
+                msg += (
+                    ". For one interval per band, call jackknife once per band with "
+                    "frequency_range=(low, high) and without frequency_bands; "
+                    "leave_out='trial' (at least 3 trials) is the safer choice."
+                )
             raise ValueError(msg)
         frequencies = self.frequencies
         band_masks_and_bounds = _band_masks(
             frequencies, frequency_bands, frequency_reduction=frequency_reduction
         )
         _require_integral_bin_widths(frequency_reduction, frequencies.size)
+        if frequency_reduction == "integral" and method_kwargs.get("one_sided") is False:
+            msg = (
+                "frequency_reduction='integral' integrates the one-sided power "
+                "density, but one_sided=False makes power return the two-sided "
+                "density at the non-negative frequencies, whose integral is half "
+                "the band power. Pass one_sided=True (or omit it)."
+            )
+            raise ValueError(msg)
         spec = _MEASURE_SPECS.get(method)
         reduction = _band_reduction(
             method,
@@ -3342,16 +3379,19 @@ class Connectivity:
             ``"trial"``, or is ``"trial"`` with an expectation that does not
             average trials or with fewer than 3 trials.
 
-            With ``frequency_bands``: if ``leave_out="observation"`` leaves
-            out tapers (``expectation_type="tapers"``, or ``"trials_tapers"``
-            with more than one taper per trial), since the interval would be
-            too narrow (see Notes); for the bands and reductions
+            With ``frequency_bands``, in this order after ``method`` is
+            checked: for the bands and reductions
             :func:`~spectral_connectivity.frequency_band_reduce` refuses (a
             band containing no bin, ``"integral"`` of a measure other than
-            ``power``); and for a measure that selects its own bins with
-            ``frequency_range`` (``delay``, ``group_delay``,
-            ``phase_slope_index``). All are raised before any measure is
-            computed.
+            ``power``), and ``"integral"`` with ``one_sided=False``, which
+            would give half the band power; for a measure that combines the
+            bins of its own ``frequency_range`` (``delay``, ``group_delay``,
+            ``phase_slope_index``: call it once per band with
+            ``frequency_range=(low, high)`` instead); and if
+            ``leave_out="observation"`` leaves out tapers
+            (``expectation_type="tapers"``, or ``"trials_tapers"`` with more
+            than one taper per trial), since the interval would be too narrow
+            (see Notes). All are raised before any measure is computed.
 
         Notes
         -----
@@ -3476,6 +3516,14 @@ class Connectivity:
                 "out, or keep leave_out='observation' to leave out one taper."
             )
             raise ValueError(msg)
+        method, measure = self._resampled_measure(method, "jackknife")
+        reduce_to_bands = (
+            None
+            if frequency_bands is None
+            else self._band_reducer(
+                method, frequency_bands, frequency_reduction, method_kwargs
+            )
+        )
         coefficients = self._fourier_coefficients
         n_trials = coefficients.shape[1]
         # Each replicate leaves out one index of ``observation_axis``; for one
@@ -3518,16 +3566,8 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
-        if (
-            frequency_bands is not None
-            and leave_out == "observation"
-            and (
-                self.expectation_type == "tapers"
-                or (self.expectation_type == "trials_tapers" and coefficients.shape[2] > 1)
-            )
-        ):
+        if frequency_bands is not None and self._units_are_tapers(leave_out):
             raise ValueError(self._band_taper_jackknife_message(n_trials))
-        method, measure = self._resampled_measure(method, "jackknife")
 
         if n_observations < 3:
             if leave_out == "trial":
@@ -3537,7 +3577,9 @@ class Connectivity:
                     "of freedom, so 2 trials give a critical value near 13 and 1 "
                     "trial gives none."
                 )
-                if (
+                if frequency_bands is not None and self._units_are_tapers("observation"):
+                    msg += " " + _NO_BAND_JACKKNIFE_ADVICE
+                elif (
                     self.expectation_type == "trials_tapers"
                     and self._observations_are_independent
                 ):
@@ -3557,11 +3599,6 @@ class Connectivity:
                     "coherence default)."
                 )
             raise ValueError(msg)
-        reduce_to_bands = (
-            None
-            if frequency_bands is None
-            else self._band_reducer(method, frequency_bands, frequency_reduction)
-        )
 
         full_estimate = _real_array_result(
             measure(**method_kwargs),

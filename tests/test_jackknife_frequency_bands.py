@@ -85,6 +85,17 @@ def _band_reduced(connectivity, method, frequency_reduction):
     ).values
 
 
+def _refuse_computing(monkeypatch, method):
+    """Make ``Connectivity.<method>`` fail if a check lets it be computed."""
+
+    def not_computed(self, *args, **kwargs):
+        msg = "the measure was computed before the refusal"
+        raise AssertionError(msg)
+
+    if hasattr(Connectivity, method):
+        monkeypatch.setattr(Connectivity, method, not_computed)
+
+
 def _without_trial(time_series, trial):
     return _connectivity(np.delete(time_series, trial, axis=1))[1]
 
@@ -261,26 +272,83 @@ def test_bands_refuse_leaving_out_tapers(time_series, monkeypatch, expectation_t
     multitaper, _ = _connectivity(time_series[:, :n_trials])
     connectivity = Connectivity.from_transform(multitaper, expectation_type=expectation_type)
 
-    def not_computed(self, *args, **kwargs):
-        msg = "the measure was computed before the refusal"
-        raise AssertionError(msg)
-
-    monkeypatch.setattr(Connectivity, "magnitude_squared_coherence", not_computed)
+    _refuse_computing(monkeypatch, "magnitude_squared_coherence")
     with pytest.raises(ValueError, match=r"^jackknife\(frequency_bands=\.\.\.\)") as error:
         connectivity.jackknife("magnitude_squared_coherence", frequency_bands=_BANDS)
 
     message = str(error.value)
-    assert "correlated at frequencies within their bandwidth" in message
+    assert "cannot leave out one taper at a time" in message
+    assert "correlated with the other tapers' across the frequencies of a band" in message
     assert "43-81%" in message
+    assert f"these data have {n_trials}" in message
     if n_trials < 3:
-        assert "no valid jackknife for a band statistic on these data" in message
-        assert f"these data have {n_trials}" in message
+        assert "has no valid jackknife with fewer than 3 trials" in message
+        assert "do not average those intervals or their replicates over a band" in message
     else:
-        assert "leave_out='trial'" in message
+        assert "Pass leave_out='trial'" in message or "pass leave_out='trial'" in message
         assert "at least 3 trials" in message
-        assert ("Build the Connectivity with expectation_type='trials_tapers'" in message) == (
+        assert ("per-trial band intervals have no valid jackknife" in message) == (
             expectation_type == "tapers"
         )
+
+
+def test_two_trials_have_no_band_jackknife(time_series):
+    """With 2 trials, leaving out trials is refused for bands with advice that
+    does not point back to leaving out tapers."""
+    _, connectivity = _connectivity(time_series[:, :2])
+    with pytest.raises(ValueError, match="requires at least 3 trials") as error:
+        connectivity.jackknife(
+            "magnitude_squared_coherence", leave_out="trial", frequency_bands=_BANDS
+        )
+    assert "has no valid jackknife with fewer than 3 trials" in str(error.value)
+    assert "Keep leave_out='observation'" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("method", "frequency_bands", "frequency_reduction", "match"),
+    [
+        ("magnitude_squared_coherenc", _BANDS, "mean", "is not a connectivity measure"),
+        ("phase_slope_index", _BANDS, "mean", "once per band with frequency_range"),
+        ("delay", _BANDS, "mean", "once per band with frequency_range"),
+        ("group_delay", _BANDS, "mean", "returns a tuple"),
+        ("magnitude_squared_coherence", _BANDS, "integral", "defined only for power"),
+        (
+            "magnitude_squared_coherence",
+            {"x": (4.1, 4.2)},
+            "mean",
+            "contains no frequency bin",
+        ),
+    ],
+    ids=["misspelled", "phase_slope_index", "delay", "group_delay", "integral", "empty_band"],
+)
+def test_the_method_and_bands_are_checked_before_the_taper_refusal(
+    time_series, monkeypatch, method, frequency_bands, frequency_reduction, match
+):
+    """A request that fails for its method or bands says so, rather than
+    giving the taper refusal (default leave_out), whose advice would not help;
+    nothing is computed first."""
+    _, connectivity = _connectivity(time_series)
+    _refuse_computing(monkeypatch, method)
+    with pytest.raises(ValueError, match=match):
+        connectivity.jackknife(
+            method, frequency_bands=frequency_bands, frequency_reduction=frequency_reduction
+        )
+
+
+def test_a_two_sided_band_integral_is_refused(time_series):
+    """Integrating power(one_sided=False) would give half the band power."""
+    _, connectivity = _connectivity(time_series)
+    kwargs = {
+        "leave_out": "trial",
+        "frequency_bands": _BANDS,
+        "frequency_reduction": "integral",
+    }
+    with pytest.raises(ValueError, match="Pass one_sided=True"):
+        connectivity.jackknife("power", one_sided=False, **kwargs)
+    np.testing.assert_array_equal(
+        connectivity.jackknife("power", one_sided=True, **kwargs).estimate,
+        _band_reduced(connectivity, "power", "integral"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -344,11 +412,7 @@ def test_invalid_band_requests_raise_the_band_reduction_errors(
     _, connectivity = _connectivity(time_series)
     expected = _band_reduce_error(connectivity, frequency_bands, frequency_reduction, method)
 
-    def not_computed(self, *args, **kwargs):
-        msg = "the measure was computed before the refusal"
-        raise AssertionError(msg)
-
-    monkeypatch.setattr(Connectivity, method, not_computed)
+    _refuse_computing(monkeypatch, method)
     with pytest.raises(ValueError, match=f"^{re.escape(expected)}$"):
         connectivity.jackknife(
             method,
@@ -356,14 +420,6 @@ def test_invalid_band_requests_raise_the_band_reduction_errors(
             frequency_bands=frequency_bands,
             frequency_reduction=frequency_reduction,
         )
-
-
-def test_bands_refuse_a_measure_that_selects_its_own_bins(time_series):
-    _, connectivity = _connectivity(time_series)
-    with pytest.raises(
-        ValueError, match="selects its own frequency bins with frequency_range"
-    ):
-        connectivity.jackknife("phase_slope_index", leave_out="trial", frequency_bands=_BANDS)
 
 
 def test_an_exact_spectrum_is_refused_first():
