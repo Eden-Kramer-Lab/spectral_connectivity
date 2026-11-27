@@ -52,9 +52,11 @@ __all__ = [
 class JackknifeResult:
     """Leave-one-observation-out estimate and Student-t jackknife interval.
 
-    Every array attribute has the shape of the underlying measure, e.g.
-    ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)`` for a pairwise
-    connectivity measure.
+    Every array attribute but ``replicates`` has the shape of the underlying
+    measure, e.g. ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)``
+    for a pairwise connectivity measure, or ``(n_time, n_bands, n_signals,
+    n_signals)`` when :meth:`Connectivity.jackknife` reduces it to
+    ``frequency_bands``.
 
     Attributes
     ----------
@@ -87,6 +89,29 @@ class JackknifeResult:
         that broadcasts against the estimate.
     transformation : str
         Variance-stabilizing transformation used for the interval.
+    replicates : array, shape (n_replicates, *estimate.shape)
+        The leave-one-out replicates the interval summarizes, on the scale of
+        ``estimate`` (untransformed), one per left-out unit on the first axis.
+        From :meth:`Connectivity.jackknife`, one per observation
+        (``leave_out="observation"``; for ``trials_tapers``, observation ``k``
+        is trial ``k // n_tapers``, taper ``k % n_tapers``) or per trial
+        (``leave_out="trial"``), in order, without the units that observation
+        weights drop from every bin; with ``frequency_bands`` each replicate is
+        band-reduced. A replicate is NaN in a bin that never had the unit it
+        leaves out (see ``Connectivity.n_valid_observations``), since leaving
+        that unit out removes nothing there. From
+        :func:`jackknife_confidence_interval`, ``leave_one_out`` itself (not a
+        copy).
+
+        For an interval on another statistic of the measure (a difference
+        between bands, a ratio of two pairs), compute it from ``estimate``
+        and from each replicate and pass both to
+        :func:`jackknife_confidence_interval`. A statistic that combines
+        several frequencies needs replicates from ``leave_out="trial"``: the
+        DPSS tapers of one trial are uncorrelated at a frequency but correlated
+        at frequencies within their bandwidth, so leave-one-taper-out
+        replicates of such a statistic give too narrow an interval (see
+        :meth:`Connectivity.jackknife`).
     """
 
     estimate: NDArray[np.floating]
@@ -95,6 +120,7 @@ class JackknifeResult:
     confidence_interval: tuple[NDArray[np.floating], NDArray[np.floating]]
     n_observations: int | NDArray[np.integer]
     transformation: str
+    replicates: NDArray[np.floating]
 
 
 @dataclass(frozen=True)
@@ -413,6 +439,7 @@ def jackknife_confidence_interval(
         Estimate, bias-corrected estimate, standard error, and confidence
         bounds, all on the original scale and with the shape of ``estimate``.
         The standard error is converted back with the local delta method.
+        ``replicates`` is ``leave_one_out``.
 
     Notes
     -----
@@ -575,6 +602,7 @@ def jackknife_confidence_interval(
         confidence_interval=(lower, upper),
         n_observations=counts,
         transformation=transformation,
+        replicates=replicates,
     )
 
 

@@ -3473,6 +3473,7 @@ class Connectivity:
                 resolved_transformation = "identity"
         else:
             resolved_transformation = transformation
+        leave_one_out = np.stack(replicates, axis=0)
         replicate_is_valid = None
         if unit_is_valid is not None and not unit_is_valid[omitted_units].all():
             # Each bin's replicates lead the measure's own axes.
@@ -3484,6 +3485,8 @@ class Connectivity:
                     *(1,) * (full_estimate.ndim - len(kept_shape)),
                 )
             )
+            # Leaving out a unit a bin never had gives no replicate there.
+            leave_one_out[~np.broadcast_to(replicate_is_valid, leave_one_out.shape)] = np.nan
             too_few = unit_is_valid.sum(axis=0) < 3
             if too_few.any():
                 warnings.warn(
@@ -3500,7 +3503,7 @@ class Connectivity:
                 )
         result = jackknife_confidence_interval(
             full_estimate,
-            np.stack(replicates, axis=0),
+            leave_one_out,
             confidence_level=confidence_level,
             transformation=resolved_transformation,
             # PLV's diagonal is 1 by definition, not a saturated estimate.
