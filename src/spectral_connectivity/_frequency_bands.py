@@ -290,16 +290,15 @@ def _reduce_band(
         NaN: skipping it would reduce a different set of bins at each
         position.
     """
+    # A NaN bin propagates through each reduction.
     if weights is not None:
         # The contraction ``xarray.dot`` makes, so labeled and array results agree.
-        reduced = np.einsum("...a,...a->...", np.moveaxis(values, axis, -1), weights)
-    elif reduction == "circular_mean":
+        return np.einsum("...a,...a->...", np.moveaxis(values, axis, -1), weights)
+    if reduction == "circular_mean":
         # The angle of the mean unit phasor: phases near -pi and +pi do not
         # cancel toward 0.
-        reduced = np.angle(np.mean(np.exp(1j * values), axis=axis))
-    else:
-        reduced = np.mean(values, axis=axis)
-    return np.where(np.all(~np.isnan(values), axis=axis), reduced, np.nan)
+        return np.angle(np.mean(np.exp(1j * values), axis=axis))
+    return np.mean(values, axis=axis)
 
 
 @dataclass(frozen=True)
