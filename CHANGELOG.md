@@ -96,6 +96,16 @@ The migration guide for code written against 2.x is
   the time-reversed data (the transposed cross-spectral matrix), the
   counterparts of `time_reversed_spectral_granger_prediction` for checking
   whether a direction reverses under time reversal (Winkler et al., 2016).
+- `partial_coherence(shrinkage=...)` shrinks each cross-spectral matrix
+  toward its diagonal before inverting it, multiplying every coherency by
+  `1 - lambda`: a fixed `lambda` in [0, 1], or `"auto"`, the analytic
+  intensity of Ledoit and Wolf for Schäfer and Strimmer's correlation-scale
+  diagonal target, estimated for each time window and frequency.
+  `Connectivity.partial_coherence_shrinkage()` returns those intensities, for
+  reporting. The default, `None`, does not shrink; the wrappers take it in
+  `connectivity_kwargs`. Use `"auto"` with at most about 2.5 trials x tapers
+  per signal; with more it can raise the error (see the `partial_coherence`
+  Notes).
 - `adjust_for_multiple_comparisons(..., axis=...)`: the axes whose tests form
   one family, as in `scipy.stats.false_discovery_control`, so each slice
   along the other axes (each time window, say) is corrected on its own. The
@@ -1266,6 +1276,20 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   tolerance.
 - *Unreleased:* Subset spectral Granger restores `NaN` on the global
   self-Granger diagonal.
+- *Unreleased:* `partial_coherence` loads each signal's power by
+  `regularization` times itself before inverting, instead of every signal by
+  `regularization` times the matrix's RMS entry, which perturbed a signal far
+  weaker than the others by far more than `regularization` of its own size.
+  It inverts the coherency matrix, so it is invariant under rescaling the
+  signals to rounding; before, signal amplitudes
+  from 1e-6 to 1e6 moved the default result by up to 0.98 from that of the
+  same data at one scale (simulated dense 8-signal VARs with 10 to 100
+  observations). For signals of comparable power the default result changed
+  by about 1e-11 or less; with fewer observations than signals, where it
+  warns, the loading sets the estimate and it changed by up to 0.45. There,
+  without shrinkage, the estimate is sensitive to rounding (perturbing the
+  data by one unit in the last place moved it by up to 4e-4), and rescaling
+  moves it by about as much.
 - Wilson initialization and solves isolate rank-deficient sub-spectra instead of
   poisoning a whole batch. A unit whose Cholesky start fails starts from the
   Cholesky factor of `n_signals * I`, which is deterministic; healthy units

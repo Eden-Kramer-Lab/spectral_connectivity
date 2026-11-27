@@ -145,6 +145,10 @@ Prefer the wrapper's labeled results so you never index these by hand.
   For a two-sided spectrum
   (`Connectivity.power(one_sided=False)`; the wrappers do not return one) pass
   `is_one_sided=False`. Omitting the keyword warns and assumes one-sided.
+- **Partial coherence with few trials.** With at most about 2.5 trials x
+  tapers per signal pass `connectivity_kwargs={"shrinkage": "auto"}` and
+  report `Connectivity.partial_coherence_shrinkage()`, which the wrapper does
+  not return; with more, leave `shrinkage` unset.
 - **Group measures need labels.** Pass `group_labels=...` (one label per
   signal, e.g. `["CA1", "CA1", "PFC"]`) directly to `multitaper_connectivity`
   or `fourier_connectivity` for `canonical_coherence`,

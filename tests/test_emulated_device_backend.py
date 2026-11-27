@@ -521,6 +521,33 @@ def test_weighted_phase_lag_family_runs_on_the_device(xp, monkeypatch):
         np.testing.assert_allclose(on_device[measure], getattr(host, measure)(), rtol=1e-12)
 
 
+def test_partial_coherence_shrinkage_runs_on_the_device(xp, monkeypatch):
+    """The ``"auto"`` intensity (one observation layout, a real and a complex
+    matmul, the in-place conjugate, uniform weights) and the shrunk inverse run
+    on device arrays and match the host result."""
+    rng = np.random.default_rng(11)
+    coefficients = _coefficients(rng, shape=(2, 6, 2, 16, 4))
+    weights = np.full((2, 6, 2, 16, 1), 0.5)
+
+    def run(asarray):
+        connectivity = Connectivity(
+            asarray(coefficients),
+            expectation_type="time_tapers",
+            observation_weights=asarray(weights),
+        )
+        return (
+            connectivity.partial_coherence_shrinkage(),
+            connectivity.partial_coherence(shrinkage="auto"),
+            connectivity.partial_coherence(shrinkage=0.3),
+        )
+
+    on_device = run(xp.asarray)
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    for actual, reference in zip(on_device, run(np.asarray), strict=True):
+        assert isinstance(actual, np.ndarray)
+        np.testing.assert_allclose(actual, reference, rtol=1e-12, equal_nan=True)
+
+
 def test_fourier_connectivity_accepts_device_frequencies_and_time(xp, monkeypatch):
     """On the GPU, ``Multitaper.frequencies`` and ``.time`` are device arrays;
     passing them straight to ``fourier_connectivity`` must not convert them

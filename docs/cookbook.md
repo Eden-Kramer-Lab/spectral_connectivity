@@ -679,6 +679,41 @@ the estimator of Purdon et al. (2013): it takes the mean over windows, not the
 median; it decomposes the raw cross-spectrum, with no Laplacian unless you
 re-reference the signals first; and it returns no significance test.
 
+## Partial coherence with many signals and few trials
+
+Partial coherence conditions each pair on every other signal, so it needs
+several times as many observations (trials x tapers) as signals. With at most
+about 2.5 per signal, shrink toward the diagonal: `"auto"` estimates the
+intensity for each time window and frequency. The result records the setting,
+not the intensities; compute those from the same transform to report them.
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> rng = np.random.default_rng(1)
+>>> recording = rng.standard_normal((1000, 4, 16))  # (time, trials, signals)
+>>> recording[..., 1:] += 0.5 * recording[..., :-1]  # neighbors share a source
+>>> partial = multitaper_connectivity(
+...     recording,
+...     sampling_frequency=500,
+...     time_halfbandwidth_product=3,
+...     method="partial_coherence",
+...     connectivity_kwargs={"shrinkage": "auto"},
+... )
+>>> partial.attrs["n_observations"], partial.attrs["arg_shrinkage"]  # 4 trials x 5 tapers
+(20, 'auto')
+>>> transform = Multitaper(recording, sampling_frequency=500, time_halfbandwidth_product=3)
+>>> intensity = Connectivity.from_transform(transform).partial_coherence_shrinkage()
+>>> intensity.shape  # (n_time_windows, n_frequencies)
+(1, 501)
+>>> bool(0 < intensity.min() <= np.median(intensity) <= intensity.max() < 1)
+True
+
+```
+
+Report the median and range of `intensity` with the result. Shrinkage biases
+partial coherence toward 0, and `"auto"` shrinks less with more trials, so
+compare conditions at matched trial counts or with one fixed `shrinkage`.
+
 ## Collapse into frequency bands
 
 Pass `frequency_bands` to average (or integrate) each measure within named

@@ -442,25 +442,59 @@ def test_imaginary_coherency_is_nan_where_power_is_not_finite_and_zero_where_it_
     np.testing.assert_array_equal(signed[:, 2, 0], 0.0)
 
 
-def test_partial_coherence_matches_inverse_spectral_matrix_definition():
-    rng = np.random.default_rng(102)
-    coefficients = rng.standard_normal((1, 200, 3, 4, 3)) + 1j * (
-        rng.standard_normal((1, 200, 3, 4, 3))
+def _rescaling_coefficients(n_trials, n_windows=2):
+    """Correlated coefficients of 6 signals and complex scales from 1e-6 to 1e6."""
+    rng = np.random.default_rng(104)
+    shape = (n_windows, n_trials, 1, 5, 6)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    coefficients = coefficients @ (np.eye(6) + 0.5 * rng.standard_normal((6, 6)))
+    scales = 10.0 ** np.linspace(-6, 6, 6) * np.exp(1j * rng.uniform(-np.pi, np.pi, 6))
+    return coefficients, scales, rng
+
+
+@pytest.mark.parametrize(
+    ("shrinkage", "n_trials"),
+    [(None, 12), (0.3, 12), ("auto", 12), (0.3, 4), ("auto", 4)],
+)
+def test_partial_coherence_is_invariant_under_rescaling_the_signals(shrinkage, n_trials):
+    """Rescaling the signals by 1e-6 to 1e6 (powers 1e-12 to 1e12), with
+    arbitrary phases, leaves partial coherence unchanged to rounding, with
+    fewer observations than signals (4 of 6) too once shrinkage makes the
+    matrix well conditioned; without it, see the next test."""
+    coefficients, scales, _ = _rescaling_coefficients(n_trials)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="partial_coherence uses 4 observations")
+        original = Connectivity(coefficients).partial_coherence(shrinkage=shrinkage)
+        rescaled = Connectivity(coefficients * scales).partial_coherence(shrinkage=shrinkage)
+    np.testing.assert_allclose(rescaled, original, rtol=0, atol=1e-12, equal_nan=True)
+
+
+def test_rank_deficient_partial_coherence_moves_under_rescaling_only_by_rounding():
+    """With 4 observations of 6 signals and no shrinkage, only the 1e-12
+    loading makes the matrix invertible, and perturbing the data by one unit
+    in the last place moves the estimate by up to 3e-4 (5e-5 RMS here).
+    Rescaling the signals by 1e-6 to 1e6 moves it by no more than that, as
+    the coherency matrix is inverted: an RMS change 1.0-1.2 times the
+    perturbation's for 20 draws.
+
+    Regression: the loaded matrix was inverted in the signals' units, which
+    moved it by 1.2-4.3 times as much as the perturbation (1.8 here)."""
+    coefficients, scales, rng = _rescaling_coefficients(n_trials=4, n_windows=40)
+    perturbed = coefficients * (
+        1 + np.finfo(float).eps * rng.standard_normal(coefficients.shape)
     )
-    conn = Connectivity(coefficients)
-    actual = conn.partial_coherence(regularization=1e-10)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="partial_coherence uses 4 observations")
+        original, rounded, rescaled = (
+            Connectivity(each).partial_coherence()
+            for each in (coefficients, perturbed, coefficients * scales)
+        )
 
-    spectrum = to_host(conn._expectation_cross_spectral_matrix())
-    scale = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=(-2, -1), keepdims=True))
-    identity = np.eye(3)
-    precision = np.linalg.solve(spectrum + 1e-10 * scale * identity, identity)
-    diagonal = np.diagonal(precision, axis1=-2, axis2=-1).real
-    denominator = np.sqrt(diagonal[..., :, None] * diagonal[..., None, :])
-    expected = np.abs(-precision / denominator) ** 2
-    index = np.arange(3)
-    expected[..., index, index] = np.nan
+    def rms_change(estimate):
+        return np.sqrt(np.nanmean(np.abs(estimate - original) ** 2))
 
-    np.testing.assert_allclose(actual, expected[..., :3, :, :], equal_nan=True)
+    assert rms_change(rounded) > 1e-6  # the perturbation is amplified
+    assert rms_change(rescaled) <= 1.3 * rms_change(rounded)
 
 
 def _analytic_partial_coherence(n_fft):
