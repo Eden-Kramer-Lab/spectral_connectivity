@@ -791,12 +791,29 @@ rhythm, so they are coherent in the beta band only:
 
 ```
 
+For a band statistic of a biased measure, such as spectral Granger or
+partial coherence, center the interval on the jackknife's bias-corrected
+estimate: averaging a band shrinks the spread but not the bias, so an interval
+centered on the estimate misses (see the Notes of `Connectivity.jackknife`).
+
+```python
+>>> corrected = connectivity.jackknife(
+...     "partial_coherence",
+...     leave_out="trial",
+...     frequency_bands={"beta": (16, 24)},
+...     interval_center="bias_corrected",
+... )
+>>> corrected.interval_center
+'bias_corrected'
+
+```
+
 Leaving out one taper at a time is refused for bands. Different tapers'
 coefficients are uncorrelated at one frequency but correlated at frequencies
 within the bandwidth, so the tapers of a band are not independent
 observations and the interval would be too narrow: a nominal 95% interval
-covered 43-81% of band means and maxima in simulation, against 91-96% for
-band means leaving out trials. (Welch segments, which are not tapers of the
+covered 43-81% of band means in simulation, against 94-96% leaving out trials
+at moderate or strong coherence. (Welch segments, which are not tapers of the
 same samples, may be left out one at a time.)
 
 ```python

@@ -68,7 +68,8 @@ The migration guide for code written against 2.x is
   (weighted) phase lag index, pairwise phase consistency, the zero-coherence
   test of `delay` and `group_delay`, and `jackknife` use each bin's count. A
   bin keeping fewer than two observations is NaN in the debiased measures,
-  and one keeping fewer than three in the jackknife, with a warning.
+  and one keeping fewer than three in the jackknife, with a warning; one
+  keeping none is NaN without one.
 - A boxcar `MorletWavelet(edge_mode="nan")` with an expectation that pools
   time now works with the debiased phase-lag measures, pairwise phase
   consistency, and `delay`/`group_delay`, counting each frequency's valid
@@ -170,7 +171,9 @@ The migration guide for code written against 2.x is
   interval includes the variability between trials; the default interval is
   too narrow when coupling varies across trials. It needs an expectation that
   averages trials and at least 3 trials, and is allowed when the tapers within
-  a trial are correlated. The default (`"observation"`) is unchanged.
+  a trial are correlated. The default (`"observation"`) is unchanged, except
+  that with one taper per trial and `observations_are_independent=False` it is
+  now computed rather than refused, since its units are then whole trials.
 - `Connectivity.jackknife(method, frequency_bands={name: (low, high)},
   frequency_reduction="mean")` gives intervals for band statistics: the
   measure of the data and of every leave-one-out replicate is reduced to the
@@ -178,10 +181,12 @@ The migration guide for code written against 2.x is
   messages) before the interval is formed, and the result has a band axis in
   place of the frequency axis. It refuses to leave out tapers of the same
   samples: different tapers' coefficients are correlated across frequencies
-  within the bandwidth, so a nominal 95% interval left out one taper at a
-  time covered only 43-81% of band means and band maxima in simulation,
-  against 91-96% for band means and 83-93% for band maxima leaving out
-  trials. Allowed units are whole trials (`leave_out="trial"`,
+  within the bandwidth, so in simulation a nominal 95% interval leaving out
+  one taper at a time covered only 43-81% of band means (and band maxima very
+  unevenly, 43-95%), while leaving out trials covered 94-96% of band means at
+  moderate or strong coherence (87% at a weak band-mean coherence of 0.07
+  with 5 trials, from the estimate's bias) and 69-96% of band maxima. Allowed
+  units are whole trials (`leave_out="trial"`,
   `expectation_type="trials"`, or one taper per trial) and Welch segments,
   which a new optional `SpectralTransform` attribute,
   `observations_are_time_segments`, records (`Welch` sets it, labeled
@@ -197,9 +202,20 @@ The migration guide for code written against 2.x is
   replicate is NaN in a bin that never had the unit it leaves out. They take
   `n_replicates` times the memory of the estimate, so they are `None` unless
   requested. `JackknifeResult` also gains `frequency_bands` (the mapping that
-  names the band axis), `frequency_reduction` and `leave_out`; the four new
-  fields default to `None`, and `jackknife_confidence_interval` sets
-  `replicates` to its input.
+  names the band axis), `frequency_reduction`, `leave_out` and
+  `interval_center`; the five new fields default to `None`, and
+  `jackknife_confidence_interval` sets `replicates` to its input.
+- `Connectivity.jackknife(..., interval_center="bias_corrected")`, and the
+  same keyword of `jackknife_confidence_interval`, center the interval on the
+  jackknife's bias-corrected estimate (on the transformed scale, same
+  half-width) instead of on the estimate (the default, unchanged). It is for
+  band statistics of biased measures: band averaging shrinks the spread but
+  not the bias, and with 10 trials intervals centered on the estimate covered
+  45-78% for band-mean pairwise spectral Granger, 52-82% for conditional
+  Granger and 77-79% for partial coherence in simulation, against
+  97.7-98.8%, 97.0-97.8% and 94.7-96.0% centered on the bias-corrected
+  estimate. It does not help at zero coherence, and lowers band-maximum
+  coverage.
 - `Multitaper(line_frequencies=[60, 120])` removes line noise and other
   sinusoidal lines (stimulation artifacts) before the coefficients are
   computed, so every measure uses the cleaned data; the wrappers take it in

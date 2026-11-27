@@ -3486,6 +3486,11 @@ class Connectivity:
             :func:`~spectral_connectivity.statistics.jackknife_confidence_interval`.
             They take ``n_replicates`` times the memory of the estimate, so
             they are dropped unless asked for.
+        interval_center : {"estimate", "bias_corrected"}, default="estimate"
+            Where the interval is centered, on the transformed scale: on the
+            estimate, or on the jackknife's bias-corrected estimate (the
+            ``bias_corrected`` field), with the same half-width. The second is
+            for band statistics of biased measures; see Notes.
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -3545,7 +3550,8 @@ class Connectivity:
         (:attr:`n_valid_observations`; ``JackknifeResult.n_observations`` is
         then one count per bin). With ``leave_out="trial"`` the units are
         trials, a trial counting in a bin if any of its tapers is kept there.
-        A bin keeping fewer than 3 is NaN, with a warning.
+        A bin keeping fewer than 3 is NaN, with a warning; one keeping none is
+        NaN without one.
 
         Circular confidence bounds are wrapped to ``(-pi, pi]``, so when the
         interval crosses ``+/-pi`` the lower bound exceeds the upper bound;
@@ -3601,26 +3607,53 @@ class Connectivity:
         (two Monte Carlo runs of 1000-2000 datasets each).
 
         Band statistics: different tapers' coefficients are uncorrelated at
-        one frequency but correlated (0.3-0.6) at frequencies a few bins
-        apart, within the bandwidth, so the tapers of one window are not
-        independent observations of a band. In Monte Carlo runs with 1-20
-        trials of a bivariate VAR (256-2048 samples, time-halfbandwidth product
-        3-4), a 95% interval leaving out one taper at a time covered only
-        43-81% for band means and band maxima of a measure, while leaving out
-        whole trials covered 91-96% for band means and 83-93% for band maxima.
-        ``frequency_bands`` therefore refuses to leave out tapers of the same
-        samples. Segments of a trial in time (``Welch``) are not correlated
-        that way and may be left out one at a time: with disjoint segments a
-        band-mean coherence interval covered about 95%, and about 93% at half
-        overlap.
+        one frequency but correlated at frequencies 1-3 bins apart (for white
+        noise and NW = 3-4, up to 0.4-0.6 between two tapers, median 0.2-0.4),
+        so the tapers of one window are not independent observations of a
+        band. In Monte Carlo runs of a bivariate VAR (256-2048-sample windows,
+        NW = 3-4, 1000-3000 datasets per configuration), a 95% interval leaving
+        out one taper at a time (1-20 trials) covered only 43-81% for band
+        means. For band maxima it was affected very unevenly: 43-47% in
+        long-window single-trial runs, 62-95% in others. Leaving out whole
+        trials (3-20 trials) covered 94-96% for band means at moderate or
+        strong coherence but 87% at a weak band-mean magnitude-squared
+        coherence of 0.07 with 5 trials, a shortfall from the estimate's upward
+        bias, and 69-96% for band maxima. ``frequency_bands`` therefore refuses
+        to leave out tapers of the same samples. Segments of a trial in time
+        (``Welch``) are not correlated that way and may be left out one at a
+        time: with disjoint segments a band-mean coherence interval covered
+        about 95%, and about 93% at half overlap.
+
+        ``interval_center="bias_corrected"`` centers the interval on the
+        jackknife's bias-corrected estimate, on the transformed scale, with
+        the same half-width. Use it for band statistics of biased measures,
+        such as the spectral Granger family and partial coherence: averaging
+        over a band shrinks a statistic's spread but not its finite-sample
+        bias, so an interval centered on the estimate misses. With 10 trials
+        (50-70 observations), leaving out trials, a dense 5-signal VAR and an
+        uncoupled pair of a 3-signal one, intervals centered on the estimate
+        covered 45-78% for band-mean pairwise spectral Granger, 52-82% for
+        conditional Granger and 77-79% for partial coherence; centered on the
+        bias-corrected estimate, 97.7-98.8%, 97.0-97.8% and 94.7-96.0%. It
+        raised band-mean coherence from 92-95% to 96.7-97.0%, and the weak
+        band above from 87% to 92%. It does not help at zero coherence, where
+        neither interval covers 0 reliably (0% and 24-38%): test for nonzero
+        coherence with
+        :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`.
+        Keep the default for band maxima, whose coverage it lowers (95-96% to
+        87.5-91%). [Placeholder: its effect on single-frequency intervals is
+        being measured.]
 
         ``phase_slope_index``, which combines adjacent bins inside its own fit
-        over ``frequency_range``, is less affected: 92.8-94.7% leaving out
-        tapers against 95.0-95.3% leaving out trials (1000 datasets each, 5-10
-        trials). ``delay`` has not been measured. For any other statistic over
-        frequencies computed from ``JackknifeResult.replicates``, the safe
-        choice is replicates from ``leave_out="trial"`` unless its coverage
-        with other units has been checked.
+        over ``frequency_range``, is less affected by leaving out tapers. With
+        ``frequency_range=(0.08, 0.13)`` cycles per sample, NW = 3-4 and 5-10
+        trials of 256-1024-sample windows (1000 datasets each), it covered
+        92.8-94.7% leaving out tapers against 95.0-95.3% leaving out trials;
+        with 5 trials of 128 samples, 95.3-96.4% and 93.6-94.9%. ``delay`` has
+        not been measured. For any other statistic over frequencies computed
+        from ``JackknifeResult.replicates``, the safe choice is replicates
+        from ``leave_out="trial"`` unless its coverage with other units has
+        been checked.
 
         Examples
         --------
