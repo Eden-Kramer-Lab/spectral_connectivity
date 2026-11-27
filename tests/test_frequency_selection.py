@@ -1214,3 +1214,19 @@ def test_morlet_validity_covers_bins_that_frequency_resolution_skips():
         connectivity_kwargs={"frequency_resolution": 4.0},  # a step of two 2 Hz bins
     )
     np.testing.assert_array_equal(psi.valid_time, every_bin)
+
+
+def test_discarded_band_coordinates_warn_before_a_one_bin_integral_is_refused():
+    """The warning that existing band coordinates are discarded comes before
+    the refusal to integrate a grid of one bin."""
+    power = xr.DataArray(
+        np.ones((1, 1, 2)),
+        dims=("time", "frequency", "source"),
+        coords={"frequency": [3.0], "band": 1},
+        attrs={"measure": "power"},
+    )
+    with (
+        pytest.warns(UserWarning, match="defines its own coordinates named \\['band'\\]"),
+        pytest.raises(ValueError, match="needs at least two frequency bins"),
+    ):
+        frequency_band_reduce(power, {"a": (3, 3)}, frequency_reduction="integral")

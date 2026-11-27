@@ -162,7 +162,8 @@ def _band_masks(
 ) -> list[tuple[NDArray[np.bool_], tuple[float, float]]]:
     """Validate a band request on a frequency grid; each band's bins and bounds.
 
-    The one validation of ``frequency_bands`` and ``frequency_reduction`` for
+    With :func:`_require_integral_bin_widths`, the one validation of
+    ``frequency_bands`` and ``frequency_reduction`` for
     :func:`frequency_band_reduce`, the wrappers, and
     ``Connectivity.jackknife``. Each band's bins are those
     :func:`_frequency_interval_mask` places in ``[low, high]``, both endpoints
@@ -219,13 +220,21 @@ def _band_masks(
         mask = np.zeros(frequencies.shape, dtype=bool)
         mask[in_range] = kept_mask
         band_masks_and_bounds.append((mask, band_bounds))
-    if frequency_reduction == "integral" and np.count_nonzero(in_range) < 2:
+    return band_masks_and_bounds
+
+
+def _require_integral_bin_widths(frequency_reduction: str, n_bins: int) -> None:
+    """Raise if an integral is asked of a grid of fewer than two bins.
+
+    Checked after :func:`_band_masks`: a bin's width is the distance to its
+    neighbours.
+    """
+    if frequency_reduction == "integral" and n_bins < 2:
         msg = (
             "frequency_reduction='integral' needs at least two frequency bins to "
             "know their widths."
         )
         raise ValueError(msg)
-    return band_masks_and_bounds
 
 
 def _band_bins(
@@ -368,6 +377,10 @@ def _reduce_frequency_bands(
         # Discard them first: one left on a Dataset would take precedence over
         # the per-band coordinate of each reduced variable.
         result = result.drop_vars(discarded)
+    _require_integral_bin_widths(
+        frequency_reduction,
+        frequencies.size if kept is None else int(np.count_nonzero(kept[0])),
+    )
 
     def _reduce_dataarray(data: xr.DataArray) -> xr.DataArray:
         measure = str(data.attrs.get("measure", "" if data.name is None else data.name))

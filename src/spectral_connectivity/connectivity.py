@@ -3142,6 +3142,7 @@ class Connectivity:
             _band_reduction,
             _nyquist_frequency,
             _reduce_band,
+            _require_integral_bin_widths,
         )
         from spectral_connectivity._measure_registry import (
             _MEASURE_SPECS,
@@ -3161,6 +3162,7 @@ class Connectivity:
         band_masks_and_bounds = _band_masks(
             frequencies, frequency_bands, frequency_reduction=frequency_reduction
         )
+        _require_integral_bin_widths(frequency_reduction, frequencies.size)
         spec = _MEASURE_SPECS.get(method)
         reduction = _band_reduction(
             method,
