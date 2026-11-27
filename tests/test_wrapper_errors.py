@@ -1,5 +1,7 @@
 """Error contracts for the high-level xarray wrapper."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -13,18 +15,38 @@ from spectral_connectivity.wrapper import (
 )
 
 
-@pytest.mark.parametrize(
-    "method",
-    [None, ["power", "phase_locking_value"], ["power"]],
-    ids=["none", "two-names", "one-name-list"],
-)
-def test_connectivity_to_xarray_rejects_a_method_that_is_not_one_name(method):
-    """connectivity_to_xarray computes one measure, named by a string."""
-    transform = Multitaper(
+@pytest.fixture(scope="module")
+def two_signal_multitaper():
+    return Multitaper(
         np.random.default_rng(0).standard_normal((256, 3, 2)), sampling_frequency=100
     )
-    with pytest.raises(TypeError, match="method must be a single measure name"):
-        connectivity_to_xarray(transform, method)
+
+
+@pytest.mark.parametrize(
+    ("method", "received"),
+    [(3, "int 3"), (["power", 3], "a list holding int 3")],
+    ids=["not-a-name", "list-holding-not-a-name"],
+)
+def test_connectivity_to_xarray_rejects_a_method_that_is_not_names(
+    two_signal_multitaper, method, received
+):
+    """connectivity_to_xarray takes a name or a list of names."""
+    with pytest.raises(
+        TypeError,
+        match=rf"^method must be a measure name \(str\) or a list of names, got {received}\.",
+    ):
+        connectivity_to_xarray(two_signal_multitaper, method)
+
+
+def test_connectivity_to_xarray_rejects_none_and_names_the_default_set(
+    two_signal_multitaper,
+):
+    """It has no default set for None to request, so the error says how to ask
+    for multitaper_connectivity's."""
+    with pytest.raises(TypeError, match=r"^method=None is not accepted") as excinfo:
+        connectivity_to_xarray(two_signal_multitaper, None)
+    assert "method=spectral_connectivity.DEFAULT_METHODS" in str(excinfo.value)
+    assert "list_measures()" in str(excinfo.value)
 
 
 def test_time_halfbandwidth_product_kwarg_passthrough():
@@ -154,6 +176,39 @@ def test_signal_names_length_is_validated():
     m = Multitaper(np.zeros((128, 3, 2)), sampling_frequency=128)
     with pytest.raises(ValueError, match="signal_names must contain 2 names"):
         connectivity_to_xarray(m, signal_names=["only-one"])
+
+
+class _MaskedMultitaper(Multitaper):
+    """A transform whose validity mask has the wrong shape."""
+
+    valid_time_frequency = np.ones((2, 2), dtype=bool)
+
+
+@pytest.mark.parametrize(
+    ("transform", "kwargs", "match"),
+    [
+        pytest.param(_MaskedMultitaper, {}, "valid_time_frequency", id="mask-shape"),
+        pytest.param(
+            Multitaper, {"frequency_decimation": 0}, "frequency_decimation", id="decimation"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "method",
+    ["coherence_magnitude", ["coherence_magnitude", "power"]],
+    ids=["name", "list"],
+)
+def test_connectivity_to_xarray_rejected_call_does_not_warn(transform, kwargs, match, method):
+    """A call that raises does not also warn about a deprecated name it was
+    given: the warning comes only from a call that succeeds."""
+    time_series = np.random.default_rng(0).standard_normal((256, 2, 3))
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match=match):
+            connectivity_to_xarray(
+                transform(time_series, sampling_frequency=100), method, **kwargs
+            )
+    assert record == []
 
 
 @pytest.mark.parametrize(

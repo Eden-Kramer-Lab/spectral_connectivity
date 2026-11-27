@@ -99,6 +99,15 @@ The migration guide for code written against 2.x is
   measures that need samples, `jackknife`, `surrogate_test`,
   `partial_coherence(shrinkage="auto")`, and `observation_weights` are then
   refused. Labeled results record `is_exact_spectrum`.
+- `connectivity_to_xarray` accepts a list of measure names: it returns a
+  Dataset with one variable per measure, the one `multitaper_connectivity`
+  returns for the same `Multitaper` settings. One name still returns what it
+  did; `method=None` raises `TypeError` (pass `DEFAULT_METHODS`). It also
+  takes `frequency_decimation`, `frequency_bands`, and `frequency_reduction`,
+  so `Welch`, `ShortTimeFourierTransform`, and `MorletWavelet` results can be
+  band-reduced in the call.
+  It is now importable as `spectral_connectivity.connectivity_to_xarray`,
+  like the other two wrappers.
 - `multitaper_connectivity` and `connectivity_to_xarray` take `dtype`,
   `minimum_phase_tolerance`, and `minimum_phase_max_iterations`, as
   `fourier_connectivity` and `Connectivity.from_transform` do: the working
@@ -1506,9 +1515,9 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   first or last selected bin's cell where that lies further out.
   `frequency_band_reduce` cannot recover that part from a result that was
   cropped first, by `frequency_range` or `sel`: integrate before cropping, or
-  crop at least one bin wider than the bands. That is the only route for
-  `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` results, so leave
-  `frequency_range` of `connectivity_to_xarray` unset for them.
+  crop at least one bin wider than the bands. `connectivity_to_xarray`, the
+  route for `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` results,
+  takes `frequency_bands` too and integrates the same way.
 - `suggest_parameters` no longer loses a taper to floating-point error (in
   Python-float or float64 arguments) when the resolution and the shortened
   window put `2 * NW` on a whole number (30 Hz over a 0.3 s record suggested NW

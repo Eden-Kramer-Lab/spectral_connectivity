@@ -158,6 +158,12 @@ Prefer the wrapper's labeled results so you never index these by hand.
 - **Band summaries.** Use `frequency_bands={"theta": (4, 8)}` rather than
   averaging frequency bins by hand: phase measures get a circular mean and
   complex measures a complex mean.
+- **Other transforms.** For a `Welch`, `ShortTimeFourierTransform`,
+  `MorletWavelet`, or your own transform, call
+  `spectral_connectivity.connectivity_to_xarray(transform,
+  ["power", "magnitude_squared_coherence"], frequency_bands=...)` rather than
+  looping over measures and calling `frequency_band_reduce`: it takes a list of
+  measures and the same frequency options as `multitaper_connectivity`.
 - **Frequency ranges include both endpoints.** `frequency_range=(8, 12)` keeps
   the bins at 8 and 12 Hz. Pass it to the wrapper itself, also for
   `phase_slope_index`, `group_delay`, and `delay`, which then consume only

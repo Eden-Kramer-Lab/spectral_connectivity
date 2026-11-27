@@ -37,6 +37,7 @@ from spectral_connectivity._measure_registry import (
     _format_value_range,
     _is_group_measure,
     _measure_description,
+    _MeasureRequest,
     _reduces_frequency,
     _requested_methods,
     _requires_two_sided,
@@ -390,12 +391,11 @@ def frequency_band_reduce(
     (up to half a bin's cell at each end: 2.5% of a 20 Hz band per end on
     1 Hz bins). Integrate before cropping, since a band limits itself, or
     crop at least one bin wider than the bands.
-    :func:`multitaper_connectivity` and :func:`fourier_connectivity`
-    integrate the uncropped grid themselves when given ``frequency_range``
-    together with ``frequency_bands``. Results of
+    :func:`multitaper_connectivity`, :func:`fourier_connectivity`, and
     :func:`connectivity_to_xarray` (the route for
-    ``ShortTimeFourierTransform``, ``Welch``, and ``MorletWavelet``) are
-    integrated here, so leave its ``frequency_range`` unset for them.
+    ``ShortTimeFourierTransform``, ``Welch``, and ``MorletWavelet``) integrate
+    the uncropped grid themselves when given ``frequency_range`` together with
+    ``frequency_bands``.
 
     The Nyquist frequency is each variable's ``nyquist_frequency`` provenance
     attr (0.5 cycles/sample on normalized Fourier grids, half the sampling rate
@@ -589,7 +589,7 @@ def _check_measure_settings(
     connectivity_kwargs: Mapping[str, Any] | None,
     *,
     function: str,
-    transform_settings_hint: str | None,
+    transform_settings_hint: str,
     frequency_decimation: int = 1,
     frequency_bands: Mapping[str, tuple[float, float]] | None = None,
 ) -> None:
@@ -648,22 +648,30 @@ def _check_measure_settings(
 
 def connectivity_to_xarray(
     m: Any,
-    method: str = "magnitude_squared_coherence",
+    method: str | Sequence[str] = "magnitude_squared_coherence",
     signal_names: Sequence[_SignalLabel] | None = None,
     squeeze: bool = False,
     *,
     group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
     frequency_range: tuple[float, float] | None = None,
+    frequency_decimation: int = 1,
+    frequency_bands: Mapping[str, tuple[float, float]] | None = None,
+    frequency_reduction: Literal["mean", "integral"] = "mean",
     connectivity_kwargs: Mapping[str, Any] | None = None,
     dtype: DTypeLike = np.complex128,
     minimum_phase_tolerance: float = 1e-8,
     minimum_phase_max_iterations: int = 500,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
-    """Calculate one connectivity measure and return a labeled array.
+    """Compute connectivity measures from a spectral transform as labeled arrays.
 
-    Ordinary pairwise measures return a DataArray; component-resolved or
-    multi-quantity measures return a Dataset with explicit semantic axes.
+    One measure name returns that measure's result: a DataArray for an
+    ordinary pairwise measure, a Dataset with explicit semantic axes for a
+    component-resolved or multi-quantity one. A list of names returns a
+    Dataset with one variable per measure, assembled as in
+    :func:`multitaper_connectivity`; the measures share one ``Connectivity``
+    object, so the transform's FFT and their common intermediates are computed
+    once.
 
     .. versionchanged:: 3.0
        For ``pairwise_spectral_granger_prediction`` and
@@ -677,44 +685,57 @@ def connectivity_to_xarray(
     ----------
     m : transform
         A spectral transform (e.g. ``Multitaper``, ``MorletWavelet``, ``Welch``)
-        whose coefficients the measure is computed from. Any object satisfying
+        whose coefficients the measures are computed from. Any object satisfying
         :class:`~spectral_connectivity.transforms.SpectralTransform` works; the
         result of one that is not built in records its class name as
         ``transform`` and none of the built-in transforms' settings.
-    method : str, default="magnitude_squared_coherence"
-        Measure name from :func:`list_measures`.
+    method : str or sequence of str, default="magnitude_squared_coherence"
+        Measure name from :func:`list_measures`, or a list of names for a
+        Dataset of those measures (``method=DEFAULT_METHODS`` gives the set
+        :func:`multitaper_connectivity` computes by default). ``None`` is not
+        accepted.
 
         .. versionchanged:: 3.0
            The default is ``"magnitude_squared_coherence"``, so the default
            result is named that; 2.x defaulted to ``"coherence_magnitude"``,
            which still works when requested, with a ``DeprecationWarning``.
+           A list of names is accepted; 2.x took one name.
     signal_names : sequence, optional
         Labels for the ``source``/``target`` coordinates; defaults to
         ``"0"``, ``"1"``, ....
     squeeze : bool, default=False
-        With exactly 2 signals, reduce a pairwise measure to the ordered pair
+        Only honored when a single ``method`` (a string) is requested. With
+        exactly 2 signals, reduce a pairwise measure to the ordered pair
         (first source, last target), keeping ``source`` and ``target`` as
-        scalar coordinates.
+        scalar coordinates. For a list of measures, which returns a Dataset,
+        it is ignored with a warning.
     group_labels : sequence, optional
         One label per signal naming its group, required by the group measures
-        (see :func:`multitaper_connectivity`). It may instead be given in
-        ``connectivity_kwargs``, but not both. A coordinate name is not
-        accepted here: ``m`` keeps no coordinates.
+        (see :func:`multitaper_connectivity`) and passed to those measures
+        only. It may instead be given in ``connectivity_kwargs``, but not
+        both. A coordinate name is not accepted here: ``m`` keeps no
+        coordinates.
     frequency_range : (float, float), optional
         Frequency interval ``(low, high)``, both endpoints included, as in
         :func:`multitaper_connectivity`: ``delay``, ``group_delay``, and
         ``phase_slope_index`` consume only those bins, and any other measure
         is computed from the full spectrum and cropped to them. Pass it here,
-        not in ``connectivity_kwargs``. Leave it unset for a result whose bands
-        :func:`frequency_band_reduce` will integrate: a band edge between the
-        last kept bin and its dropped neighbour loses the part of the band in
-        that neighbour's cell.
+        not in ``connectivity_kwargs``.
+    frequency_decimation : int, default=1
+        Keep every Nth frequency bin after applying ``frequency_range``, as in
+        :func:`multitaper_connectivity`.
+    frequency_bands : mapping of str to (float, float), optional
+        Reduce the selected bins into named bands, as in
+        :func:`multitaper_connectivity`.
+    frequency_reduction : {"mean", "integral"}, default="mean"
+        Band reduction, as in :func:`multitaper_connectivity`.
     connectivity_kwargs : mapping, optional
         Settings for the measure, e.g. ``{"pairs": [(0, 1)]}`` for
         ``subset_pairwise_spectral_granger_prediction`` or
-        ``{"frequency_resolution": 10.0}`` for ``phase_slope_index``. A key the
-        measure does not take raises ``TypeError``. There is no
-        ``transform_kwargs``: ``m`` is already built.
+        ``{"frequency_resolution": 10.0}`` for ``phase_slope_index``; passed to
+        every requested measure, so a key a requested measure does not take
+        raises ``TypeError``. There is no ``transform_kwargs``: ``m`` is
+        already built.
     dtype : numpy.dtype, default=complex128
         Working precision for the connectivity computations.
     minimum_phase_tolerance : float, default=1e-8
@@ -735,7 +756,9 @@ def connectivity_to_xarray(
     xarray.DataArray or xarray.Dataset
         The labeled result with provenance in ``attrs``; see
         :func:`multitaper_connectivity` for the dimensions and orientation
-        (``sel(source=a, target=b)`` is the influence ``a -> b``).
+        (``sel(source=a, target=b)`` is the influence ``a -> b``). A single
+        ``method`` name returns what that measure returns alone; a list,
+        even of one name, returns a Dataset with one variable per measure.
 
     Examples
     --------
@@ -745,15 +768,29 @@ def connectivity_to_xarray(
     >>> mt = Multitaper(data, sampling_frequency=1000)
     >>> connectivity_to_xarray(mt).dims
     ('time', 'frequency', 'source', 'target')
+
+    Several measures, reduced to bands, in one Dataset:
+
+    >>> bands = connectivity_to_xarray(
+    ...     mt,
+    ...     ["power", "magnitude_squared_coherence"],
+    ...     frequency_bands={"alpha": (8, 12), "beta": (13, 30)},
+    ... )
+    >>> list(bands.data_vars)
+    ['power', 'magnitude_squared_coherence']
+    >>> bands["magnitude_squared_coherence"].dims
+    ('time', 'band', 'source', 'target')
     """
-    if not isinstance(method, str):
+    if method is None:
         msg = (  # type: ignore[unreachable]  # user input
-            "method must be a single measure name (a string) for "
-            f"connectivity_to_xarray, got {method!r}; to compute several measures "
-            "call it once per measure."
+            "method=None is not accepted by connectivity_to_xarray, whose default "
+            "is 'magnitude_squared_coherence'. For the set multitaper_connectivity "
+            "computes by default, pass method=spectral_connectivity.DEFAULT_METHODS; "
+            "to see all measure names, call spectral_connectivity.list_measures()."
         )
         raise TypeError(msg)
-    (method,), output_names, _ = _requested_methods(method, ())
+    request = _requested_methods(method, None)
+    methods = request.methods
     measure_settings = _merge_legacy_settings(
         "connectivity_to_xarray",
         "connectivity_kwargs",
@@ -763,16 +800,18 @@ def connectivity_to_xarray(
     # A misspelled or misplaced setting fails before any work, whichever route
     # it took; frequency_range is a named argument here as in every wrapper.
     _check_measure_settings(
-        [method],
+        methods,
         measure_settings,
         function="connectivity_to_xarray",
-        transform_settings_hint=None,
+        transform_settings_hint=(
+            "set it on the transform you pass as m (for example "
+            "Multitaper(..., time_halfbandwidth_product=3))"
+        ),
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
     )
-    consumes_range = _consumes_frequency_range(method)
-    if consumes_range and frequency_range is not None:
-        measure_settings["frequency_range"] = frequency_range
-    group_labels, measure_settings, group_methods = _resolve_group_labels(
-        [method], measure_settings, group_labels
+    group_labels, measure_settings = _resolve_group_labels(
+        methods, measure_settings, group_labels
     )
     group_labels = _group_labels_from_coordinate(
         group_labels,
@@ -793,88 +832,32 @@ def connectivity_to_xarray(
     # which a custom transform may expose only through its coefficients, so
     # they follow the FFT.
     _require_two_signals(
-        [method],
+        methods,
         connectivity.n_signals,
         subject="The transform",
         keep_signal_axis=_KEEP_TRANSFORM_SIGNAL_AXIS,
     )
-    _require_group_labels([method], group_labels, connectivity.n_signals)
-    if group_methods:
-        measure_settings["group_labels"] = group_labels
-    provenance_metadata = getattr(m, "_provenance_metadata", None)
-    if provenance_metadata is not None:
-        metadata = provenance_metadata()
-    else:
-        # The public SpectralTransform interface has no settings record. It
-        # lets a transform leave either coordinate to Connectivity, which then
-        # uses normalized frequencies and window indices, not Hz and seconds.
-        metadata = {"transform": type(m).__name__}
-        if m.frequencies is None:
-            metadata.update(
-                frequency_coordinate="normalized",
-                frequency_units="cycles/sample",
-                nyquist_frequency=0.5,
-            )
-        if m.time is None:
-            metadata["time_coordinate"] = "index"
+    _require_group_labels(methods, group_labels, connectivity.n_signals)
+    metadata = _transform_metadata(m)
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
-    shared_attrs = _shared_provenance_attrs(connectivity, metadata)
-    # The call's interval, resolved once; the result, its crop, and its
-    # validity read it.
-    selection = (
-        _select_measure_frequencies(
-            to_numpy(connectivity.frequencies),
-            frequency_range,
-            measure_settings.get("frequencies_of_interest") if consumes_range else None,
-        )
-        if consumes_range or frequency_range is not None
-        else None
-    )
-    result = _connectivity_result_to_xarray(
+    result = _labeled_measures(
         connectivity,
-        method,
-        signal_labels,
-        squeeze,
-        shared_attrs,
-        frequency_selection=selection if consumes_range else None,
-        result_name=output_names[method],
-        **measure_settings,
+        request,
+        signal_labels=signal_labels,
+        squeeze=squeeze,
+        transform_metadata=metadata,
+        input_attrs=None,
+        connectivity_kwargs=measure_settings,
+        group_labels=group_labels,
+        frequency_range=frequency_range,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+        frequency_reduction=frequency_reduction,
+        valid_time_frequency=getattr(m, "valid_time_frequency", None),
     )
-    valid_time_frequency = getattr(m, "valid_time_frequency", None)
-    if valid_time_frequency is not None:
-        validity = to_numpy(valid_time_frequency).astype(bool)
-        expected_shape = (len(connectivity.time), len(connectivity.frequencies))
-        if validity.shape != expected_shape:
-            msg = (
-                "transform.valid_time_frequency must have shape "
-                f"{expected_shape}, got {validity.shape}."
-            )
-            raise ValueError(msg)
-        validity_attrs = {"long_name": "Full wavelet and smoothing support is in-record"}
-        if "frequency" in result.dims:
-            # delay keeps only the bins of its interval; every other
-            # frequency-resolved result keeps the full grid until it is cropped.
-            bins = selection.mask if consumes_range and selection is not None else slice(None)
-            result = result.assign_coords(
-                valid_time_frequency=(("time", "frequency"), validity[:, bins], validity_attrs)
-            )
-        elif "time" in result.dims:
-            # PSI and group delay aggregate a frequency interval. They have no
-            # frequency dimension on which a 2-D coordinate can live, so expose
-            # whether every bin of the interval has full wavelet/smoothing
-            # support at each time point. With frequency_resolution PSI sums
-            # only some of those bins, so this is conservative: it can be False
-            # where every bin PSI summed was valid, never True where one was not.
-            assert selection is not None  # PSI and group delay consume an interval
-            valid_time = validity[:, selection.mask].all(axis=1)
-            result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
-    if frequency_range is not None and not consumes_range:
-        assert selection is not None  # resolved above whenever a range is given
-        result = _crop_frequency_range(result, selection)
-    _warn_deprecated_measure_names(output_names)
-    _warn_label_orientation_changed([method])
+    _warn_label_orientation_changed(methods)
     _warn_legacy_settings("connectivity_to_xarray", "connectivity_kwargs", kwargs)
-    return _with_frequency_grid_metadata(result)
+    return result
 
 
 def _combine_formatted_results(
@@ -902,7 +885,7 @@ def _resolve_group_labels(
     methods: Sequence[str],
     connectivity_kwargs: Mapping[str, Any] | None,
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
-) -> tuple[Sequence[Hashable] | NDArray[Any] | None, dict[str, Any], frozenset[str]]:
+) -> tuple[Sequence[Hashable] | NDArray[Any] | None, dict[str, Any]]:
     """Resolve ``group_labels`` from the argument or ``connectivity_kwargs``.
 
     Needs no signal count, so every wrapper runs it before any spectral work
@@ -924,8 +907,6 @@ def _resolve_group_labels(
         The labels from whichever form supplied them.
     label_free_kwargs : dict
         A copy of ``connectivity_kwargs`` without ``group_labels``.
-    group_methods : frozenset of str
-        The requested measures that take ``group_labels``.
 
     Raises
     ------
@@ -942,8 +923,7 @@ def _resolve_group_labels(
         )
         raise ValueError(msg)
     group_labels = group_labels if group_labels is not None else legacy_labels
-    group_methods = [method for method in methods if _is_group_measure(method)]
-    if group_labels is not None and not group_methods:
+    if group_labels is not None and not any(_is_group_measure(m) for m in methods):
         msg = (
             "group_labels was given, but none of the requested measures compares "
             f"groups of signals: {list(methods)!r}. Request a group measure (see "
@@ -951,7 +931,7 @@ def _resolve_group_labels(
             "list_measures(category='multivariate_components')) or drop group_labels."
         )
         raise ValueError(msg)
-    return group_labels, label_free_kwargs, frozenset(group_methods)
+    return group_labels, label_free_kwargs
 
 
 def _group_labels_from_coordinate(
@@ -1068,57 +1048,142 @@ def _require_group_labels(
         raise ValueError(msg)
 
 
-def _format_and_reduce_measures(
+def _transform_metadata(transform: Any) -> dict[str, Any]:
+    """The provenance record of ``transform``, built in or not.
+
+    A built-in transform records its settings. The public
+    :class:`~spectral_connectivity.transforms.SpectralTransform` interface has
+    no settings record, so another transform records its class name, and
+    which coordinates it left to ``Connectivity``: normalized frequencies and
+    window indices, not Hz and seconds.
+    """
+    metadata: dict[str, Any]
+    provenance_metadata = getattr(transform, "_provenance_metadata", None)
+    if provenance_metadata is not None:
+        metadata = provenance_metadata()
+        return metadata
+    metadata = {"transform": type(transform).__name__}
+    if transform.frequencies is None:
+        metadata.update(
+            frequency_coordinate="normalized",
+            frequency_units="cycles/sample",
+            nyquist_frequency=0.5,
+        )
+    if transform.time is None:
+        metadata["time_coordinate"] = "index"
+    return metadata
+
+
+def _with_validity_coordinate(
+    result: xr.DataArray | xr.Dataset,
+    validity: NDArray[np.bool_],
+    consumed_bins: NDArray[np.bool_] | None,
+) -> xr.DataArray | xr.Dataset:
+    """``result`` with a transform's ``valid_time_frequency`` mask as a coordinate.
+
+    ``validity`` is the mask on the full grid, shape ``(n_time,
+    n_frequencies)``. ``consumed_bins`` marks the bins of a measure that
+    consumes an interval (``delay``, ``group_delay``, ``phase_slope_index``)
+    and is ``None`` for every other measure, which keeps the full grid until it
+    is cropped.
+    """
+    validity_attrs = {"long_name": "Full wavelet and smoothing support is in-record"}
+    if "frequency" in result.dims:
+        # delay keeps only the bins of its interval.
+        bins = consumed_bins if consumed_bins is not None else slice(None)
+        return result.assign_coords(
+            valid_time_frequency=(("time", "frequency"), validity[:, bins], validity_attrs)
+        )
+    if "time" in result.dims:
+        # PSI and group delay aggregate a frequency interval. They have no
+        # frequency dimension on which a 2-D coordinate can live, so expose
+        # whether every bin of the interval has full wavelet/smoothing
+        # support at each time point. With frequency_resolution PSI sums
+        # only some of those bins, so this is conservative: it can be False
+        # where every bin PSI summed was valid, never True where one was not.
+        assert consumed_bins is not None  # PSI and group delay consume an interval
+        valid_time = validity[:, consumed_bins].all(axis=1)
+        return result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
+    return result
+
+
+def _labeled_measures(
     connectivity: Connectivity,
-    methods: list[str],
+    request: _MeasureRequest,
     *,
-    return_dataarray: bool,
     signal_labels: NDArray[Any],
     squeeze: bool,
-    shared_attrs: Mapping[str, Any],
+    transform_metadata: Mapping[str, Any],
+    input_attrs: Mapping[Any, Any] | None,
     connectivity_kwargs: Mapping[str, Any],
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
-    group_methods: frozenset[str],
     frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
     frequency_reduction: Literal["mean", "integral"],
-    output_names: Mapping[str, str],
     signal_metadata: _SignalMetadata | None = None,
+    valid_time_frequency: Any = None,
 ) -> xr.DataArray | xr.Dataset:
-    """Format the requested measures to xarray and apply frequency reduction.
+    """The labeled result of the requested measures of ``connectivity``.
 
-    ``methods`` are canonical names; ``output_names`` maps each to the name the
-    caller requested, which names its result variable (see
-    :func:`_requested_methods`).
+    The one path of :func:`multitaper_connectivity`,
+    :func:`fourier_connectivity`, and :func:`connectivity_to_xarray` from a
+    built ``Connectivity`` to their result: each checks its own input and
+    request first, then this attaches the provenance (``transform_metadata``
+    and ``input_attrs``, see :func:`_shared_provenance_attrs`), formats each
+    measure, crops, decimates, and band-reduces.
 
-    Shared tail of :func:`multitaper_connectivity` and :func:`fourier_connectivity`:
-    passes the already-resolved ``group_labels`` (see :func:`_resolve_group_labels`)
-    to ``group_methods`` only, honors ``squeeze`` only for a single-measure
-    DataArray, formats each measure (skipping structurally-unsupported ones in a
-    multi-measure batch), merges the survivors, and applies any frequency
-    crop/decimation/band reduction. ``frequency_range`` is passed to the
-    measures that consume an interval and crops each other result before they
-    are merged, so every variable keeps the same bins. ``connectivity_kwargs``
-    must be label-free, and the callers check it first (see
-    :func:`_check_measure_settings`).
+    ``request`` holds the canonical names and the name the caller requested
+    for each, which names its result variable (see :func:`_requested_methods`);
+    the last step warns for each deprecated name requested, so a call that
+    fails raises only its error. The already-resolved ``group_labels`` (see
+    :func:`_resolve_group_labels`) reach the group measures only. ``squeeze`` is
+    honored only for a single-measure DataArray. A multi-measure batch skips a
+    structurally unsupported measure and merges the survivors.
+    ``frequency_range`` is passed to the measures that consume an interval and
+    crops each other result before they are merged, so every variable keeps
+    the same bins. ``connectivity_kwargs`` must be label-free, and the callers
+    check it first (see :func:`_check_measure_settings`).
+    ``valid_time_frequency`` is a transform's mask of the time-frequency bins
+    with full support, shape ``(n_time, n_frequencies)``, or ``None``; it
+    becomes a ``valid_time_frequency`` (or, for ``phase_slope_index`` and
+    ``group_delay``, ``valid_time``) coordinate.
     """
+    methods, output_names, return_dataarray = request
+    shared_attrs = _shared_provenance_attrs(
+        connectivity, transform_metadata, input_attrs=input_attrs
+    )
     frequencies = to_numpy(connectivity.frequencies)
     consuming_methods = frozenset(m for m in methods if _consumes_frequency_range(m))
     # One selection per call, on the full grid: the interval measures' results
     # and attributes and the crop of every other result read it.
-    selection = _select_measure_frequencies(
-        frequencies,
-        frequency_range,
-        connectivity_kwargs.get("frequencies_of_interest") if consuming_methods else None,
+    selection = (
+        _select_measure_frequencies(
+            frequencies,
+            frequency_range,
+            connectivity_kwargs.get("frequencies_of_interest") if consuming_methods else None,
+        )
+        if consuming_methods or frequency_range is not None
+        else None
     )
+    validity = (
+        None if valid_time_frequency is None else to_numpy(valid_time_frequency).astype(bool)
+    )
+    expected_shape = (len(connectivity.time), len(frequencies))
+    if validity is not None and validity.shape != expected_shape:
+        msg = (
+            "transform.valid_time_frequency must have shape "
+            f"{expected_shape}, got {validity.shape}."
+        )
+        raise ValueError(msg)
 
     # An integral leaves its densities uncropped, so a band inside the range
     # also integrates the part of it lying in the cell of a bin just outside
     # the range. A request the reduction refuses is cropped as any other.
     kept = (
         (selection.mask, selection.requested)
-        if frequency_range is not None
+        if selection is not None
+        and frequency_range is not None
         and selection.requested is not None
         and frequency_bands is not None
         and frequency_reduction == "integral"
@@ -1130,7 +1195,7 @@ def _format_and_reduce_measures(
         """Keyword arguments for one measure: ``group_labels`` reaches group
         measures only, and ``frequency_range`` the measures that consume it."""
         kwargs = dict(connectivity_kwargs)
-        if method in group_methods:
+        if _is_group_measure(method):
             kwargs["group_labels"] = group_labels
         if frequency_range is not None and method in consuming_methods:
             kwargs["frequency_range"] = frequency_range
@@ -1163,8 +1228,15 @@ def _format_and_reduce_measures(
             result_name=output_names[method],
             **measure_kwargs(method),
         )
+        if validity is not None:
+            result = _with_validity_coordinate(
+                result,
+                validity,
+                selection.mask if consumes_range and selection is not None else None,
+            )
         if frequency_range is None or consumes_range:
             return result
+        assert selection is not None  # resolved above whenever a range is given
         if kept is not None:
             return _with_frequency_attrs(result, **selection.attrs())
         return _crop_frequency_range(result, selection)
@@ -1218,7 +1290,7 @@ def _format_and_reduce_measures(
                 if name not in reserved
             }
         )
-    return _decimate_and_reduce_frequencies(
+    result = _decimate_and_reduce_frequencies(
         result,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -1227,6 +1299,8 @@ def _format_and_reduce_measures(
         nyquist_frequency=_nyquist_frequency(shared_attrs, frequencies),
         kept=kept,
     )
+    _warn_deprecated_measure_names(output_names)
+    return result
 
 
 def multitaper_connectivity(
@@ -1663,7 +1737,8 @@ def multitaper_connectivity(
     # The default set (DEFAULT_METHODS) is portably serializable; complex,
     # component/group, frequency-reduced, and directed-transfer-function results
     # remain opt-in by name.
-    method, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    request = _requested_methods(method, DEFAULT_METHODS)
+    method = request.methods
     # Every measure setting is checked before the transform runs its FFT.
     _check_measure_settings(
         method,
@@ -1676,7 +1751,7 @@ def multitaper_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
-    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
+    group_labels, connectivity_kwargs = _resolve_group_labels(
         method, connectivity_kwargs, group_labels
     )
     group_labels = _group_labels_from_coordinate(
@@ -1749,12 +1824,8 @@ def multitaper_connectivity(
         minimum_phase_tolerance=minimum_phase_tolerance,
         minimum_phase_max_iterations=minimum_phase_max_iterations,
     )
-    # Validate labels and build shared provenance once; both are invariant across
-    # the requested measures.
+    # Validate labels once; they are invariant across the requested measures.
     signal_labels = _validated_signal_labels(signal_names, shared_connectivity.n_signals)
-    shared_attrs = _shared_provenance_attrs(
-        shared_connectivity, metadata, input_attrs=input_attrs
-    )
     # NaN or Inf in the time series was reported once, by Multitaper; the
     # measures' arithmetic on the values it propagates would add NumPy
     # RuntimeWarnings ("invalid value encountered in divide") about the same
@@ -1764,24 +1835,21 @@ def multitaper_connectivity(
         if m._time_series_is_finite
         else np.errstate(invalid="ignore", divide="ignore")
     ):
-        result = _format_and_reduce_measures(
+        result = _labeled_measures(
             shared_connectivity,
-            method,
-            return_dataarray=return_dataarray,
+            request,
             signal_labels=signal_labels,
             squeeze=squeeze,
-            shared_attrs=shared_attrs,
+            transform_metadata=metadata,
+            input_attrs=input_attrs,
             connectivity_kwargs=connectivity_kwargs,
             group_labels=group_labels,
-            group_methods=group_methods,
             frequency_range=frequency_range,
             frequency_decimation=frequency_decimation,
             frequency_bands=frequency_bands,
             frequency_reduction=frequency_reduction,
-            output_names=output_names,
             signal_metadata=signal_metadata,
         )
-    _warn_deprecated_measure_names(output_names)
     _warn_label_orientation_changed(method)
     _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", kwargs)
     return result
@@ -2160,7 +2228,8 @@ def fourier_connectivity(
 
     # No default measure needs a two-sided spectrum, so the defaults suit any input.
     # The request and its settings are checked before the coefficients are copied.
-    methods, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    request = _requested_methods(method, DEFAULT_METHODS)
+    methods = request.methods
     _check_measure_settings(
         methods,
         connectivity_kwargs,
@@ -2169,7 +2238,7 @@ def fourier_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
-    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
+    group_labels, connectivity_kwargs = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels
     )
     group_labels = _group_labels_from_coordinate(
@@ -2298,27 +2367,18 @@ def fourier_connectivity(
         )
         metadata["sampling_frequency"] = float(sampling_frequency)
         metadata["nyquist_frequency"] = float(sampling_frequency) / 2
-    shared_attrs = _shared_provenance_attrs(
+    return _labeled_measures(
         connectivity,
-        metadata,
-        input_attrs=input_attrs,
-    )
-    result = _format_and_reduce_measures(
-        connectivity,
-        methods,
-        return_dataarray=return_dataarray,
+        request,
         signal_labels=signal_labels,
         squeeze=squeeze,
-        shared_attrs=shared_attrs,
+        transform_metadata=metadata,
+        input_attrs=input_attrs,
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
-        group_methods=group_methods,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
-        output_names=output_names,
         signal_metadata=signal_metadata,
     )
-    _warn_deprecated_measure_names(output_names)
-    return result

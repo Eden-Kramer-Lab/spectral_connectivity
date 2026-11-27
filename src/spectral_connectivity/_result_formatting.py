@@ -44,7 +44,7 @@ def _check_method_accepts_kwargs(
     method: str,
     measure: Callable[..., Any],
     kwargs: Mapping[str, Any],
-    transform_settings_hint: str | None,
+    transform_settings_hint: str,
     *,
     several_measures: bool,
 ) -> None:
@@ -58,8 +58,7 @@ def _check_method_accepts_kwargs(
     is broadcast to every requested method, so a keyword needed by one measure
     (e.g. ``pairs``) reaches the others. ``transform_settings_hint`` completes
     the sentence "If <keyword> is a transform setting, ..." for the calling
-    wrapper; ``None`` (``connectivity_to_xarray``, whose transform is already
-    built) adds no hint.
+    wrapper.
     """
     parameters = inspect.signature(measure).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
@@ -77,11 +76,10 @@ def _check_method_accepts_kwargs(
                 " connectivity_kwargs is passed to every requested method, so request "
                 "measures that need different arguments in separate calls."
             )
-        if transform_settings_hint is not None:
-            msg += (
-                "\nconnectivity_kwargs configures the measure only. If "
-                f"{names} is a transform setting, {transform_settings_hint}."
-            )
+        msg += (
+            "\nconnectivity_kwargs configures the measure only. If "
+            f"{names} is a transform setting, {transform_settings_hint}."
+        )
         raise TypeError(msg)
 
 
