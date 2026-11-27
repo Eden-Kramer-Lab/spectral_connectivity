@@ -3835,6 +3835,8 @@ class Connectivity:
         else:
             resolved_transformation = transformation
         leave_one_out = np.stack(replicates, axis=0)
+        # The stack is a copy: free the list before the interval's temporaries.
+        replicates.clear()
         replicate_is_valid = None
         if unit_is_valid is not None and not unit_is_valid[omitted_units].all():
             # Each bin's replicates lead the measure's own axes.
@@ -3846,8 +3848,6 @@ class Connectivity:
                     *(1,) * (full_estimate.ndim - len(kept_shape)),
                 )
             )
-            # Leaving out a unit a bin never had gives no replicate there.
-            leave_one_out[~np.broadcast_to(replicate_is_valid, leave_one_out.shape)] = np.nan
         result = _jackknife_interval(
             full_estimate,
             leave_one_out,
@@ -3878,6 +3878,10 @@ class Connectivity:
                 bias_corrected=np.maximum(result.bias_corrected, 0.0),
                 confidence_interval=(np.maximum(lower, 0.0), upper),
             )
+        if keep_replicates and replicate_is_valid is not None:
+            # Leaving out a unit a bin never had gives no replicate there (the
+            # interval masked it).
+            np.copyto(leave_one_out, np.nan, where=~replicate_is_valid)
         return replace(
             result,
             replicates=leave_one_out if keep_replicates else None,
