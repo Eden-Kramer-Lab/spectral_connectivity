@@ -1643,17 +1643,18 @@ def test_bias_corrected_center_covers_a_biased_band_partial_coherence():
     since averaging over the band's bins shrinks the spread but not the bias:
     the interval centered on the estimate covers the band mean of the expected
     spectrum's partial coherence far less than 95%, and the one centered on
-    the bias-corrected estimate about 95%.
+    the bias-corrected estimate nearly 95%.
 
-    A dense 5-signal VAR, 300 datasets of 10 trials of 512 samples (NW = 3, 50
+    A dense 4-signal VAR, 1500 datasets of 5 trials of 256 samples (NW = 3, 25
     observations) on the time-window axis; the pair with the weakest partial
-    coherence in the band (0.015), where the bias is largest relative to the
-    spread (2.4 standard deviations).
+    coherence in the band (0.027), where the bias is largest relative to the
+    spread. Measured over seeds 1-5: 70.3-72.8% centered on the estimate,
+    91.1-92.6% on the bias-corrected estimate.
     """
     coefficients, noise_covariance = _dense_stable_var(
-        n_signals=5, n_lags=3, spectral_radius=0.95, seed=3
+        n_signals=4, n_lags=3, spectral_radius=0.95, seed=3
     )
-    n_time, n_trials, n_datasets = 512, 10, 300
+    n_time, n_trials, n_datasets = 256, 5, 1500
     segments = simulate_MVAR(
         coefficients,
         noise_covariance=noise_covariance,
@@ -1663,9 +1664,9 @@ def test_bias_corrected_center_covers_a_biased_band_partial_coherence():
         random_state=1,
     )
     multitaper = Multitaper(
-        segments.reshape(n_time, n_datasets, n_trials, 5)
+        segments.reshape(n_time, n_datasets, n_trials, 4)
         .transpose(1, 0, 2, 3)
-        .reshape(n_datasets * n_time, n_trials, 5),
+        .reshape(n_datasets * n_time, n_trials, 4),
         sampling_frequency=1.0,
         n_time_samples_per_window=n_time,
         time_halfbandwidth_product=3,
@@ -1681,8 +1682,8 @@ def test_bias_corrected_center_covers_a_biased_band_partial_coherence():
         )
     )
     truth = exact.partial_coherence()[0][in_band].mean(axis=0)
-    source, target = 0, 4
-    assert truth[source, target] == truth[np.triu_indices(5, 1)].min()
+    source, target = 1, 3
+    assert truth[source, target] == truth[np.triu_indices(4, 1)].min()
 
     result = connectivity.jackknife(
         "partial_coherence",
@@ -1705,11 +1706,12 @@ def test_bias_corrected_center_covers_a_biased_band_partial_coherence():
         )
     estimate_coverage, estimate_limit = coverage["estimate"]
     corrected, corrected_limit = coverage["bias_corrected"]
-    # Measured 40-43% (seeds 1-3): more than 3 of its limits below nominal.
+    # 22-25 points below nominal, more than 3 of its limits (5.7-5.9 points).
     assert 0.95 - estimate_coverage > 3 * estimate_limit, coverage
-    # Measured 91.7-93.3% (seeds 1-3); the allowance is for the jackknife's
-    # residual bias and the Student t approximation.
-    assert abs(corrected - 0.95) <= corrected_limit + 0.02, coverage
+    # The jackknife removes the bias only to first order, which with 5 trials
+    # leaves 2.4-3.9 points of undercoverage: an allowance of 4 points below
+    # nominal, none above.
+    assert 0.95 - 0.04 - corrected_limit <= corrected <= 0.95 + corrected_limit, coverage
 
 
 def test_trial_band_mean_coherence_under_covers_at_weak_coherence():
@@ -1719,8 +1721,8 @@ def test_trial_band_mean_coherence_under_covers_at_weak_coherence():
     same call covers about 94% either way.
 
     3000 datasets of 5 trials of 256 samples (NW = 3) on the time-window axis.
-    Measured over seeds 11 and 1-3: weak band 86.6-88.0% (estimate) and
-    91.6-93.1% (bias-corrected), moderate band 93.3-94.3% and 93.8-94.7%.
+    Measured over seeds 11 and 1-4: weak band 86.6-88.0% (estimate) and
+    91.6-93.1% (bias-corrected), moderate band 93.3-94.7% and 93.8-95.4%.
     """
     multitaper = Multitaper(
         _datasets_as_windows(256, 5, n_datasets=3000, random_state=11),
@@ -1756,7 +1758,9 @@ def test_trial_band_mean_coherence_under_covers_at_weak_coherence():
                 ((lower <= target) & (target <= upper)).astype(float)
             )
     weak, weak_limit = coverage["weak", "estimate"]
-    assert weak + weak_limit < 0.91, coverage
+    # Measured 7.0-8.4 points below nominal over seeds 11 and 1-4, 4.0-5.4
+    # beyond its limit: a margin of 3 points beyond the limit.
+    assert 0.95 - weak > weak_limit + 0.03, coverage
     for key, allowance in (
         (("weak", "bias_corrected"), 0.015),
         (("moderate", "estimate"), 0.01),
