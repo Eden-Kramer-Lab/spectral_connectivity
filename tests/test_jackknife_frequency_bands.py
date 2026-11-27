@@ -13,11 +13,14 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from spectral_connectivity import Connectivity, Multitaper, frequency_band_reduce
+from spectral_connectivity import Connectivity, Multitaper, Welch, frequency_band_reduce
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.statistics import jackknife_confidence_interval
 from tests._backend_helpers import to_host
-from tests._expected_spectrum import _expected_multitaper_cross_spectrum
+from tests._expected_spectrum import (
+    _expected_multitaper_cross_spectrum,
+    _expected_tapered_cross_spectrum,
+)
 from tests._monte_carlo import replicate_mean_and_limit
 
 _SAMPLING_FREQUENCY = 200
@@ -37,6 +40,12 @@ _DIMS = {
     "coherence_phase": ("time", "frequency", "source", "target"),
     "power": ("time", "frequency", "source"),
 }
+
+# A bivariate VAR(2): signal 0 oscillates and drives signal 1. Across the bands
+# below the coherence of the expected spectrum varies from 0.47 to 0.56 and from
+# 0.40 to 0.12, and power varies too.
+_VAR_COEFFICIENTS = np.array([[[0.9, 0.0], [0.5, 0.6]], [[-0.5, 0.0], [0.0, -0.2]]])
+_VAR_NOISE_COVARIANCE = np.eye(2)
 
 
 @pytest.fixture(scope="module")
@@ -422,6 +431,138 @@ def test_invalid_band_requests_raise_the_band_reduction_errors(
         )
 
 
+@pytest.mark.parametrize("segment_overlap", [0.0, 0.5])
+def test_welch_segments_are_left_out_one_at_a_time_for_bands(time_series, segment_overlap):
+    """Welch's observations are segments of each trial in time, which it
+    records, so a band jackknife may leave out one segment at a time: each
+    replicate is the band-reduced measure without one trial-segment."""
+    welch = Welch(
+        time_series,
+        sampling_frequency=_SAMPLING_FREQUENCY,
+        n_time_samples_per_segment=100,
+        segment_overlap=segment_overlap,
+    )
+    connectivity = Connectivity.from_transform(welch)
+    assert connectivity.observations_are_time_segments
+
+    result = connectivity.jackknife("magnitude_squared_coherence", frequency_bands=_BANDS)
+
+    coefficients = to_host(welch.fft())  # (1, n_trials, n_segments, n_fft, n_signals)
+    observations = coefficients.reshape(1, -1, 1, *coefficients.shape[3:])
+    replicates = np.stack(
+        [
+            _band_reduced(
+                Connectivity(
+                    np.delete(observations, k, axis=1), frequencies=welch.frequencies
+                ),
+                "magnitude_squared_coherence",
+                "mean",
+            )
+            for k in range(observations.shape[1])
+        ]
+    )
+    expected = jackknife_confidence_interval(
+        _band_reduced(connectivity, "magnitude_squared_coherence", "mean"),
+        replicates,
+        transformation="fisher_squared",
+    )
+    assert result.n_observations == observations.shape[1] == _N_TRIALS * welch.n_segments
+    np.testing.assert_allclose(result.replicates, replicates, rtol=1e-12, equal_nan=True)
+    np.testing.assert_allclose(
+        result.standard_error, expected.standard_error, rtol=1e-11, equal_nan=True
+    )
+
+
+def test_coefficients_passed_directly_are_taken_as_tapers(time_series):
+    """Without a transform nothing says the observations are segments, so they
+    are taken as tapers, and the refusal says how to record segments."""
+    welch = Welch(time_series, sampling_frequency=_SAMPLING_FREQUENCY, segment_duration=0.5)
+    direct = Connectivity(to_host(welch.fft()), frequencies=welch.frequencies)
+    assert not direct.observations_are_time_segments
+    with pytest.raises(ValueError, match="cannot leave out one taper at a time") as error:
+        direct.jackknife("magnitude_squared_coherence", frequency_bands=_BANDS)
+    assert "Connectivity.from_transform(Welch(...))" in str(error.value)
+    # Reassigned coefficients are unknown too.
+    connectivity = Connectivity.from_transform(welch)
+    connectivity.fourier_coefficients = to_host(welch.fft())
+    assert not connectivity.observations_are_time_segments
+
+
+class _DatasetsAsTimeWindows:
+    """Welch coefficients of independent datasets, one per time window.
+
+    ``Welch`` has one time bin, so its trials (here, the datasets) are moved to
+    the time axis; the segments stay on the taper axis and are recorded as
+    segments, as ``Welch`` records them.
+    """
+
+    observations_are_time_segments = True
+
+    def __init__(self, welch):
+        self._coefficients = np.swapaxes(to_host(welch.fft()), 0, 1)
+        self.frequencies = welch.frequencies
+        self.time = np.arange(self._coefficients.shape[0])
+        self.observations_are_independent = welch.observations_are_independent
+
+    def fft(self):
+        return self._coefficients.copy()
+
+
+@pytest.mark.parametrize(
+    ("segment_overlap", "allowance"),
+    # Measured 94.5-94.8% with disjoint segments and 92.2-93.8% at half
+    # overlap (seeds 1-3), where neighbouring segments are slightly
+    # correlated and the interval a little narrow.
+    [(0.0, 0.01), (0.5, 0.02)],
+)
+def test_welch_segment_band_intervals_cover(segment_overlap, allowance):
+    """Leaving out one Welch segment at a time, the 95% interval for the
+    band-mean magnitude-squared coherence covers the band mean of the
+    expected spectrum of a segment in about 95% of 2000 datasets of 512
+    samples (8 disjoint or 15 half-overlapping 64-sample segments)."""
+    n_datasets, n_time, n_segment_samples = 2000, 512, 64
+    time_series = simulate_MVAR(
+        _VAR_COEFFICIENTS,
+        noise_covariance=_VAR_NOISE_COVARIANCE,
+        n_time_samples=n_time,
+        n_trials=n_datasets,
+        n_burnin_samples=200,
+        random_state=1,
+    )  # (n_time, n_datasets, 2)
+    welch = Welch(
+        time_series,
+        sampling_frequency=n_segment_samples,  # 1 Hz bins
+        n_time_samples_per_segment=n_segment_samples,
+        segment_overlap=segment_overlap,
+    )
+    connectivity = Connectivity.from_transform(_DatasetsAsTimeWindows(welch))
+    frequencies = connectivity.frequencies
+    # Coherence is scale-free, so the Hann window's scaling does not matter.
+    expected = _expected_tapered_cross_spectrum(
+        _VAR_COEFFICIENTS,
+        _VAR_NOISE_COVARIANCE,
+        to_host(welch._stft._tapers_for_fft()),
+        n_segment_samples,
+        welch.detrend_type,
+    )[: frequencies.size]
+    coherence = np.abs(expected[:, 0, 1]) ** 2 / (
+        expected[:, 0, 0].real * expected[:, 1, 1].real
+    )
+    in_band = (frequencies >= 4) & (frequencies <= 10)
+
+    result = connectivity.jackknife(
+        "magnitude_squared_coherence", frequency_bands={"low": (4, 10)}
+    )
+
+    target = coherence[in_band].mean()
+    lower, upper = (bound[:, 0, 0, 1] for bound in result.confidence_interval)
+    coverage, limit = replicate_mean_and_limit(
+        ((lower <= target) & (target <= upper)).astype(float)
+    )
+    assert result.n_observations == welch.n_segments
+    assert abs(coverage - 0.95) <= limit + allowance, coverage
+
+
 def test_an_exact_spectrum_is_refused_first():
     """The exact-spectrum refusal comes before the band checks."""
     connectivity = Connectivity.from_var(
@@ -431,13 +572,6 @@ def test_an_exact_spectrum_is_refused_first():
         connectivity.jackknife(
             "magnitude_squared_coherence", leave_out="trial", frequency_bands=_BANDS
         )
-
-
-# A bivariate VAR(2): signal 0 oscillates and drives signal 1. Across the bands
-# below the coherence of the expected spectrum varies from 0.47 to 0.56 and from
-# 0.40 to 0.12, and power varies too.
-_VAR_COEFFICIENTS = np.array([[[0.9, 0.0], [0.5, 0.6]], [[-0.5, 0.0], [0.0, -0.2]]])
-_VAR_NOISE_COVARIANCE = np.eye(2)
 
 
 def test_band_intervals_cover_with_trials_and_not_with_tapers():

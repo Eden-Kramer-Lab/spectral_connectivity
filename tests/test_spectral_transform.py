@@ -70,6 +70,14 @@ def test_builtin_transforms_satisfy_the_protocol(builtin_transforms):
         assert isinstance(transform, SpectralTransform), type(transform).__name__
 
 
+def test_only_welch_records_its_observations_as_time_segments(builtin_transforms):
+    """Welch's observations are segments in time; the others' are tapers of
+    one window (or one per trial), the default."""
+    for transform in builtin_transforms:
+        connectivity = Connectivity.from_transform(transform)
+        assert connectivity.observations_are_time_segments is isinstance(transform, Welch)
+
+
 @pytest.mark.parametrize("missing", ["fft", "frequencies", "time"])
 def test_objects_missing_a_required_member_do_not_satisfy_the_protocol(coefficients, missing):
     members = {
@@ -94,6 +102,7 @@ def test_minimal_transform_gets_the_documented_defaults(coefficients):
     assert connectivity.observations_are_independent is True
     assert connectivity.time_bins_are_independent is True
     assert connectivity.time_bins_are_disjoint is False
+    assert connectivity.observations_are_time_segments is False
     np.testing.assert_array_equal(connectivity.time, transform.time)
     np.testing.assert_array_equal(connectivity.all_frequencies, frequencies)
     expected = Connectivity(
@@ -113,6 +122,7 @@ def test_optional_capability_attributes_are_honored(coefficients):
     transform.observations_are_independent = False
     transform.time_bins_are_independent = False
     transform.time_bins_are_disjoint = True
+    transform.observations_are_time_segments = True
 
     connectivity = Connectivity.from_transform(transform)
 
@@ -122,6 +132,7 @@ def test_optional_capability_attributes_are_honored(coefficients):
     assert connectivity.observations_are_independent is False
     assert connectivity.time_bins_are_independent is False
     assert connectivity.time_bins_are_disjoint is True
+    assert connectivity.observations_are_time_segments is True
 
 
 @pytest.mark.parametrize("one_sided", [False, True])
@@ -168,6 +179,7 @@ _CAPABILITY_FLAGS = (
     "observations_are_independent",
     "time_bins_are_independent",
     "time_bins_are_disjoint",
+    "observations_are_time_segments",
 )
 
 

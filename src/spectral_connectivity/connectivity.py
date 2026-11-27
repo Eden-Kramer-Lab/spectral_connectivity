@@ -531,6 +531,12 @@ def _exact_spectrum_refusal_message(method: str, reason: _ExactSpectrumRefusal) 
     )
 
 
+# How jackknife learns that observations are segments in time, not tapers.
+_SEGMENTS_ADVICE = (
+    "If the observations are segments of each trial in time instead (Welch), "
+    "build with Connectivity.from_transform(Welch(...)), which records it, to "
+    "leave out one segment at a time."
+)
 # What jackknife says when only tapers could be left out for frequency_bands.
 _NO_BAND_JACKKNIFE_ADVICE = (
     "A band statistic of tapers of the same samples has no valid jackknife with "
@@ -1385,6 +1391,8 @@ class Connectivity:
         self._half_bandwidth = (
             None if half_bandwidth is None else _validated_half_bandwidth(half_bandwidth)
         )
+        # Only from_transform knows it (see observations_are_time_segments).
+        self._observations_are_time_segments = False
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
@@ -1532,6 +1540,9 @@ class Connectivity:
         # array and later mutate it in place, which would silently invalidate the
         # cached intermediates.
         self._set_fourier_coefficients(value, adopt=False)
+        # Nothing says what the new observations are (see
+        # observations_are_time_segments).
+        self._observations_are_time_segments = False
 
     def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
         """Take ownership of a freshly produced, unshared array without copying.
@@ -1950,6 +1961,9 @@ class Connectivity:
         if half_bandwidth is not None:
             half_bandwidth = _validated_half_bandwidth(half_bandwidth)
         time_bins_are_disjoint = _transform_flag(transform, "time_bins_are_disjoint", False)
+        observations_are_time_segments = _transform_flag(
+            transform, "observations_are_time_segments", False
+        )
         init_kwargs["fourier_coefficients"] = transform.fft()
         init_kwargs["time"] = transform.time
         init_kwargs["frequencies"] = transform.frequencies
@@ -1975,6 +1989,7 @@ class Connectivity:
             connectivity = cls(**init_kwargs)
         connectivity._half_bandwidth = half_bandwidth
         connectivity._time_bins_are_disjoint = time_bins_are_disjoint
+        connectivity._observations_are_time_segments = observations_are_time_segments
         return connectivity
 
     @contextlib.contextmanager
@@ -2943,6 +2958,23 @@ class Connectivity:
         return self._observations_are_independent
 
     @property
+    def observations_are_time_segments(self) -> bool:
+        """Whether each trial's observations are segments of it in time.
+
+        :meth:`from_transform` reads it from the transform (``True`` for
+        :class:`~spectral_connectivity.transforms.Welch`, whose observations
+        are successive segments; ``False`` for tapers of the same samples, as
+        :class:`~spectral_connectivity.transforms.Multitaper`'s are). It is
+        ``False`` for coefficients passed directly, and after reassigning
+        them, since nothing then says what the observations are.
+        :meth:`jackknife` with ``frequency_bands`` leaves out one observation
+        at a time only when it is ``True``.
+
+        .. versionadded:: 3.0
+        """
+        return self._observations_are_time_segments
+
+    @property
     def half_bandwidth(self) -> float | None:
         """Half-width of the transform's spectral smoothing, or ``None`` if unknown.
 
@@ -3099,9 +3131,11 @@ class Connectivity:
 
         Leaving out an observation of ``"tapers"``, or of ``"trials_tapers"``
         with more than one taper per trial, leaves out one taper of a trial's
-        window; ``"trials"`` and one taper per trial leave out whole trials.
+        window, unless the transform recorded that the observations are
+        segments in time (:attr:`observations_are_time_segments`);
+        ``"trials"`` and one taper per trial leave out whole trials.
         """
-        if leave_out != "observation":
+        if leave_out != "observation" or self._observations_are_time_segments:
             return False
         if self.expectation_type == "tapers":
             return True
@@ -3124,7 +3158,10 @@ class Connectivity:
         if n_trials < 3:
             return msg + (
                 "Leaving out whole trials (leave_out='trial') needs at least 3, and "
-                f"these data have {n_trials}. " + _NO_BAND_JACKKNIFE_ADVICE
+                f"these data have {n_trials}. "
+                + _NO_BAND_JACKKNIFE_ADVICE
+                + " "
+                + _SEGMENTS_ADVICE
             )
         if self.expectation_type == "trials_tapers":
             how = "Pass leave_out='trial'"
@@ -3136,7 +3173,7 @@ class Connectivity:
             )
         return msg + (
             f"{how} to leave out one whole trial at a time; it needs at least 3 "
-            f"trials, and these data have {n_trials}."
+            f"trials, and these data have {n_trials}. " + _SEGMENTS_ADVICE
         )
 
     def _band_reducer(
@@ -3331,11 +3368,13 @@ class Connectivity:
             of the full data and of every replicate is reduced to these bands
             before the interval is formed, and ``transformation`` applies to
             the band value (the log of band power, ``atanh(sqrt(.))`` of the
-            band-mean magnitude-squared coherence). Each unit left out must be
-            a whole trial: ``leave_out="trial"``, or an expectation whose
-            observations are trials (``"trials"``, or ``"trials_tapers"`` with
-            one taper per trial). ``None`` (the default) keeps every
-            frequency.
+            band-mean magnitude-squared coherence). The units left out must
+            not be tapers of the same samples: use ``leave_out="trial"``, an
+            expectation whose observations are trials (``"trials"``, or
+            ``"trials_tapers"`` with one taper per trial), or observations
+            that are segments in time (:attr:`observations_are_time_segments`,
+            recorded by ``Connectivity.from_transform(Welch(...))``). ``None``
+            (the default) keeps every frequency.
         frequency_reduction : {"mean", "integral"}, default="mean"
             How ``frequency_bands`` combine a band's bins, as in
             :func:`~spectral_connectivity.frequency_band_reduce`: the mean
@@ -3390,8 +3429,10 @@ class Connectivity:
             ``frequency_range=(low, high)`` instead); and if
             ``leave_out="observation"`` leaves out tapers
             (``expectation_type="tapers"``, or ``"trials_tapers"`` with more
-            than one taper per trial), since the interval would be too narrow
-            (see Notes). All are raised before any measure is computed.
+            than one taper per trial, unless
+            :attr:`observations_are_time_segments`), since the interval would
+            be too narrow (see Notes). All are raised before any measure is
+            computed.
 
         Notes
         -----

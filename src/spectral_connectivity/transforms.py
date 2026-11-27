@@ -751,6 +751,14 @@ class SpectralTransform(Protocol):
         randomizes whole trials, never single time windows.
         :class:`MorletWavelet`, whose wavelets at successive samples always
         overlap, and :class:`Welch`, which has one time bin, do not define it.
+    ``observations_are_time_segments`` : bool, default False
+        Whether each trial's observations (its entries on the taper axis) are
+        Fourier transforms of different segments of it in time, as
+        :class:`Welch`'s are, rather than tapers of the same samples. Tapers
+        of the same samples are uncorrelated at one frequency but correlated
+        across nearby frequencies, so :meth:`Connectivity.jackknife` with
+        ``frequency_bands`` leaves out one observation at a time only when
+        this is ``True``. The default is the cautious one.
     ``half_bandwidth`` : float, default None
         Half-width of the transform's spectral smoothing, in Hz (the units of
         ``frequencies``): within it of 0 Hz and Nyquist the coefficients of a
@@ -4189,6 +4197,25 @@ class Welch:
             ``True`` when ``segment_overlap <= 0.5``.
         """
         return self.segment_overlap <= 0.5
+
+    @property
+    def observations_are_time_segments(self) -> bool:
+        """Whether each trial's observations are segments of it in time: ``True``.
+
+        Welch's observations are the periodograms of successive segments, not
+        tapers of the same samples, so their Fourier coefficients are not
+        correlated across nearby frequencies the way different tapers' are.
+        :meth:`Connectivity.jackknife
+        <spectral_connectivity.Connectivity.jackknife>` therefore leaves out one
+        segment at a time for a statistic over a frequency band
+        (``frequency_bands``), as long as the segments overlap by at most
+        half (:attr:`observations_are_independent`).
+
+        Returns
+        -------
+        bool
+        """
+        return True
 
     def fft(self) -> NDArray[np.complexfloating]:
         """Compute the Hann-windowed Fourier coefficients of every segment.
